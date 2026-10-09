@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE download_clients SET is_default = FALSE WHERE protocol = $1 AND id != $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "715023883cbd556f1fe244e9098d972a868e06949dd285c46fdaa6529b95d1f6"
+}

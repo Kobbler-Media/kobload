@@ -1,0 +1,1 @@
+ALTER TABLE job_status ADD COLUMN scheduled BOOLEAN NOT NULL DEFAULT false;

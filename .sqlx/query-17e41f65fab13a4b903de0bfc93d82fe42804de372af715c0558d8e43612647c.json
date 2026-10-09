@@ -1,0 +1,292 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id,\n           watch_pattern_id as \"watch_pattern_id!\",\n           indexer_source_id,\n           release_guid,\n           release_title,\n           release_data as \"release_data?: serde_json::Value\",\n           match_score,\n           matched_pattern as \"matched_pattern!\",\n           action,\n           download_id,\n           callback_sent_at,\n           callback_error,\n           created_at as \"created_at!\",\n           hold_until,\n           held,\n           callback_attempts,\n           callback_last_attempt_at,\n           quality_score,\n           rejected,\n           rejected_at,\n           rejected_reason,\n           import_confirmed_at,\n           episode_key\n        FROM watch_matches WHERE watch_pattern_id = $1 AND held = TRUE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "watch_pattern_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "watch_pattern_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "indexer_source_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "indexer_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "release_guid",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "release_guid"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "release_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "release_title"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "release_data?: serde_json::Value",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "release_data"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "match_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "match_score"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "matched_pattern!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "matched_pattern"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "action",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "action"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "download_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "download_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "callback_sent_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "callback_sent_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "callback_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "callback_error"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "hold_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "hold_until"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "held",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "held"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "callback_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "callback_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "callback_last_attempt_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "callback_last_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "quality_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "quality_score"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "rejected",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "rejected_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected_at"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "rejected_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "import_confirmed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "import_confirmed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "episode_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "episode_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "17e41f65fab13a4b903de0bfc93d82fe42804de372af715c0558d8e43612647c"
+}

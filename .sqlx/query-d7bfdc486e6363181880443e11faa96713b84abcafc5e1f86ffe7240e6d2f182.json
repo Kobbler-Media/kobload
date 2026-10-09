@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET\n            files_scan_error = NULL,\n            file_path = COALESCE($1, file_path),\n            files_json = COALESCE($2, files_json),\n            callback_sent_at = NULL,\n            callback_attempts = 0,\n            updated_at = NOW()\n        WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d7bfdc486e6363181880443e11faa96713b84abcafc5e1f86ffe7240e6d2f182"
+}

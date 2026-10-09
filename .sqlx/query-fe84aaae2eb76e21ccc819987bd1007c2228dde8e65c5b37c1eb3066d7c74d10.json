@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tvdb_id FROM xem_cache ORDER BY tvdb_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tvdb_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "xem_cache",
+            "name": "tvdb_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fe84aaae2eb76e21ccc819987bd1007c2228dde8e65c5b37c1eb3066d7c74d10"
+}

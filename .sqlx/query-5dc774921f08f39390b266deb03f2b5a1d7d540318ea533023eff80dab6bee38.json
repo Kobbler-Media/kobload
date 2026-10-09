@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO handler_type_defaults (id, handler_type, media_type_id, category_ids)\n        VALUES (gen_random_uuid(), $1, $2, $3)\n        ON CONFLICT (handler_type, media_type_id) DO UPDATE SET category_ids = EXCLUDED.category_ids\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5dc774921f08f39390b266deb03f2b5a1d7d540318ea533023eff80dab6bee38"
+}

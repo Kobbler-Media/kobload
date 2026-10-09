@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_directories\n        SET scan_status = 'error',\n            scan_error = $2,\n            error_count = error_count + 1,\n            next_retry_at = NOW() + LEAST(\n                INTERVAL '1 minute' * POWER(2, LEAST(error_count, 5)),\n                INTERVAL '60 minutes'\n            ),\n            updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6a967b154e02879dab6c2cf268b72ffc3bc618d4a28cc5aeb2fe3ebe70f85b77"
+}

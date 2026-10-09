@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET\n            status = 'failed',\n            error = $1,\n            updated_at = NOW()\n        WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f334f03b6217ec422592e08b67dab8b5725558cef90a86a5b89062979939a10"
+}

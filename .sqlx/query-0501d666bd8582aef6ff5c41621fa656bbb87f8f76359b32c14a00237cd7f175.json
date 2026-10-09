@@ -1,0 +1,146 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, download_client_id as \"download_client_id!\", download_url, protocol, name, callback_url, auth_token,\n               metadata, release_payload, submission_attempts, submission_error\n        FROM downloads\n        WHERE status = 'pending_retry'\n          AND submission_attempts < 10\n          AND (\n            submission_last_attempt_at IS NULL OR\n            submission_last_attempt_at < NOW() - (\n                CASE submission_attempts\n                    WHEN 1 THEN INTERVAL '1 minute'\n                    WHEN 2 THEN INTERVAL '2 minutes'\n                    WHEN 3 THEN INTERVAL '5 minutes'\n                    WHEN 4 THEN INTERVAL '10 minutes'\n                    WHEN 5 THEN INTERVAL '15 minutes'\n                    WHEN 6 THEN INTERVAL '30 minutes'\n                    WHEN 7 THEN INTERVAL '45 minutes'\n                    WHEN 8 THEN INTERVAL '60 minutes'\n                    WHEN 9 THEN INTERVAL '120 minutes'\n                    ELSE INTERVAL '999 years'\n                END\n            )\n          )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "download_client_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "download_client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "download_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "download_url"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "protocol",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "protocol"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "callback_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_url"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "auth_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "auth_token"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "release_payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "release_payload"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "submission_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "submission_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "submission_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "submission_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "0501d666bd8582aef6ff5c41621fa656bbb87f8f76359b32c14a00237cd7f175"
+}

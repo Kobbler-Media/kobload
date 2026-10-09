@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM downloads\n        WHERE id = ANY($1)\n          AND hidden = TRUE\n          AND NOT EXISTS (SELECT 1 FROM watch_matches WHERE download_id = downloads.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4eb3cc5ca030ad3b98bdf6c7acc8f5c47ec8893c6ea33dfcc7b8ce64d6d72f63"
+}

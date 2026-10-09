@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches\n           SET action = 'skipped',\n               rejected = TRUE,\n               rejected_at = NOW(),\n               rejected_reason = $2\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "47578625a1d00deddf0e70ca6343871e6977656d432e8954b61b3b552864d439"
+}

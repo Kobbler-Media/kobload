@@ -1,0 +1,111 @@
+# Kobload — minimal example stack (API + web UI + Postgres + NATS).
+#
+# This file is an EXAMPLE, not a production deployment. It builds everything
+# from source in this checkout so you need no registry access.
+#
+# Prerequisites:
+#   1. Clone koblibs next to this repo:  git clone https://github.com/Kobbler-Media/koblibs.git ../koblibs
+#   2. Build the shared toolchain image: make tools
+#   3. Copy the env template:            cp .env.example .env  (then edit it)
+#
+# Bring it up:
+#   docker compose up -d --build
+#
+# Web UI: http://localhost:${KOBLOAD_WEB_PORT:-5174}
+# API:    http://localhost:${KOBLOAD_PORT:-7080}
+#
+# Kobbler integration: Kobbler calls this API at KOBLOAD_PUBLIC_URL using
+# KOBLOAD_API_KEY, and both services share the NATS instance below. See README.
+
+# Cap container log growth; unbounded json-file logs had reached 125M+ on disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  nats:
+    image: nats:2.14.4-alpine
+    restart: unless-stopped
+    command: ["--jetstream", "--store_dir=/data", "-m", "8222", "--auth", "${NATS_TOKEN:?set NATS_TOKEN}"]
+    volumes:
+      - nats_data:/data
+    ports:
+      - "${NATS_MONITOR_PORT:-8223}:8222"
+      # Expose the client port only if Kobbler connects from outside this stack:
+      # - "${NATS_PORT:-4222}:4222"
+
+  db:
+    image: postgres:18.4
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kobload
+      POSTGRES_USER: kobload
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kobload}
+    volumes:
+      - kobload_pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kobload -d kobload"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  api:
+    image: kobload:local
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      additional_contexts:
+        koblibs: ${KOBLIBS_DIR:-../koblibs}
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://kobload:${POSTGRES_PASSWORD:-kobload}@db:5432/kobload
+      KOBLOAD_API_KEY: ${KOBLOAD_API_KEY:-}
+      KOBLOAD_PUBLIC_URL: ${KOBLOAD_PUBLIC_URL:-http://localhost:7080}
+      KOBLOAD_CORS_ORIGIN: ${KOBLOAD_CORS_ORIGIN:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      PROWLARR_BASE_URL: ${PROWLARR_BASE_URL:-}
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+      RUST_LOG: ${RUST_LOG:-info,kobload_api=info}
+      NATS_URL: ${NATS_URL:-nats://${NATS_TOKEN:?set NATS_TOKEN}@nats:4222}
+    ports:
+      - "${KOBLOAD_PORT:-7080}:7080"
+    volumes:
+      # Kobload needs filesystem access to your download client's completed
+      # downloads so it can stream files onward. Point KOBLOAD_DOWNLOADS at the
+      # same directory your torrent/usenet client writes to.
+      - ${KOBLOAD_DOWNLOADS:-./data/downloads}:/downloads
+    depends_on:
+      db:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+  web:
+    image: kobload-web:local
+    build:
+      context: ./web
+      additional_contexts:
+        koblibs: ${KOBLIBS_DIR:-../koblibs}
+    logging: *default-logging
+    restart: unless-stopped
+    ports:
+      - "${KOBLOAD_WEB_PORT:-5174}:80"
+    depends_on:
+      - api
+
+# Optional: bitmagnet provides a local DHT torrent index that Kobload can sync
+# from (see api/src/jobs/handlers/bitmagnet_sync.rs). Not required to run
+# Kobload. Enable it with the docker-compose.bitmagnet.yml overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.bitmagnet.yml up -d --build
+# That overlay also applies the autovacuum tuning bitmagnet's DHT crawl
+# tables need — the core stack here runs Postgres with stock defaults.
+
+volumes:
+  nats_data:
+  kobload_pg:

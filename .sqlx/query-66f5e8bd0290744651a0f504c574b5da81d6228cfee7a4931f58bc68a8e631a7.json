@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT provider_type, api_key\n           FROM debrid_providers\n           WHERE id = $1 AND enabled = true",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "provider_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "debrid_providers",
+            "name": "provider_type"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "api_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "debrid_providers",
+            "name": "api_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "66f5e8bd0290744651a0f504c574b5da81d6228cfee7a4931f58bc68a8e631a7"
+}

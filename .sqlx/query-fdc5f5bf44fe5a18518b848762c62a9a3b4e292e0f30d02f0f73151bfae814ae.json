@@ -1,0 +1,338 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, name, handler_type, handler_config, category_ids, media_type_ids,\n               enabled as \"enabled!\", last_check_at, last_error, state,\n               created_at as \"created_at!\", priority,\n               last_success_at, last_failure_at, consecutive_failures,\n               seed_ratio, seed_time_minutes, rate_limited_until, auth_failed_at,\n               capabilities, caps_fetched_at, api_limit_daily,\n               api_calls_today, last_api_reset_at as \"last_api_reset_at!\",\n               search_mode as \"search_mode!\", auto_throttle as \"auto_throttle!\",\n               debrid_mode as \"debrid_mode!\"\n        FROM indexer_sources WHERE enabled = true AND debrid_mode != 'always' ORDER BY priority DESC, name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "handler_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "handler_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "handler_config",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "handler_config"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "category_ids",
+        "type_info": "Int4Array",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "category_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "media_type_ids",
+        "type_info": "UuidArray",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "media_type_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "enabled!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "last_check_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "last_check_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "state",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "priority",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "priority"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "last_success_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "last_success_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "last_failure_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "last_failure_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "consecutive_failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "consecutive_failures"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "seed_ratio",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "seed_ratio"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "seed_time_minutes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "seed_time_minutes"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "rate_limited_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "rate_limited_until"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "auth_failed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "auth_failed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "capabilities",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "capabilities"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "caps_fetched_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "caps_fetched_at"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "api_limit_daily",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "api_limit_daily"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "api_calls_today",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "api_calls_today"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "last_api_reset_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "last_api_reset_at"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "search_mode!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "search_mode"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "auto_throttle!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "auto_throttle"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "debrid_mode!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "debrid_mode"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fdc5f5bf44fe5a18518b848762c62a9a3b4e292e0f30d02f0f73151bfae814ae"
+}

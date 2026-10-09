@@ -1,0 +1,5 @@
+ALTER TABLE downloads
+ADD COLUMN IF NOT EXISTS file_path TEXT;
+
+ALTER TABLE downloads
+ADD COLUMN IF NOT EXISTS auth_token TEXT;

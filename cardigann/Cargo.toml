@@ -1,0 +1,25 @@
+[package]
+name = "cardigann"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+description = "Cardigann YAML indexer definition engine"
+license = "AGPL-3.0-only"
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+quick-xml = { version = "0.41.0", features = ["serialize"] }
+regex = "1.13.1"
+reqwest = { version = "0.13.4", features = ["cookies", "json", "query", "form"] }
+scraper = "0.27.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_yaml = "0.9.34"
+serde_json_path = "0.7.2"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["rt"] }
+tracing = "0.1.44"
+url = "2.5.8"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }

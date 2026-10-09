@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO job_status (id, job_type, status, payload, entity_type, entity_id, description, created_at)\n        VALUES ($1, $2, 'pending', $3, $4, $5, $6, NOW())\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27777dba901b129e15e1e1895f61395dcea2adc1dd445e32ab868477168bcb26"
+}

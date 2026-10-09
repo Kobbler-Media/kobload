@@ -1,0 +1,132 @@
+# Kobload — development stack with hot reload (cargo watch + vite).
+#
+# Prerequisites are the same as docker-compose.yml (koblibs sibling checkout +
+# `make tools`), plus the shared `kob_dev` network and a NATS instance, both of
+# which koblibs' compose creates:
+#
+#   docker compose -f ../koblibs/docker-compose.nats.yml up -d
+#
+# Bring it up:
+#   cp env.dev.template .env.dev     # optional, for fixed dev credentials
+#   docker compose -f docker-compose.dev.yml up -d --build
+#
+# Or use the wrapper: ./scripts/run_dev.sh
+
+networks:
+  kob_dev:
+    name: kob_dev
+    external: true
+
+services:
+  kobload-db:
+    image: postgres:18.4
+    container_name: kobload-db
+    environment:
+      POSTGRES_DB: kobload
+      POSTGRES_USER: kobload
+      POSTGRES_PASSWORD: kobload
+    volumes:
+      - kobload_pg:/var/lib/postgresql
+      - ./docker/init-bitmagnet-db.sh:/docker-entrypoint-initdb.d/init-bitmagnet-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kobload -d kobload"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - default
+      - kob_dev
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: dev
+      additional_contexts:
+        koblibs: ${KOBLIBS_DIR:-../koblibs}
+    container_name: kobload-api
+    env_file:
+      - path: .env.dev
+        required: false
+    environment:
+      # Container-internal settings (not overridable via .env files)
+      DATABASE_URL: postgres://kobload:kobload@kobload-db:5432/kobload
+      CONFIG_PATH: /config
+      # NATS is shared with Kobbler on the kob_dev network
+      NATS_URL: ${NATS_URL:-nats://devtoken@nats:4222}
+    ports:
+      - "${KOBLOAD_PORT:-7080}:7080"
+    volumes:
+      - ./Cargo.toml:/app/Cargo.toml
+      # Note: Cargo.lock intentionally NOT mounted - use image's lock file
+      # to avoid stale dependency resolution. Rebuild the image for dep changes.
+      - ./api:/app/api
+      - ./cardigann:/app/cardigann
+      - ${KOBLIBS_DIR:-../koblibs}:/koblibs
+      - kobload_api_target:/target
+      - ./config:/config
+      - kobload_definitions:/data/definitions
+    depends_on:
+      kobload-db:
+        condition: service_healthy
+    networks:
+      - default
+      - kob_dev
+
+  web:
+    build:
+      context: ./web
+      target: dev
+      additional_contexts:
+        koblibs: ${KOBLIBS_DIR:-../koblibs}
+    container_name: kobload-web
+    env_file:
+      - path: .env.dev
+        required: false
+    environment:
+      # Container-internal settings (not overridable via .env files)
+      VITE_API_BASE_URL: "http://localhost:${KOBLOAD_PORT:-7080}"
+      # Hardcoded for dev compose - frontend always in dev mode
+      PUBLIC_DEV_MODE: 1
+    ports:
+      - "${KOBLOAD_WEB_PORT:-5174}:5173"
+    volumes:
+      - ./web:/app
+      - ${KOBLIBS_DIR:-../koblibs}:/koblibs
+      - kobload_web_node_modules:/app/node_modules
+    depends_on:
+      - api
+    networks:
+      - default
+      - kob_dev
+
+  bitmagnet:
+    image: ghcr.io/bitmagnet-io/bitmagnet:latest
+    container_name: kobload-bitmagnet
+    profiles: [bitmagnet]
+    environment:
+      - POSTGRES_HOST=kobload-db
+      - POSTGRES_NAME=bitmagnet
+      - POSTGRES_USER=kobload
+      - POSTGRES_PASSWORD=kobload
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+    command: ["worker", "run", "--all"]
+    volumes:
+      - ./docker/classifier.yml:/classifier.yml:ro
+    depends_on:
+      kobload-db:
+        condition: service_healthy
+    ports:
+      - "${BITMAGNET_WEB_PORT:-3333}:3333"
+      - "${BITMAGNET_DHT_PORT:-3334}:3334/udp"
+    restart: unless-stopped
+    networks:
+      - default
+      - kob_dev
+
+volumes:
+  kobload_pg:
+  kobload_api_target:
+  kobload_web_node_modules:
+  kobload_definitions:

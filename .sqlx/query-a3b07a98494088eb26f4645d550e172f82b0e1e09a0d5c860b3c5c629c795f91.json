@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO decision_log_provider_calls (\n                id, session_id, indexer_source_id, source_name, handler_type,\n                search_type, query, categories, external_ids,\n                results_count, results_after_dedup, status, error_message,\n                duration_ms, created_at\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3b07a98494088eb26f4645d550e172f82b0e1e09a0d5c860b3c5c629c795f91"
+}

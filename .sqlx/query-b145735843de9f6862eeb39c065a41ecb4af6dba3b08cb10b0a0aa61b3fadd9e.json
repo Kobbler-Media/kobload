@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_patterns SET\n            callback_url = $2,\n            patterns = $3,\n            media_want = $4,\n            match_targets = $5,\n            match_mode = $6,\n            min_score = $7,\n            media_type_id = $8,\n            auto_download = $9,\n            metadata = $10,\n            enabled = $11,\n            upgrade_allowed = $12,\n            search_not_before = $13,\n            updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "TextArray",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Float8",
+        "Uuid",
+        "Bool",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b145735843de9f6862eeb39c065a41ecb4af6dba3b08cb10b0a0aa61b3fadd9e"
+}

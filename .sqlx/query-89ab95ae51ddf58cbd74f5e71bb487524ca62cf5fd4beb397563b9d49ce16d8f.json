@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_directory_files\n        SET status = 'error', callback_error = $2, updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "89ab95ae51ddf58cbd74f5e71bb487524ca62cf5fd4beb397563b9d49ce16d8f"
+}

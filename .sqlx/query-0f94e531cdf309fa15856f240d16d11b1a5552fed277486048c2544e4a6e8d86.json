@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT elem->>'absolute_path' AS \"absolute_path!\",\n               elem->'split_rar_volumes' AS split_rar_volumes,\n               elem->'distributed_rar_sources' AS distributed_rar_sources,\n               elem->'distributed_numeric_sources' AS distributed_numeric_sources,\n               elem->>'numeric_split_type' AS numeric_split_type\n        FROM downloads,\n             jsonb_array_elements(files_json) AS elem\n        WHERE downloads.id = $1\n          AND elem->>'id' = $2\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "absolute_path!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "split_rar_volumes",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "distributed_rar_sources",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "distributed_numeric_sources",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "numeric_split_type",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0f94e531cdf309fa15856f240d16d11b1a5552fed277486048c2544e4a6e8d86"
+}

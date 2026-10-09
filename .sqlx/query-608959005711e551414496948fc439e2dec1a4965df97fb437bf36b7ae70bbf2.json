@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET\n            status = $1,\n            file_path = COALESCE($2, file_path),\n            error = $3,\n            progress = COALESCE($4, progress),\n            files_scan_error = $5,\n            client_data = COALESCE($6, client_data),\n            updated_at = NOW()\n        WHERE id = $7",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Float8",
+        "Text",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "608959005711e551414496948fc439e2dec1a4965df97fb437bf36b7ae70bbf2"
+}

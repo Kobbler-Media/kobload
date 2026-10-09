@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET files_scan_error = $1, callback_last_attempt_at = NOW() WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "61f205b0d6dcfd5ce15da293ded343be6d9079a4553fcf0d7a2fe29203eb698d"
+}

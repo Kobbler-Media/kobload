@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET\n            status = $1,\n            external_id = $2,\n            error = $3,\n            submission_error = $4,\n            progress = $5,\n            download_url = $6,\n            updated_at = NOW()\n        WHERE id = $7",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Float8",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c9be93f4773ac4b8973b3ca5d0d226df9fe0a79ccaf5af6eeadd3f49eca1858f"
+}

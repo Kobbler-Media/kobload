@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE quality_profiles SET\n            name = COALESCE($2, name),\n            media_kind = COALESCE($3, media_kind),\n            min_resolution = COALESCE($4, min_resolution),\n            max_resolution = COALESCE($5, max_resolution),\n            preferred_sources = COALESCE($6, preferred_sources),\n            preferred_codecs = COALESCE($7, preferred_codecs),\n            preferred_audio = COALESCE($8, preferred_audio),\n            preferred_languages = COALESCE($9, preferred_languages),\n            rejected_sources = COALESCE($10, rejected_sources),\n            rejected_languages = COALESCE($11, rejected_languages),\n            rejected_terms = COALESCE($12, rejected_terms),\n            reject_hardcoded_subs = COALESCE($13, reject_hardcoded_subs),\n            reject_remux = COALESCE($14, reject_remux),\n            use_trash_filters = COALESCE($15, use_trash_filters),\n            is_default = COALESCE($16, is_default),\n            upgrade_cutoff_score = COALESCE($17, upgrade_cutoff_score),\n            updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e3a547d2c8a4b5ee60b6a35e2b5951365dfd1da88def83b59908708656fb9deb"
+}

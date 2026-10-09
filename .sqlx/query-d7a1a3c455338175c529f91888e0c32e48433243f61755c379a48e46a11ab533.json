@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT release_title\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND import_confirmed_at IS NOT NULL\n          AND quality_score IS NOT NULL\n          AND rejected = FALSE\n        ORDER BY quality_score DESC\n        LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "release_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "release_title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7a1a3c455338175c529f91888e0c32e48433243f61755c379a48e46a11ab533"
+}

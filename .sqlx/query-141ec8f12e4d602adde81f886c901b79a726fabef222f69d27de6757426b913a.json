@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads\n           SET status = 'failed', error = $1, last_poll_at = NOW(), last_poll_error = $1,\n               progress = NULL, updated_at = NOW()\n           WHERE id = $2 AND import_confirmed_at IS NULL AND status <> 'failed'\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "141ec8f12e4d602adde81f886c901b79a726fabef222f69d27de6757426b913a"
+}

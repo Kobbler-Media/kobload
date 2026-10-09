@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT download_id FROM watch_matches WHERE watch_pattern_id = ANY($1) AND download_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "download_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "download_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "7a023611b046f14652f15723eeddebd8a8a32b6e703ecae18a84015cd06fa0bc"
+}

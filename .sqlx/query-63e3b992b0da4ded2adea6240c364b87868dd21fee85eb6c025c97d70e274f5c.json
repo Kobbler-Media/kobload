@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS(\n            SELECT 1 FROM watch_matches wm\n            JOIN downloads d ON d.id = wm.download_id\n            WHERE wm.watch_pattern_id = $1\n              AND (wm.episode_key = $2 OR wm.episode_key = 'SEASON_PACK')\n              AND wm.download_id IS NOT NULL\n              AND d.status NOT IN ('failed', 'cancelled')\n              AND wm.import_confirmed_at IS NULL\n              AND wm.rejected = FALSE\n        ) as \"exists!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "63e3b992b0da4ded2adea6240c364b87868dd21fee85eb6c025c97d70e274f5c"
+}

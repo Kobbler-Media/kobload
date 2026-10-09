@@ -1,0 +1,28 @@
+flags:
+  delete_content_types:
+    - software
+    - music
+    - xxx
+
+keywords:
+  # The stock xxx keyword list is entirely English, so JAV and Chinese adult
+  # content was never classified as xxx and fell through to "unknown" -- which
+  # is how ~185K JAV releases ended up as the largest slice of the unknown
+  # bucket. These append to the built-in list rather than replacing it.
+  xxx:
+    # JAV studio/label codes, e.g. SONE-055, ssis-304-4k, CAWD-807. The digits
+    # are required so the short codes cannot match ordinary words.
+    - '(snis|ssni|sone|sivr|stars|mide|miaa|ipx|ipz|pred|wanz|abp|abw|cawd|fsdss|jufe|jul|meyd|ssis|ofje|hunta|sdde|sdnm|dasd|ebod|mird|xvsr|dvaj|hnd|kawd|miae|rbd|shkd|ure)-?[0-9]{2,4}'
+    # Common CJK adult terms.
+    - '*無修正*'
+    - '*無碼*'
+    - '*无码*'
+    - '*中出*'
+    - '*痴漢*'
+    - '*人妻*'
+    - '*偷拍*'
+    - '*自拍*'
+    - '*调教*'
+    - '*調教*'
+    - '*露出*'
+    - '*成人*'

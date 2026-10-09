@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches\n        SET rejected = TRUE, rejected_at = NOW(), rejected_reason = $2\n        WHERE id = ANY($1)\n        RETURNING watch_pattern_id as \"watch_pattern_id!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "watch_pattern_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "watch_pattern_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "144eb3a096e0ed2cdfa9b1667ee876f9e152c90a9fdeae75eaf00a1eadf6f473"
+}

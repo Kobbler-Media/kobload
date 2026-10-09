@@ -1,0 +1,218 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, name, client_type, protocol, base_url, api_key, username, password,\n               category, download_dir, is_default, delete_after_import, seed_ratio,\n               seed_time_minutes, enabled, created_at, updated_at\n        FROM download_clients\n        ORDER BY created_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "client_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "client_type"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "protocol",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "protocol"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "base_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "base_url"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "api_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "api_key"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "password",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "password"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "category",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "category"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "download_dir",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "download_dir"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "is_default",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "is_default"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "delete_after_import",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "delete_after_import"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "seed_ratio",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "seed_ratio"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "seed_time_minutes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "seed_time_minutes"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9f32f61cee9da830a34951ccc9c5ce40a37bb78639ce11c049d30eded9bed753"
+}

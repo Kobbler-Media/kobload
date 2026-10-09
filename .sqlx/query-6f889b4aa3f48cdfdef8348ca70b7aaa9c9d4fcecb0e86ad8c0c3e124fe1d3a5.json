@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE indexer_sources\n        SET consecutive_failures = 0,\n            last_error = NULL,\n            last_failure_at = NULL,\n            last_check_at = NULL,\n            rate_limited_until = NULL,\n            auth_failed_at = NULL\n        WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f889b4aa3f48cdfdef8348ca70b7aaa9c9d4fcecb0e86ad8c0c3e124fe1d3a5"
+}

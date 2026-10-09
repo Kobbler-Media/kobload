@@ -1,0 +1,242 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            id, name, media_kind, min_resolution, max_resolution,\n            preferred_sources, preferred_codecs, preferred_audio,\n            preferred_languages, rejected_sources, rejected_languages, rejected_terms,\n            reject_hardcoded_subs, reject_remux, use_trash_filters, is_default, upgrade_cutoff_score,\n            created_at, updated_at\n        FROM quality_profiles ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "media_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "media_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "min_resolution",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "min_resolution"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "max_resolution",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "max_resolution"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "preferred_sources",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "preferred_sources"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "preferred_codecs",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "preferred_codecs"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "preferred_audio",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "preferred_audio"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "preferred_languages",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "preferred_languages"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "rejected_sources",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "rejected_sources"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "rejected_languages",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "rejected_languages"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "rejected_terms",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "rejected_terms"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "reject_hardcoded_subs",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "reject_hardcoded_subs"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "reject_remux",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "reject_remux"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "use_trash_filters",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "use_trash_filters"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "is_default",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "is_default"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "upgrade_cutoff_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "upgrade_cutoff_score"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "quality_profiles",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "eda3d78b5ef9c881bfd25adeca836d9d1a102e45e2a6887ac650f76b65ef940c"
+}

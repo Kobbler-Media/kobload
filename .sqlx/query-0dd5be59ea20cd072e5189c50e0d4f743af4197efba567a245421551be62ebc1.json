@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE quality_profiles SET is_default = FALSE WHERE media_kind = $1 AND id != $2 AND is_default = TRUE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0dd5be59ea20cd072e5189c50e0d4f743af4197efba567a245421551be62ebc1"
+}

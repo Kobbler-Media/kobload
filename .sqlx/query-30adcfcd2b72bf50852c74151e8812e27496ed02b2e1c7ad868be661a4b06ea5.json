@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET hidden = TRUE, updated_at = NOW() WHERE status NOT IN ('queued', 'downloading') AND NOT hidden",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "30adcfcd2b72bf50852c74151e8812e27496ed02b2e1c7ad868be661a4b06ea5"
+}

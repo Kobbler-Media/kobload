@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT category_ids FROM handler_type_defaults WHERE handler_type = $1 AND media_type_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "category_ids",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "handler_type_defaults",
+            "name": "category_ids"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f503db2f046f59e7df8cc39492eff8de51c35d72a658e34eeec0d038fa9a05c6"
+}

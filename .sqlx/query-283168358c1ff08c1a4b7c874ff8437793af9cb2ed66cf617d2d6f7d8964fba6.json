@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, indexer_source_id, media_type_id as \"media_type_id!\", indexer_category_id, created_at\n        FROM indexer_category_mappings\n        WHERE indexer_source_id = $1 AND media_type_id = $2\n        ORDER BY indexer_category_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "indexer_category_mappings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "indexer_source_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "indexer_category_mappings",
+            "name": "indexer_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "media_type_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "indexer_category_mappings",
+            "name": "media_type_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "indexer_category_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "indexer_category_mappings",
+            "name": "indexer_category_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "indexer_category_mappings",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "283168358c1ff08c1a4b7c874ff8437793af9cb2ed66cf617d2d6f7d8964fba6"
+}

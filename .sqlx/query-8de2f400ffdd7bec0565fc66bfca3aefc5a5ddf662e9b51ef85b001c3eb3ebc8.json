@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches wm\n        SET import_confirmed_at = NOW()\n        FROM downloads d\n        WHERE wm.download_id = $1\n          AND d.id = wm.download_id\n          AND wm.import_confirmed_at IS NULL\n          AND d.status NOT IN ('failed', 'cancelled')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8de2f400ffdd7bec0565fc66bfca3aefc5a5ddf662e9b51ef85b001c3eb3ebc8"
+}

@@ -1,0 +1,380 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT d.id, d.name, d.protocol, d.profile_id, d.status, d.progress,\n               d.last_poll_at, d.last_poll_error, d.created_at, d.updated_at,\n               d.download_client_id, d.external_id, d.file_path, d.error,\n               d.callback_sent_at, d.import_confirmed_at, d.files_json, d.release_payload,\n               d.release_interpretation_json,\n               d.metadata,\n               d.callback_attempts, d.callback_last_attempt_at, d.callback_error,\n               d.files_scan_error, d.client_data AS client_progress,\n               dc.name AS \"download_client_name?\",\n               d.api_key_id,\n               ak.name AS \"api_key_name?\",\n               wp.source_system AS \"watch_pattern_source_system?\",\n               wp.source_id AS \"watch_pattern_source_id?\"\n        FROM downloads d\n        LEFT JOIN download_clients dc ON d.download_client_id = dc.id\n        LEFT JOIN api_keys ak ON d.api_key_id = ak.id\n        LEFT JOIN LATERAL (\n            SELECT wm.watch_pattern_id\n            FROM watch_matches wm\n            WHERE wm.download_id = d.id\n            LIMIT 1\n        ) wm ON true\n        LEFT JOIN watch_patterns wp ON wm.watch_pattern_id = wp.id\n        WHERE NOT d.hidden\n          AND ($1::timestamptz IS NULL OR (d.created_at, d.id) < ($1, $2))\n          AND ($3::text[] IS NULL OR d.status = ANY($3))\n          AND ($5::text IS NULL OR d.name ILIKE '%' || $5 || '%')\n        ORDER BY d.created_at DESC, d.id DESC\n        LIMIT $4\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "protocol",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "protocol"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "profile_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "profile_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "progress",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "progress"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "last_poll_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "last_poll_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "last_poll_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "last_poll_error"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "download_client_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "download_client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "external_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "file_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "file_path"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "callback_sent_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_sent_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "import_confirmed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "import_confirmed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "files_json",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "files_json"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "release_payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "release_payload"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "release_interpretation_json",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "release_interpretation_json"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "callback_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "callback_last_attempt_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_last_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "callback_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_error"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "files_scan_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "files_scan_error"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "client_progress",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "client_data"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "download_client_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "download_clients",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "api_key_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "api_key_id"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "api_key_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "api_keys",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "watch_pattern_source_system?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "source_system"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "watch_pattern_source_id?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "source_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid",
+        "TextArray",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0793510d8f48a1722d31e51758786bc817dc1f638c58d89f3e084428c1dd4f53"
+}

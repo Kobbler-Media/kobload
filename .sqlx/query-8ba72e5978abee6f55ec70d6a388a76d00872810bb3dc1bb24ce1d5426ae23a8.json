@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches SET held = FALSE, action = $2, download_id = $3 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8ba72e5978abee6f55ec70d6a388a76d00872810bb3dc1bb24ce1d5426ae23a8"
+}

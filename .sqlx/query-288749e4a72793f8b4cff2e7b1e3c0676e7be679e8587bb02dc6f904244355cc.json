@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MAX(quality_score) as \"score?\"\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND import_confirmed_at IS NOT NULL\n          AND quality_score IS NOT NULL\n          AND rejected = FALSE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "score?",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "288749e4a72793f8b4cff2e7b1e3c0676e7be679e8587bb02dc6f904244355cc"
+}

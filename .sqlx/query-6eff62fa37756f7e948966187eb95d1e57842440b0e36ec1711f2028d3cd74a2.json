@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO media_type_config (id, key, name)\n        VALUES ($1, $2, $3)\n        ON CONFLICT (key) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6eff62fa37756f7e948966187eb95d1e57842440b0e36ec1711f2028d3cd74a2"
+}

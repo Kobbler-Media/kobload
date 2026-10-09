@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scene_mappings, fetched_at FROM xem_cache WHERE tvdb_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scene_mappings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "xem_cache",
+            "name": "scene_mappings"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "fetched_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "xem_cache",
+            "name": "fetched_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cd364cb2ed710a9c13b52817627fba533643008ef79f5a12bd0e1cb961298287"
+}

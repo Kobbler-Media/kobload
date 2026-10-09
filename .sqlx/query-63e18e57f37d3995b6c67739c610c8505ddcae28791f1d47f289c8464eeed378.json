@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE downloads\n        SET callback_idempotency_key = COALESCE(callback_idempotency_key, $2)\n        WHERE id = $1\n        RETURNING callback_idempotency_key AS \"callback_idempotency_key!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "callback_idempotency_key!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_idempotency_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "63e18e57f37d3995b6c67739c610c8505ddcae28791f1d47f289c8464eeed378"
+}

@@ -1,0 +1,37 @@
+# Rust build artifacts — keep out of build context
+target/
+**/target/
+
+# Node
+**/node_modules/
+**/.svelte-kit/
+**/build/
+**/dist/
+
+# VCS + editor
+.git/
+.idea/
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Env files (don't leak secrets into images)
+.env
+.env.*
+!.env.example
+
+# Docker / local dev
+docker-compose.dev.yml
+docker-compose.test.yml
+
+# Agent metadata
+.claude/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+
+# Docs
+README.md
+docs/

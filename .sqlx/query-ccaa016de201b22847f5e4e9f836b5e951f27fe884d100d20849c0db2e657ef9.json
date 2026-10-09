@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_patterns\n        SET last_backlog_search_at = NOW() + ($2 * INTERVAL '1 minute')\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ccaa016de201b22847f5e4e9f836b5e951f27fe884d100d20849c0db2e657ef9"
+}

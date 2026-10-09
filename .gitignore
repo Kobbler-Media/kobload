@@ -1,0 +1,57 @@
+# Rust
+target/
+api/target/
+
+# Node / SvelteKit
+node_modules/
+.svelte-kit/
+web/build/
+dist/
+
+# Gradle / Kotlin build detritus
+.gradle/
+.kotlin/
+build/
+
+# Environment
+.env
+.env.*
+!.env.example
+!.env.dev.template
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data — ignore everything except seed documentation
+/data/*
+!/data/seeds/
+/data/seeds/*
+!/data/seeds/README.md
+!/data/seeds/.gitignore
+!/data/seeds/processed/
+/data/seeds/processed/*
+!/data/seeds/processed/.gitkeep
+/tmp/
+*.log
+
+# Scratchpad (dev prompts, notes)
+/SCRATCHPAD/
+
+# Dev config (snapshots, etc.)
+/config/
+docker-compose.override.yml
+
+# Local agent context — machine/deploy specific, never public
+CLAUDE.local.md
+AGENTS.local.md
+.claude/
+.agents/
+
+# Local compose overrides
+docker-compose.local.yml

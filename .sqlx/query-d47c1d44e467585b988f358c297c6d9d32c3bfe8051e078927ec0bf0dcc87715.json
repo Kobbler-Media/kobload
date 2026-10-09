@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET\n            files_json = $1,\n            release_interpretation_json = $2,\n            updated_at = NOW()\n        WHERE id = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d47c1d44e467585b988f358c297c6d9d32c3bfe8051e078927ec0bf0dcc87715"
+}

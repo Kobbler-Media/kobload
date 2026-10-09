@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_patterns\n        SET last_backlog_search_at = NOW()\n            - (COALESCE(backlog_search_interval_hours, 24) * INTERVAL '1 hour')\n            - INTERVAL '1 second'\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a2b39741a6254f583f76e10d2c436813c6efbb2f43cb3065fe86765132d6914"
+}

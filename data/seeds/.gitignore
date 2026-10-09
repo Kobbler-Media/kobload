@@ -1,0 +1,7 @@
+# Ignore everything in seeds except this README
+*
+!.gitignore
+!README.md
+!processed/
+processed/*
+!processed/.gitkeep

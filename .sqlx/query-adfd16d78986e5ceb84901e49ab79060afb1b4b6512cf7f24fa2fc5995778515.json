@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_patterns SET upgrade_until = NULL WHERE id = $1 AND upgrade_until IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "adfd16d78986e5ceb84901e49ab79060afb1b4b6512cf7f24fa2fc5995778515"
+}

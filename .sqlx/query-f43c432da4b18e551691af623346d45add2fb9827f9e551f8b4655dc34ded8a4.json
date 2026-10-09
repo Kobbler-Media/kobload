@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO watch_patterns\n            (id, source_system, source_id, callback_url, patterns, media_want, match_targets, match_mode, min_score,\n             media_type_id, auto_download, metadata, enabled, upgrade_allowed, search_not_before)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Float8",
+        "Uuid",
+        "Bool",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f43c432da4b18e551691af623346d45add2fb9827f9e551f8b4655dc34ded8a4"
+}

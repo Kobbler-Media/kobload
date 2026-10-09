@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT wm.episode_key as \"episode_key!\"\n        FROM watch_matches wm\n        JOIN downloads d ON d.id = wm.download_id\n        WHERE wm.watch_pattern_id = $1\n          AND wm.episode_key IS NOT NULL\n          AND wm.download_id IS NOT NULL\n          AND d.status NOT IN ('failed', 'cancelled')\n          AND wm.import_confirmed_at IS NULL\n          AND wm.rejected = FALSE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "episode_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "episode_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4e41a0e2da5530ee42a980abf4bc63c5bab7788f59466d3a3001742ab89f9fc5"
+}

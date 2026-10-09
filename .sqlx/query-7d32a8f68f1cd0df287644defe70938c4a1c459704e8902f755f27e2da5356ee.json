@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE downloads\n        SET status = $1, file_path = $2, progress = COALESCE($3, progress), updated_at = NOW()\n        WHERE id = $4\n        RETURNING callback_url, metadata, auth_token\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "callback_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_url"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "auth_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "auth_token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Float8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "7d32a8f68f1cd0df287644defe70938c4a1c459704e8902f755f27e2da5356ee"
+}

@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO watch_matches\n            (id, watch_pattern_id, indexer_source_id, release_guid, release_title, release_data,\n             match_score, matched_pattern, action, download_id, hold_until, held,\n             quality_score, rejected, rejected_at, rejected_reason, episode_key)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)\n        ON CONFLICT (watch_pattern_id, release_guid) DO UPDATE\n        SET indexer_source_id = EXCLUDED.indexer_source_id,\n            release_title = EXCLUDED.release_title,\n            release_data = EXCLUDED.release_data,\n            match_score = EXCLUDED.match_score,\n            matched_pattern = EXCLUDED.matched_pattern,\n            action = EXCLUDED.action,\n            download_id = EXCLUDED.download_id,\n            hold_until = EXCLUDED.hold_until,\n            held = EXCLUDED.held,\n            quality_score = EXCLUDED.quality_score,\n            rejected = EXCLUDED.rejected,\n            rejected_at = EXCLUDED.rejected_at,\n            rejected_reason = EXCLUDED.rejected_reason,\n            episode_key = EXCLUDED.episode_key,\n            created_at = NOW()\n        WHERE watch_matches.action = 'skipped'\n          AND watch_matches.download_id IS NULL\n          AND NOT watch_matches.held\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Float8",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Bool",
+        "Float8",
+        "Bool",
+        "Timestamptz",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4ddca3243c113c7297b4ecbcdb53429f6f3d8fe50bc08268922a409a8cad36ff"
+}

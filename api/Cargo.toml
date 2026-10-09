@@ -1,0 +1,108 @@
+[package]
+name = "kobload-api"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+default-run = "kobload-api"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "kobload_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kobload-api"
+path = "src/main.rs"
+
+[[bin]]
+name = "parse-dir"
+path = "src/bin/parse_dir.rs"
+
+[[bin]]
+name = "seed-processor"
+path = "src/bin/seed_processor.rs"
+
+[[bin]]
+name = "backfill-hash-index-se"
+path = "src/bin/backfill_hash_index_se.rs"
+
+[dependencies]
+axum = { version = "0.8.9", features = ["json", "multipart"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "uuid", "time"] }
+uuid = { version = "1.24.0", features = ["v7", "serde"] }
+time = { version = "0.3.55", features = ["serde"] }
+dotenvy = "0.15.7"
+thiserror = "2.0.20"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart", "query", "gzip", "brotli", "deflate", "stream"] }
+tower-http = { version = "0.7.0", features = ["trace", "cors"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
+argon2 = "0.5.3"
+password-hash = "0.5.0"
+rand = "0.10.2"
+base64 = "0.23.1"
+sha2 = "0.11.0"
+const-hex = "1.19.1"
+subtle = "2.6.1"
+infer = "0.22.0"
+zip = "8.6.0"
+flate2 = "1.1.9"
+bzip2 = "0.6.1"
+liblzma = "0.4.8"
+tar = "0.4.46"
+csv = "1.4.0"
+tempfile = "3.27.0"
+dashmap = "6.2.1"
+futures = "0.3.33"
+chrono = { version = "0.4.45", features = ["serde"] }
+quick-xml = { version = "0.41.0", features = ["serialize"] }
+
+# OpenAPI documentation
+utoipa = { version = "5.5.0", features = ["axum_extras", "uuid", "time", "chrono"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+
+# NATS job system
+nats-jobs = { path = "../../koblibs/nats-jobs", features = ["openapi"] }
+kob-ffmpeg = { path = "../../koblibs/kob-ffmpeg" }
+koblem-client = { path = "../../koblibs/koblem-client" }
+kob-providers = { path = "../../koblibs/kob-providers" }
+kob-normalize = { path = "../../koblibs/kob-normalize" }
+async-nats = "0.50.0"
+async-trait = "0.1.92"
+regex = "1.13.1"
+fancy-regex = "0.19.0"
+unicode-normalization = "0.1.25"
+walkdir = "2.5.0"
+rayon = "1.12.0"
+
+# SQLite reading for bulk hash index imports (RARBG, MagnetDB dumps)
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+
+# LZ-string decompression for DMM hashlist parsing
+lz-str = "0.2.1"
+
+# Cardigann YAML indexer engine
+cardigann = { path = "../cardigann" }
+
+[dev-dependencies]
+regex = "1.13.1"
+tokio-test = "0.4.5"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+# Build reqwest::Response values directly, to test status classification without a server.
+http = "1.5.0"
+rustls = "0.23.43"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+nats-jobs = { path = "../../koblibs/nats-jobs" }
+
+[lints.clippy]
+# Route helpers that can fail early return the HTTP response they want sent, so the Err
+# variant is an `axum::response::Response` — around 200 bytes, over the lint's 128. That
+# is the architecture rather than an oversight: the error *is* the reply, and boxing it
+# would add an indirection to a once-per-request path to save moving a struct the request
+# has already allocated many times over.
+result_large_err = "allow"

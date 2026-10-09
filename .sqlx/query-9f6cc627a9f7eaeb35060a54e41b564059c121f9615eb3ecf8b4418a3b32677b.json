@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches SET\n            callback_error = $1,\n            callback_attempts = callback_attempts + 1,\n            callback_last_attempt_at = NOW()\n        WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9f6cc627a9f7eaeb35060a54e41b564059c121f9615eb3ecf8b4418a3b32677b"
+}

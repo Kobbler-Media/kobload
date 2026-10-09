@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE downloads\n        SET callback_url = $1, auth_token = $2, callback_sent_at = NULL, import_confirmed_at = NULL,\n            status = CASE WHEN status = 'failed' THEN 'completed' ELSE status END,\n            error = CASE WHEN status = 'failed' THEN NULL ELSE error END,\n            updated_at = NOW()\n        WHERE id = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1fb1409c07cb9fae94bf5359087df1cda225c352c30bf6148cd3dcaa8aa3c67"
+}

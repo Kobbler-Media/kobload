@@ -1,0 +1,148 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT status, callback_url, auth_token, metadata, file_path, files_json, error,\n               release_interpretation_json, name, media_kind, release_payload\n        FROM downloads WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "callback_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_url"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "auth_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "auth_token"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "file_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "file_path"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "files_json",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "files_json"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "release_interpretation_json",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "release_interpretation_json"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "media_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "media_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "release_payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "release_payload"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "6a4655d7ea1fb513fca5e7cf03fcebb57f3e438910047d2b1076cab2fb3828e5"
+}

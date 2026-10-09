@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches SET hidden = TRUE WHERE id = ANY($1) AND NOT hidden",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c9a638cbe5fd9b20ea1da42baebf87f93c08e6f311b63126a66c93952196e93a"
+}

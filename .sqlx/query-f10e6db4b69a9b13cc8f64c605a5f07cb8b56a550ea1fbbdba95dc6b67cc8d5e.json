@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM indexer_category_mappings WHERE indexer_source_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f10e6db4b69a9b13cc8f64c605a5f07cb8b56a550ea1fbbdba95dc6b67cc8d5e"
+}

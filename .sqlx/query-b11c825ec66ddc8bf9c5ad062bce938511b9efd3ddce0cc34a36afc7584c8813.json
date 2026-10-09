@@ -1,0 +1,172 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            id,\n            indexer_source_id,\n            source_name,\n            handler_type,\n            search_type,\n            query,\n            categories,\n            external_ids,\n            results_count,\n            results_after_dedup,\n            status,\n            error_message,\n            duration_ms\n        FROM decision_log_provider_calls\n        WHERE session_id = $1\n        ORDER BY created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "indexer_source_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "indexer_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "source_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "source_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "handler_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "handler_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "search_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "search_type"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "query",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "query"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "categories",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "categories"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "external_ids",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "external_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "results_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "results_count"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "results_after_dedup",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "results_after_dedup"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "error_message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "error_message"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "duration_ms",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "decision_log_provider_calls",
+            "name": "duration_ms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "b11c825ec66ddc8bf9c5ad062bce938511b9efd3ddce0cc34a36afc7584c8813"
+}

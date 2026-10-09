@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM quality_profiles WHERE id != ALL($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9edeb272c63892ac0af0f3ca2474e2c35ba85ab85032fadde78a5af3e6766ba6"
+}

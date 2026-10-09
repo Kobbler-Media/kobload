@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT download_id as \"download_id?\"\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND import_confirmed_at IS NOT NULL\n          AND rejected = FALSE\n        ORDER BY import_confirmed_at DESC\n        LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "download_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "download_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "2631eb6cf7e294b09686ad424db9d5a0166276c25121bf464501b53360dd1674"
+}

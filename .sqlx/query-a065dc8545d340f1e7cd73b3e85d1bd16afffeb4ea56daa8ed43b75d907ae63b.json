@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO downloads (\n            id, source, protocol, profile_id, name, download_url, download_client_id, external_id,\n            callback_url, auth_token, metadata, status, progress, error, release_payload, api_key_id,\n            quality_profile_id, media_kind, submission_error,\n            created_at, updated_at\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Float8",
+        "Text",
+        "Jsonb",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a065dc8545d340f1e7cd73b3e85d1bd16afffeb4ea56daa8ed43b75d907ae63b"
+}

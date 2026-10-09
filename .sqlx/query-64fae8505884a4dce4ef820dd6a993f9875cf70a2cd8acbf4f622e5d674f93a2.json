@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_directories\n        SET name = COALESCE($1, name),\n            path = COALESCE($2, path),\n            enabled = COALESCE($3, enabled),\n            recursive = COALESCE($4, recursive),\n            media_type = COALESCE($5, media_type),\n            callback_url = COALESCE($6, callback_url),\n            auth_token = COALESCE($7, auth_token),\n            updated_at = NOW()\n        WHERE id = $8\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "64fae8505884a4dce4ef820dd6a993f9875cf70a2cd8acbf4f622e5d674f93a2"
+}

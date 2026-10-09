@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE xem_cache SET fetched_at = NOW() WHERE tvdb_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd3a9fa5f5dd78b80360ed229f5cba0b61e6198d4aedf77f56797be20b73a67c"
+}

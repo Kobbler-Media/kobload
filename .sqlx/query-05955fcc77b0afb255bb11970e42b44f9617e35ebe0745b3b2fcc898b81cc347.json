@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_directories SET scan_status = 'scanning', updated_at = NOW() WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05955fcc77b0afb255bb11970e42b44f9617e35ebe0745b3b2fcc898b81cc347"
+}

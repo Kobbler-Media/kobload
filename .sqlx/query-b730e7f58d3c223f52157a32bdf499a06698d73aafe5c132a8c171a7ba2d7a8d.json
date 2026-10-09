@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE status_webhooks SET\n            url = COALESCE($2, url),\n            secret = CASE WHEN $3 THEN $4 ELSE secret END,\n            events = COALESCE($5, events),\n            enabled = COALESCE($6, enabled),\n            updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "TextArray",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b730e7f58d3c223f52157a32bdf499a06698d73aafe5c132a8c171a7ba2d7a8d"
+}

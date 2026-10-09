@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE indexer_sources SET capabilities = $2, caps_fetched_at = NOW() WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ceafdfc89f997986cfa7ea8ac113fb56fee6760c2d014190e5f5a308eeb2b0e8"
+}

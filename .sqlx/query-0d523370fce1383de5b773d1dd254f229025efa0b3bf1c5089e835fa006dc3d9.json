@@ -1,0 +1,209 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            s.id,\n            s.trigger_type,\n            s.watch_pattern_id,\n            s.indexer_source_id,\n            s.is_test,\n            s.outcome,\n            s.download_id,\n            s.releases_evaluated,\n            s.search_queries,\n            s.error_message,\n            s.started_at,\n            s.finished_at,\n            s.duration_ms,\n            s.created_at,\n            COALESCE(\n                (SELECT array_to_string(patterns, ', ') FROM watch_patterns WHERE id = s.watch_pattern_id),\n                NULL\n            ) AS \"pattern_name?\",\n            COALESCE(\n                (SELECT name FROM indexer_sources WHERE id = s.indexer_source_id),\n                NULL\n            ) AS \"source_name?\",\n            (SELECT metadata FROM watch_patterns WHERE id = s.watch_pattern_id) AS \"pattern_metadata?\"\n        FROM decision_log_sessions s\n        WHERE\n            ($1::text[] IS NULL OR s.trigger_type = ANY($1))\n            AND ($2::bool IS NULL OR s.is_test = $2)\n            AND ($3::uuid IS NULL OR s.watch_pattern_id = $3)\n        ORDER BY s.created_at DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "trigger_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "trigger_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "watch_pattern_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "watch_pattern_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "indexer_source_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "indexer_source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "is_test",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "is_test"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "outcome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "download_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "download_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "releases_evaluated",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "releases_evaluated"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "search_queries",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "search_queries"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "error_message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "error_message"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "finished_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "duration_ms",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "decision_log_sessions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "pattern_name?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "source_name?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "pattern_metadata?",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Bool",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0d523370fce1383de5b773d1dd254f229025efa0b3bf1c5089e835fa006dc3d9"
+}

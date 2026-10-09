@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO torrent_hash_index\n               (info_hash, imdb_id, tmdb_id, original_title, parsed_title,\n                year, quality, size, magnet_url, source, seeders,\n                season, episodes)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)\n           ON CONFLICT (info_hash) DO UPDATE SET\n               last_seen = NOW(),\n               imdb_id = COALESCE(torrent_hash_index.imdb_id, EXCLUDED.imdb_id),\n               tmdb_id = COALESCE(torrent_hash_index.tmdb_id, EXCLUDED.tmdb_id),\n               quality = CASE\n                   WHEN torrent_hash_index.quality IS NULL OR torrent_hash_index.quality = '{}'::jsonb\n                   THEN COALESCE(EXCLUDED.quality, torrent_hash_index.quality)\n                   ELSE torrent_hash_index.quality\n               END,\n               original_title = CASE\n                   WHEN length(EXCLUDED.original_title) > length(torrent_hash_index.original_title)\n                   THEN EXCLUDED.original_title\n                   ELSE torrent_hash_index.original_title\n               END,\n               parsed_title = CASE\n                   WHEN torrent_hash_index.parsed_title IS NULL\n                   THEN EXCLUDED.parsed_title\n                   ELSE torrent_hash_index.parsed_title\n               END,\n               year = COALESCE(torrent_hash_index.year, EXCLUDED.year),\n               size = COALESCE(torrent_hash_index.size, EXCLUDED.size),\n               seeders = COALESCE(EXCLUDED.seeders, torrent_hash_index.seeders),\n               season = COALESCE(torrent_hash_index.season, EXCLUDED.season),\n               episodes = COALESCE(torrent_hash_index.episodes, EXCLUDED.episodes)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int2",
+        "Jsonb",
+        "Int8",
+        "Text",
+        "Text",
+        "Int4",
+        "Int2",
+        "Int2Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "90c644bf616ac84301c5e35a06d342ede6aa309230008d28cfa2271a8b825501"
+}

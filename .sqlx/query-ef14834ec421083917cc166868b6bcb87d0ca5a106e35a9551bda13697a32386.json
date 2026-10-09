@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT info_hash FROM debrid_availability_cache WHERE provider_id = $1 ORDER BY info_hash",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "info_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "debrid_availability_cache",
+            "name": "info_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ef14834ec421083917cc166868b6bcb87d0ca5a106e35a9551bda13697a32386"
+}

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT action, rejected, rejected_reason FROM watch_matches WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "action",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "action"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rejected",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "rejected_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "cc4eccd66db52b8f79a7c5c720fbff8746d7986c5d39ea747da614759ef76179"
+}

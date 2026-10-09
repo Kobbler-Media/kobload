@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO indexer_sources\n            (id, name, handler_type, handler_config, category_ids, enabled)\n        VALUES ($1, $2, 'prowlarr_rss', $3, $4, TRUE)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "58e7b6a4609dd2c992a99c483ca22ed4b9f7f0f8371325577927a156f190d4fa"
+}

@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT action, rejected, rejected_reason, download_id\n           FROM watch_matches WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "action",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "action"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rejected",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "rejected_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "rejected_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "download_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "download_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "f200c92906ead62baf19a84c992c470125054caf886afc722efa6e17f7262ffe"
+}

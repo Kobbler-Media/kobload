@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: "true"
+
+# koblibs is consumed as a sibling checkout, not from crates.io or npm:
+# api/Cargo.toml references it by path, and web/package.json via
+# `"@koblibs/ui": "file:../../koblibs"`. Both need it laid out beside this
+# repo, so every job checks out two repositories.
+jobs:
+  api:
+    name: api (rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: kobload
+      - uses: actions/checkout@v5
+        with:
+          repository: Kobbler-Media/koblibs
+          path: koblibs
+      - name: System build deps (ffmpeg headers + libclang for bindgen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libavformat-dev libavcodec-dev libavutil-dev libavfilter-dev \
+            libswresample-dev libswscale-dev libchromaprint-dev \
+            clang libclang-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.96"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kobload
+      - name: fmt
+        working-directory: kobload
+        run: cargo fmt --all -- --check
+      - name: clippy
+        working-directory: kobload
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: start test database
+        working-directory: kobload
+        run: docker compose -f docker-compose.test.yml up -d --wait
+      - name: test
+        working-directory: kobload
+        run: cargo test --all-features
+
+  web:
+    name: web (svelte)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: kobload
+      - uses: actions/checkout@v5
+        with:
+          repository: Kobbler-Media/koblibs
+          path: koblibs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install
+        working-directory: kobload/web
+        run: npm install --no-audit --no-fund
+      - name: check
+        working-directory: kobload/web
+        run: npm run check --if-present
+      - name: build
+        working-directory: kobload/web
+        run: npm run build
+
+  docker:
+    name: docker build (smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: kobload
+      - uses: actions/checkout@v5
+        with:
+          repository: Kobbler-Media/koblibs
+          path: koblibs
+      - name: make tools
+        working-directory: kobload
+        run: make tools
+      - name: docker compose build
+        working-directory: kobload
+        run: docker compose build api web

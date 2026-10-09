@@ -1,0 +1,22 @@
+node_modules
+.svelte-kit
+build
+dist
+
+# VCS + editor
+.git/
+.idea/
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Env files (don't leak secrets into images)
+.env
+.env.*
+!.env.example
+
+# Misc build cache / logs
+target/
+*.log

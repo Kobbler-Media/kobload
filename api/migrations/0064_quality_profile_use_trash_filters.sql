@@ -1,0 +1,2 @@
+ALTER TABLE quality_profiles
+    ADD COLUMN IF NOT EXISTS use_trash_filters BOOLEAN NOT NULL DEFAULT TRUE;

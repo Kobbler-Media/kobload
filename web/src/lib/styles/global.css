@@ -1,0 +1,237 @@
+@import '@koblibs/ui/styles/shared.css';
+
+/*
+ * Kobload-specific styles and overrides
+ */
+
+/* Inline error text (kobload-specific) */
+.error-inline {
+  color: #dc3545;
+  font-size: 12px;
+}
+
+/* Page header */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.page-header h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-family: 'Palatino Linotype', 'Book Antiqua', Palatino, serif;
+}
+
+.page-header .header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Filter bar */
+.filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.filters .search-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ring);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.filters .search-input::placeholder {
+  color: var(--muted);
+}
+
+.filters select {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--ring);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Compact error banner for page-level errors */
+.error-banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  background: rgba(220, 53, 69, 0.12);
+  border: 1px solid rgba(220, 53, 69, 0.25);
+  color: #dc3545;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-banner svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+@media (max-width: 640px) {
+  .filters {
+    flex-direction: column;
+  }
+
+  .filters .search-input {
+    min-width: 0;
+  }
+}
+
+/* Edit-modal forms — shared by the settings edit modals so each one stays markup-only */
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+}
+
+.modal-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.modal-form .form-grid.cols-1 {
+  grid-template-columns: 1fr;
+}
+
+.modal-form label,
+.modal-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modal-form input[type='text'],
+.modal-form input[type='password'],
+.modal-form input[type='number'],
+.modal-form input[type='email'],
+.modal-form input[type='url'],
+.modal-form textarea,
+.modal-form select {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--ring);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal-form textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.modal-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-form .checkbox-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.modal-form .checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modal-form .hint {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.modal-form .hint a {
+  color: var(--accent);
+}
+
+.modal-form .advanced-section {
+  border: 1px solid var(--ring);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.modal-form .advanced-section summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modal-form .advanced-section[open] summary {
+  margin-bottom: 12px;
+}
+
+.modal-form .advanced-section > .form-grid {
+  gap: 14px;
+}
+
+.modal-form .info-banner {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--ring);
+  line-height: 1.5;
+}
+
+.modal-form .info-banner strong {
+  color: var(--ink);
+}
+
+.modal-form .info-banner p {
+  margin: 4px 0 0;
+}
+
+[data-theme='light'] .modal-form .info-banner {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.modal-form .test-result {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  background: rgba(220, 53, 69, 0.15);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  color: #dc3545;
+}
+
+.modal-form .test-result.success {
+  background: rgba(40, 167, 69, 0.15);
+  border: 1px solid rgba(40, 167, 69, 0.3);
+  color: #28a745;
+}

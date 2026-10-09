@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM decision_log_sessions\n        WHERE\n            (is_test = FALSE AND created_at < NOW() - make_interval(days => $1))\n            OR (is_test = TRUE AND created_at < NOW() - make_interval(days => $2))\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "17052e78ac4503d6749087cf7a34a7d4af476c78bb07b8a7ba89b8b4cd2f3db7"
+}

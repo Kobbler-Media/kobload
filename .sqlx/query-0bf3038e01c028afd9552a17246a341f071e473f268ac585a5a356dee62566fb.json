@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO watch_matches\n            (id, watch_pattern_id, indexer_source_id, release_guid, release_title, release_data,\n             match_score, matched_pattern, action, download_id, hold_until, held,\n             quality_score, rejected, rejected_at, rejected_reason, episode_key)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)\n        ON CONFLICT (watch_pattern_id, release_guid) DO NOTHING\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Float8",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Bool",
+        "Float8",
+        "Bool",
+        "Timestamptz",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0bf3038e01c028afd9552a17246a341f071e473f268ac585a5a356dee62566fb"
+}

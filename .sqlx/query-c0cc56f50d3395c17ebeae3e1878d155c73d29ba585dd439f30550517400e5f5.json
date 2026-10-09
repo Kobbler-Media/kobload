@@ -1,0 +1,230 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, download_client_id, external_id, status, protocol, name, callback_url, auth_token, metadata,\n               callback_sent_at, file_path, error, callback_attempts, files_scan_error, files_json, release_payload,\n               media_kind, callback_idempotency_key\n        FROM downloads\n        WHERE status IN ('queued', 'downloading')\n           OR (status IN ('completed', 'failed') AND (\n               -- Needs callback: not sent yet, and either:\n               -- 1. Never attempted OR\n               -- 2. Under max attempts AND enough time has passed (exponential backoff)\n               -- Schedule: 0, 1min, 2min, 5min, 10min, 15min, 30min, 45min, 60min, 120min (10 attempts)\n               (callback_sent_at IS NULL AND callback_attempts < 10 AND (\n                   callback_last_attempt_at IS NULL OR\n                   callback_last_attempt_at < NOW() - (\n                       CASE callback_attempts\n                           WHEN 0 THEN INTERVAL '0 seconds'\n                           WHEN 1 THEN INTERVAL '1 minute'\n                           WHEN 2 THEN INTERVAL '2 minutes'\n                           WHEN 3 THEN INTERVAL '5 minutes'\n                           WHEN 4 THEN INTERVAL '10 minutes'\n                           WHEN 5 THEN INTERVAL '15 minutes'\n                           WHEN 6 THEN INTERVAL '30 minutes'\n                           WHEN 7 THEN INTERVAL '45 minutes'\n                           WHEN 8 THEN INTERVAL '60 minutes'\n                           WHEN 9 THEN INTERVAL '120 minutes'\n                           ELSE INTERVAL '999 years'\n                       END\n                   )\n               ))\n               -- OR: Has files_scan_error that should be retried (every minute)\n               OR (files_scan_error IS NOT NULL AND files_scan_error != '' AND (\n                   callback_last_attempt_at IS NULL OR\n                   callback_last_attempt_at < NOW() - INTERVAL '1 minute'\n               ))\n           ))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "download_client_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "download_client_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "external_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "external_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "protocol",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "protocol"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "callback_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_url"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "auth_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "auth_token"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "callback_sent_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_sent_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "file_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "file_path"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "callback_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_attempts"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "files_scan_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "files_scan_error"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "files_json",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "files_json"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "release_payload",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "release_payload"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "media_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "media_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "callback_idempotency_key",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_idempotency_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c0cc56f50d3395c17ebeae3e1878d155c73d29ba585dd439f30550517400e5f5"
+}

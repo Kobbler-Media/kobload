@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM watch_patterns WHERE source_system = $1 AND source_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6255db3f7ca001df7d40ace8f2171a7d0e286b0f353a3034f13ae58e56daff47"
+}

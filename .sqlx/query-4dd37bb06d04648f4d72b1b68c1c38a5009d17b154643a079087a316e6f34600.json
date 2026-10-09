@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO quality_profiles (\n            id, name, media_kind, min_resolution, max_resolution,\n            preferred_sources, preferred_codecs, preferred_audio,\n            preferred_languages, rejected_sources, rejected_languages, rejected_terms,\n            reject_hardcoded_subs, reject_remux, use_trash_filters, is_default, upgrade_cutoff_score,\n            created_at, updated_at\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4dd37bb06d04648f4d72b1b68c1c38a5009d17b154643a079087a316e6f34600"
+}

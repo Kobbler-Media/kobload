@@ -1,0 +1,20 @@
+# Throwaway Postgres for `make test` / `make sqlx-prepare`.
+# Data lives in tmpfs, so `docker compose -f docker-compose.test.yml down`
+# discards it. Brought up automatically by the Makefile targets.
+
+services:
+  postgres-test:
+    image: postgres:18.4
+    environment:
+      POSTGRES_USER: kobload
+      POSTGRES_PASSWORD: kobload
+      POSTGRES_DB: kobload_test
+    ports:
+      - "${KOBLOAD_TEST_DB_PORT:-5434}:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kobload -d kobload_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 5

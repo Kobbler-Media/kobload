@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads SET hidden = TRUE, updated_at = NOW() WHERE id = $1 AND NOT hidden",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5909aa6ea4b5961424691bcd1dfc0b49f253360c31a21c0c8613994496bd771"
+}

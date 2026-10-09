@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO decision_log_releases (\n                id, session_id, provider_call_id, release_title, release_guid,\n                release_size, protocol, indexer_name,\n                match_score, matched_pattern, match_mode,\n                quality_score, quality_score_breakdown, total_score,\n                parsed_quality, structural_result,\n                decision, decision_reason, episode_key, is_best,\n                release_data, created_at\n            ) VALUES (\n                gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,\n                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW()\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Float8",
+        "Text",
+        "Text",
+        "Float8",
+        "Jsonb",
+        "Float8",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e033a8fbbcdd22f7e9678e4064ea101d460c0e07dca1bcf443640ba106725512"
+}

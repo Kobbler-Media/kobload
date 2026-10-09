@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE indexer_sources SET last_check_at = NOW(), last_error = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3c59980ddeb71b1c904a565cdce585b6de657be141c5f6f8b37e674a4bc2d907"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO search_cache (id, cache_key, results_json, created_at, expires_at)\n        VALUES ($1, $2, $3, NOW(), NOW() + make_interval(secs => $4))\n        ON CONFLICT (cache_key) DO UPDATE SET\n            results_json = EXCLUDED.results_json,\n            created_at = EXCLUDED.created_at,\n            expires_at = EXCLUDED.expires_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d474da0bd35e93fb839e700e5cb8315411b3b99e01081353ebf460c56e68c7cf"
+}

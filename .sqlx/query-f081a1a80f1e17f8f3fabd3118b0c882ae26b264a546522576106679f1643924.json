@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT wp.id, wp.source_system, wp.source_id,\n                  wp.upgrade_allowed as \"upgrade_allowed!\"\n        FROM watch_patterns wp\n        JOIN watch_matches wm ON wm.watch_pattern_id = wp.id\n        WHERE wp.enabled = TRUE\n          AND wp.upgrade_until IS NULL\n          AND wm.rejected = FALSE\n          AND wm.import_confirmed_at IS NOT NULL\n          AND (wp.media_want IS NULL OR wp.media_want->>'kind' != 'tv_season')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source_system",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "source_system"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "source_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "upgrade_allowed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "upgrade_allowed"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f081a1a80f1e17f8f3fabd3118b0c882ae26b264a546522576106679f1643924"
+}

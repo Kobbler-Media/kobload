@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, handler_config FROM indexer_sources WHERE handler_type = 'prowlarr' AND enabled = TRUE LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "handler_config",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "indexer_sources",
+            "name": "handler_config"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8f5768258f6b9fa129814de9792e676feeb97aa9fb84762ffa6cd0def4adc165"
+}

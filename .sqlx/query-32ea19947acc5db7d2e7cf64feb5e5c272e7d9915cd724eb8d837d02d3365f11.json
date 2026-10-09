@@ -1,0 +1,268 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, source_system, source_id, callback_url, patterns,\n               media_want, match_targets, match_mode as \"match_mode?\",\n               min_score, media_type_id, auto_download as \"auto_download!\",\n               metadata, enabled as \"enabled!\",\n               upgrade_allowed as \"upgrade_allowed!\", upgrade_until,\n               created_at as \"created_at!\", updated_at as \"updated_at!\",\n               last_backlog_search_at, backlog_search_interval_hours,\n               excluded_releases, search_not_before\n        FROM watch_patterns WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source_system",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "source_system"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "source_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "source_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "callback_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "callback_url"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "patterns",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "patterns"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "media_want",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "media_want"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "match_targets",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "match_targets"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "match_mode?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "match_mode"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "min_score",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "min_score"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "media_type_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "media_type_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "auto_download!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "auto_download"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "enabled!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "upgrade_allowed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "upgrade_allowed"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "upgrade_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "upgrade_until"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "updated_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "last_backlog_search_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "last_backlog_search_at"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "backlog_search_interval_hours",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "backlog_search_interval_hours"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "excluded_releases",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "excluded_releases"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "search_not_before",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "search_not_before"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "32ea19947acc5db7d2e7cf64feb5e5c272e7d9915cd724eb8d837d02d3365f11"
+}

@@ -1,0 +1,172 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT info_hash, imdb_id, tmdb_id, original_title, parsed_title,\n                  year, quality, size, magnet_url, source, seeders,\n                  season, episodes\n           FROM torrent_hash_index\n           WHERE last_seen >= $1\n           ORDER BY last_seen ASC\n           LIMIT 1000",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "info_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "info_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "imdb_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "imdb_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tmdb_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "tmdb_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "original_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "original_title"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "parsed_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "parsed_title"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "year",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "year"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "quality",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "quality"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "size",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "magnet_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "magnet_url"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "seeders",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "seeders"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "season",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "season"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "episodes",
+        "type_info": "Int2Array",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "episodes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f06d0c90cb564df6452f66332e331c189ab3e8ed43fb08f84df170da2cd98a48"
+}

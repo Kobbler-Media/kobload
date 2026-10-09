@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM job_status\n            WHERE status IN ('completed', 'failed')\n              AND completed_at < NOW() - INTERVAL '7 days'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "2a4800858ce3b8607f3ca2c1f66b52314bba7ce540b13a144cd3b41353b09031"
+}

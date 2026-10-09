@@ -1,0 +1,8 @@
+ALTER TABLE downloads
+ADD COLUMN IF NOT EXISTS profile_type TEXT;
+
+ALTER TABLE downloads
+ADD COLUMN IF NOT EXISTS last_poll_at TIMESTAMPTZ;
+
+ALTER TABLE downloads
+ADD COLUMN IF NOT EXISTS last_poll_error TEXT;

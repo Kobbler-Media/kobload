@@ -1,0 +1,13 @@
+[workspace]
+members = ["api", "cardigann"]
+resolver = "2"
+
+# Optimize regex in dev builds — debug regex is 50-100x slower than release,
+# which makes scoring 800+ releases take 20+ seconds instead of <1s.
+[profile.dev.package.regex-automata]
+opt-level = 2
+[profile.dev.package.regex-syntax]
+opt-level = 2
+[profile.dev.package.aho-corasick]
+opt-level = 2
+

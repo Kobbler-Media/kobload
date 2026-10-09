@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE indexer_sources SET\n            api_calls_today = $2,\n            api_limit_daily = COALESCE(api_limit_daily, $3)\n        WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "67a17d42e30c6e17c43ee0446539ffbd5a391cc9180eb1d303c346ac7161e3f3"
+}

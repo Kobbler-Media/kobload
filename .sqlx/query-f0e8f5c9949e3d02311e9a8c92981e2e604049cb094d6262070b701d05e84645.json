@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT column_name::text as \"column_name!\" FROM information_schema.columns\n         WHERE table_name = $1 ORDER BY ordinal_position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "column_name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f0e8f5c9949e3d02311e9a8c92981e2e604049cb094d6262070b701d05e84645"
+}

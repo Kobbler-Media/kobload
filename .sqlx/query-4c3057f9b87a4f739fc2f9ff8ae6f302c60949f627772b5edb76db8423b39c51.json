@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT episode_key as \"episode_key!\"\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND episode_key IS NOT NULL\n          AND import_confirmed_at IS NOT NULL\n          AND rejected = FALSE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "episode_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "episode_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4c3057f9b87a4f739fc2f9ff8ae6f302c60949f627772b5edb76db8423b39c51"
+}

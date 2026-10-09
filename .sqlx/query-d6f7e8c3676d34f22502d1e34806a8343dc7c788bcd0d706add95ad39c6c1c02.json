@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_directories\n        SET scan_status = 'idle',\n            scan_error = NULL,\n            error_count = 0,\n            next_retry_at = NULL,\n            updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d6f7e8c3676d34f22502d1e34806a8343dc7c788bcd0d706add95ad39c6c1c02"
+}

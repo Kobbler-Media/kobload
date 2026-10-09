@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_patterns SET\n            callback_url = $3,\n            patterns = $4,\n            media_want = $5,\n            match_targets = $6,\n            match_mode = $7,\n            min_score = $8,\n            media_type_id = $9,\n            auto_download = $10,\n            metadata = $11,\n            enabled = $12,\n            upgrade_allowed = $13,\n            upgrade_until = NULL,\n            excluded_releases = (\n                SELECT COALESCE(jsonb_agg(DISTINCT entry), '[]'::jsonb)\n                FROM jsonb_array_elements(\n                    COALESCE(watch_patterns.excluded_releases, '[]'::jsonb)\n                    || COALESCE($14::jsonb, '[]'::jsonb)\n                ) AS entry\n            ),\n            search_not_before = $15,\n            updated_at = NOW()\n        WHERE source_system = $1 AND source_id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Float8",
+        "Uuid",
+        "Bool",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8a4fc8895604eada70f2cd1416ac2034d4cf8f92f7026fbf3b961d8cd96ed5f9"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, handler_type, media_type_id, category_ids FROM handler_type_defaults ORDER BY handler_type, media_type_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "handler_type_defaults",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "handler_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "handler_type_defaults",
+            "name": "handler_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "media_type_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "handler_type_defaults",
+            "name": "media_type_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "category_ids",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "handler_type_defaults",
+            "name": "category_ids"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "95c1c174eb3e43e178f1845004b71ec4def69fdf5bbeaf232b6c890e19b89918"
+}

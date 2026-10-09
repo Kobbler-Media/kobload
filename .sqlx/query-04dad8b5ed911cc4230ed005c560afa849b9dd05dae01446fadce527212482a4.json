@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM indexer_rss_cache WHERE indexer_source_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "04dad8b5ed911cc4230ed005c560afa849b9dd05dae01446fadce527212482a4"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM watch_patterns WHERE upgrade_until IS NOT NULL AND upgrade_until < NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "75686af5e1fc829746cf2b9d6a9c7d6b62d6110ac0122208bef762671a9d0b5b"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE watch_matches SET held = FALSE, action = 'superseded' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0e88b0cdb2f15e5449b35fb861ca56e47fb1d1dc04966fb5ec8091f6bedc1dcc"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE watch_patterns\n        SET excluded_releases = COALESCE(excluded_releases, '[]'::jsonb) || $2::jsonb,\n            updated_at = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c58bdcdcd27f3e32c2d4bcdbb4ea3ef99f3e3935d7c4d7c803d4f8cfe17a3590"
+}

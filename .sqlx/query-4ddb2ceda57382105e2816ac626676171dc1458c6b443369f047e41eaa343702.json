@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT results_json FROM search_cache WHERE cache_key = $1 AND expires_at > NOW()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "results_json",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "search_cache",
+            "name": "results_json"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4ddb2ceda57382105e2816ac626676171dc1458c6b443369f047e41eaa343702"
+}
