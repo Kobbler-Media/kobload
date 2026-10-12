@@ -773,6 +773,34 @@ impl<'a> ScoringConfig<'a> {
     }
 }
 
+/// Whether the release matches the config's targets or patterns at all.
+///
+/// The same check `score_release` uses for its match gate. Callers that only act
+/// on matches (the RSS loop) run it first and skip the full scoring otherwise.
+pub fn release_matches(release: &Release, config: &ScoringConfig) -> bool {
+    match_gate(release, config).is_some()
+}
+
+fn match_gate(
+    release: &Release,
+    config: &ScoringConfig,
+) -> Option<(f64, String, Option<nats_jobs::MatchedTarget>)> {
+    if !config.match_targets.is_empty() {
+        score_against_targets(&release.title, config.match_targets, config.min_score)
+            .map(|r| (r.score, r.matched_target, r.semantic_target))
+    } else if !config.match_patterns.is_empty() {
+        match_patterns(
+            config.match_patterns,
+            config.match_mode,
+            config.min_score,
+            &release.title,
+        )
+        .map(|r| (r.score, r.matched_pattern, None))
+    } else {
+        None
+    }
+}
+
 /// Score a single release through all gates.
 ///
 /// Gate order:
@@ -787,8 +815,6 @@ impl<'a> ScoringConfig<'a> {
 pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRelease {
     use nats_jobs::{RejectReason, ScoringDecision};
 
-    let parsed_quality = parse_quality(&release.title);
-
     // ── Gate 1: Exclusion (hard early return) ──
     if let Some(excluded) = config.excluded_titles
         && excluded.contains(&release.title)
@@ -800,7 +826,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
             match_score: None,
             matched_pattern: None,
             matched_target: None,
-            parsed_quality: Some(parsed_quality),
+            parsed_quality: Some(parse_quality(&release.title)),
             quality_score: None,
             quality_rejected: false,
             quality_reject_reasons: vec![],
@@ -827,7 +853,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
             match_score: None,
             matched_pattern: None,
             matched_target: None,
-            parsed_quality: Some(parsed_quality),
+            parsed_quality: Some(parse_quality(&release.title)),
             quality_score: None,
             quality_rejected: false,
             quality_reject_reasons: vec![],
@@ -873,27 +899,9 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     }
 
     // Gate 5: Pattern/target matching (always run)
-    let (match_score, matched_pattern, matched_target) = if !config.match_targets.is_empty() {
-        match score_against_targets(&release.title, config.match_targets, config.min_score) {
-            Some(result) => (
-                Some(result.score),
-                Some(result.matched_target),
-                result.semantic_target,
-            ),
-            None => (None, None, None),
-        }
-    } else if !config.match_patterns.is_empty() {
-        match match_patterns(
-            config.match_patterns,
-            config.match_mode,
-            config.min_score,
-            &release.title,
-        ) {
-            Some(result) => (Some(result.score), Some(result.matched_pattern), None),
-            None => (None, None, None),
-        }
-    } else {
-        (None, None, None)
+    let (match_score, matched_pattern, matched_target) = match match_gate(release, config) {
+        Some((score, pattern, target)) => (Some(score), Some(pattern), target),
+        None => (None, None, None),
     };
 
     let is_no_match = match_score.is_none();
@@ -978,7 +986,8 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
         match_score,
         matched_pattern,
         matched_target,
-        parsed_quality: Some(parsed_quality),
+        // score_quality already parsed the title; reuse it
+        parsed_quality: Some(quality.parsed),
         quality_score: Some(quality.score),
         quality_rejected,
         quality_reject_reasons,

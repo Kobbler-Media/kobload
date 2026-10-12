@@ -871,16 +871,34 @@ pub fn merge_preferences(
 // =============================================================================
 
 /// Check if a word appears with word boundaries in the title.
+///
+/// A literal scan rather than a regex: this runs ~90 times per parse and the
+/// parse runs for every release × pattern pair in an RSS cycle, so compiling a
+/// regex per call dominated scoring time. It also left tokens like `hdr10+`
+/// unescaped, so they could never match.
 fn has_word(lower: &str, word: &str) -> bool {
-    // Fast path: if the word doesn't appear at all, skip regex
-    if !lower.contains(word) {
+    let Some(first_len) = word.chars().next().map(char::len_utf8) else {
         return false;
+    };
+    let mut from = 0;
+    while let Some(offset) = lower[from..].find(word) {
+        let start = from + offset;
+        let end = start + word.len();
+        let before_ok = lower[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || matches!(c, '.' | '-' | '[' | '('));
+        let after_ok = lower[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| c.is_whitespace() || matches!(c, '.' | '-' | ']' | ')'));
+        if before_ok && after_ok {
+            return true;
+        }
+        // Step one char, not past the match, so overlapping occurrences are seen.
+        from = start + first_len;
     }
-    // Check with word boundaries (delimiters: start/end, space, dot, dash, bracket)
-    let pattern = format!(r"(?:^|[\s.\-\[\(]){word}(?:[\s.\-\]\)]|$)");
-    Regex::new(&pattern)
-        .map(|re| re.is_match(lower))
-        .unwrap_or(false)
+    false
 }
 
 /// Find first matching item from a list of patterns.

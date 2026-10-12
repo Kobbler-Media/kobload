@@ -201,7 +201,7 @@ const OVERLAP_THRESHOLD: f64 = 0.7;
 ///
 /// Falls open when the wanted title has no content tokens (e.g. "The A") —
 /// there's nothing meaningful to compare against.
-fn has_title_overlap(release_title: &str, wanted_title: &str) -> bool {
+pub fn has_title_overlap(release_title: &str, wanted_title: &str) -> bool {
     let wanted_canonical = kob_normalize::canonical(wanted_title);
     let has_content = crate::services::title_tokens::title_keywords(&wanted_canonical)
         .iter()

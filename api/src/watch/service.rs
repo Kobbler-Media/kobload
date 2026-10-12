@@ -814,7 +814,7 @@ async fn score_source_releases(
     mut review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
 ) {
     use crate::services::want::koblem_review;
-    use crate::services::want::scoring::score_release;
+    use crate::services::want::scoring::{release_matches, score_release};
 
     // Phase 1: Pre-compute all pattern-invariant data (DB/async calls happen here)
     let prepared = prepare_patterns(state, source, patterns, profile_cache, protocol_cache).await;
@@ -855,6 +855,20 @@ async fn score_source_releases(
                 if prep.pattern.media_type_id.is_some()
                     && !prep.categories.is_empty()
                     && !release_matches_categories(&release.category_ids, &prep.categories)
+                {
+                    continue;
+                }
+
+                // Nearly every release × pattern pair is a no-match, and the full
+                // gates (quality, TRaSH, structural parses) cost milliseconds each.
+                // A no-match is only used by the decision log or by a koblem
+                // review of a related title; otherwise it's dropped, so don't
+                // compute it.
+                if collector.is_none()
+                    && !release_matches(release, &config)
+                    && review_title
+                        .as_deref()
+                        .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
                 {
                     continue;
                 }
