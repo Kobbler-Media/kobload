@@ -735,9 +735,364 @@ async fn test_download_file_by_id_from_zip_streams_entry() {
         .await;
     resp.assert_status(StatusCode::OK);
     assert_eq!(resp.bytes(), data.as_slice());
+    // zip records the uncompressed size, so the length is known up front
+    assert_eq!(
+        resp.headers.get("content-length").and_then(|v| v.to_str().ok()),
+        Some(data.len().to_string().as_str())
+    );
+    assert_eq!(
+        resp.headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+        Some("none")
+    );
+
+    // Entries can't seek: a Range request gets the whole entry, not a 206
+    let resp = client
+        .get_with_headers(
+            &format!("/api/v1/downloads/{download_id}/files/{file_id}"),
+            &[("Range", "bytes=10-19")],
+        )
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(resp.bytes(), data.as_slice());
 
     let resp = client
         .get(&format!("/api/v1/downloads/{download_id}/files/{missing_id}"))
         .await;
     resp.assert_status(StatusCode::NOT_FOUND);
+}
+
+async fn insert_download_with_file(
+    server: &TestServer,
+    file_id: Uuid,
+    path: &std::path::Path,
+    size: usize,
+) -> Uuid {
+    let download_id = Uuid::now_v7();
+    let path = path.to_string_lossy().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO downloads (id, source, protocol, name, download_url, callback_url, metadata, status, files_json, file_path)
+        VALUES ($1, 'test', 'torrent', 'Test', 'http://example.com', 'http://callback', '{}'::jsonb, 'completed', $2::jsonb, $3)
+        "#,
+    )
+    .bind(download_id)
+    .bind(json!([{
+        "id": file_id.to_string(),
+        "absolute_path": &path,
+        "relative_path": "video.mkv",
+        "size": size,
+        "extension": "mkv",
+    }]))
+    .bind(&path)
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    download_id
+}
+
+/// Plain files support Range so players can seek and transfers can resume.
+#[tokio::test]
+async fn test_plain_file_routes_support_range() {
+    let server = TestServer::start().await;
+    let client = server.admin_client();
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("video.mkv");
+    let data = payload(100 * 1024);
+    std::fs::write(&path, &data).unwrap();
+
+    let file_id = Uuid::now_v7();
+    let download_id = insert_download_with_file(&server, file_id, &path, data.len()).await;
+
+    for url in [
+        format!("/api/v1/downloads/{download_id}/files/{file_id}"),
+        format!("/api/v1/downloads/{download_id}/file"),
+    ] {
+        let resp = client
+            .get_with_headers(&url, &[("Range", "bytes=1000-1999")])
+            .await;
+        assert_eq!(resp.status, StatusCode::PARTIAL_CONTENT, "{url}");
+        assert_eq!(resp.bytes(), &data[1000..2000], "{url}");
+        assert_eq!(
+            resp.headers.get("content-range").and_then(|v| v.to_str().ok()),
+            Some(format!("bytes 1000-1999/{}", data.len()).as_str()),
+            "{url}"
+        );
+
+        let resp = client.get(&url).await;
+        resp.assert_status(StatusCode::OK);
+        assert_eq!(resp.bytes(), data.as_slice(), "{url}");
+        assert_eq!(
+            resp.headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+            Some("bytes"),
+            "{url}"
+        );
+    }
+}
+
+/// A file whose name contains `!` but isn't inside an archive is served as a
+/// plain file (with Range), never sent to archive extraction.
+#[tokio::test]
+async fn test_plain_file_with_bang_in_name_is_not_extracted() {
+    let server = TestServer::start().await;
+    let client = server.admin_client();
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("Teen Titans Go! S09E01.mkv");
+    std::fs::write(&path, b"titans").unwrap();
+
+    let file_id = Uuid::now_v7();
+    let download_id = insert_download_with_file(&server, file_id, &path, 6).await;
+
+    let resp = client
+        .get(&format!("/api/v1/downloads/{download_id}/files/{file_id}"))
+        .await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(resp.bytes(), b"titans");
+}
+
+#[tokio::test]
+async fn test_watch_directory_content_supports_range() {
+    let server = TestServer::start().await;
+    let client = server.admin_client();
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("book.epub");
+    let data = payload(20 * 1024);
+    std::fs::write(&path, &data).unwrap();
+
+    let dir_id = Uuid::now_v7();
+    let file_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO watch_directories (id, path, name, callback_url) VALUES ($1, $2, 'Test', 'http://callback')",
+    )
+    .bind(dir_id)
+    .bind(temp_dir.path().to_string_lossy().to_string())
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO watch_directory_files (id, watch_directory_id, file_path, file_name, file_size) VALUES ($1, $2, $3, 'book.epub', $4)",
+    )
+    .bind(file_id)
+    .bind(dir_id)
+    .bind(path.to_string_lossy().to_string())
+    .bind(data.len() as i64)
+    .execute(&server.pool)
+    .await
+    .unwrap();
+
+    let url = format!("/api/v1/watch-directories/{dir_id}/files/{file_id}/content");
+    let resp = client
+        .get_with_headers(&url, &[("Range", "bytes=0-99")])
+        .await;
+    assert_eq!(resp.status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(resp.bytes(), &data[..100]);
+
+    let resp = client.get(&url).await;
+    resp.assert_status(StatusCode::OK);
+    assert_eq!(resp.bytes(), data.as_slice());
+
+    // Wrong directory is still a 404 (auth boundary)
+    let resp = client
+        .get(&format!(
+            "/api/v1/watch-directories/{}/files/{file_id}/content",
+            Uuid::now_v7()
+        ))
+        .await;
+    resp.assert_status(StatusCode::NOT_FOUND);
+}
+
+/// unrar/7z tests need the binaries (both are in the production image).
+fn tool_available(tool: &str) -> bool {
+    let found = std::process::Command::new(tool)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok();
+    if !found {
+        eprintln!("Skipping test: {tool} not installed");
+    }
+    found
+}
+
+#[tokio::test]
+async fn test_stream_rar_inside_zip_via_unrar() {
+    if !tool_available("unrar") {
+        return;
+    }
+    let fixture = fixtures_dir().join("test_kobload_rar_in_zip.zip");
+    let delim = kobload_api::archive::ARCHIVE_DELIMITER;
+
+    let path = format!(
+        "{}{delim}test_split.rar{delim}kobload_test_rar_file.txt",
+        fixture.display()
+    );
+    let stream = kobload_api::archive::stream_nested_file(&path, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(stream.content_length(), None, "unrar doesn't report length");
+    let content = String::from_utf8(collect(stream).await).unwrap();
+    assert!(content.starts_with("KOBLOAD_TEST_CONTENT_LINE_1_FOR_RAR"));
+
+    // unrar exits non-zero for a missing entry
+    let missing = format!(
+        "{}{delim}test_split.rar{delim}missing.txt",
+        fixture.display()
+    );
+    assert!(
+        kobload_api::archive::stream_nested_file(&missing, None, None, None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn test_stream_split_rar_inside_zip() {
+    if !tool_available("unrar") {
+        return;
+    }
+    let fixture = fixtures_dir().join("test_kobload_split_rar_in_zip.zip");
+    let delim = kobload_api::archive::ARCHIVE_DELIMITER;
+    let volumes: Vec<String> = (2..=19)
+        .map(|n| format!("test_split.part{n:02}.rar"))
+        .collect();
+
+    let path = format!(
+        "{}{delim}test_split.part01.rar{delim}kobload_test_rar_file.txt",
+        fixture.display()
+    );
+    let stream = kobload_api::archive::stream_nested_file(&path, Some(&volumes), None, None)
+        .await
+        .unwrap();
+    let content = String::from_utf8(collect(stream).await).unwrap();
+    assert!(content.starts_with("KOBLOAD_TEST_CONTENT_LINE_1_FOR_RAR"));
+}
+
+fn distributed_numeric_sources() -> Vec<String> {
+    let delim = kobload_api::archive::ARCHIVE_DELIMITER;
+    (1..=8)
+        .map(|n| {
+            format!(
+                "{}{delim}test_archive.7z.{n:03}",
+                fixtures_dir()
+                    .join(format!("test_kobload_dist_{n:03}.zip"))
+                    .display()
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_stream_distributed_numeric_split_via_7z() {
+    if !tool_available("7z") {
+        return;
+    }
+    let delim = kobload_api::archive::ARCHIVE_DELIMITER;
+    let first = fixtures_dir().join("test_kobload_dist_001.zip");
+    let sources = distributed_numeric_sources();
+
+    let path = format!("{}{delim}test_archive.7z.001{delim}content.txt", first.display());
+    let stream = kobload_api::archive::stream_from_distributed_numeric_split(
+        &path,
+        &sources,
+        Some("7z"),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let content = collect(stream).await;
+    assert_eq!(content.len(), 3492);
+    assert!(content.starts_with(b"KOBLOAD_TEST_CONTENT_LINE_1_12345"));
+}
+
+/// Regression: 7z exits 0 with no output for an entry that isn't there, which
+/// used to be served as an empty 200 file.
+#[tokio::test]
+async fn test_stream_distributed_numeric_split_missing_entry_is_not_found() {
+    if !tool_available("7z") {
+        return;
+    }
+    let delim = kobload_api::archive::ARCHIVE_DELIMITER;
+    let first = fixtures_dir().join("test_kobload_dist_001.zip");
+    let sources = distributed_numeric_sources();
+
+    let path = format!("{}{delim}test_archive.7z.001{delim}missing.txt", first.display());
+    let err = kobload_api::archive::stream_from_distributed_numeric_split(
+        &path,
+        &sources,
+        Some("7z"),
+        None,
+        None,
+    )
+    .await
+    .err()
+    .expect("missing entry should not open");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
+/// A genuinely empty 7z entry is an empty file, not "missing".
+#[tokio::test]
+async fn test_stream_7z_empty_vs_missing_entry() {
+    if !tool_available("7z") {
+        return;
+    }
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(temp_dir.path().join("empty.txt"), b"").unwrap();
+    let data = payload(150 * 1024);
+    std::fs::write(temp_dir.path().join("data.bin"), &data).unwrap();
+
+    let archive = temp_dir.path().join("test.7z");
+    let status = std::process::Command::new("7z")
+        .args(["a", "-bso0", "-bsp0"])
+        .arg(&archive)
+        .arg("empty.txt")
+        .arg("data.bin")
+        .current_dir(temp_dir.path())
+        .status()
+        .unwrap();
+    assert!(status.success(), "creating the 7z fixture failed");
+    let archive = archive.to_str().unwrap();
+
+    let stream = kobload_api::archive::stream_file(archive, "data.bin", None, None)
+        .await
+        .unwrap();
+    assert_eq!(collect(stream).await, data);
+
+    let stream = kobload_api::archive::stream_file(archive, "empty.txt", None, None)
+        .await
+        .unwrap();
+    assert!(collect(stream).await.is_empty());
+
+    let err = kobload_api::archive::stream_file(archive, "missing.txt", None, None)
+        .await
+        .err()
+        .expect("missing entry should not open");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[tokio::test]
+async fn test_stream_tar_reports_content_length() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let tar_path = temp_dir.path().join("pack.tar");
+    let data = payload(70 * 1024);
+
+    let mut builder = tar::Builder::new(std::fs::File::create(&tar_path).unwrap());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(data.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, "book.epub", data.as_slice())
+        .unwrap();
+    builder.finish().unwrap();
+    drop(builder);
+
+    let stream =
+        kobload_api::archive::stream_file(tar_path.to_str().unwrap(), "book.epub", None, None)
+            .await
+            .unwrap();
+    assert_eq!(stream.content_length(), Some(data.len() as u64));
+    assert_eq!(collect(stream).await, data);
 }

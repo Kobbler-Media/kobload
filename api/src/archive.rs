@@ -13,7 +13,7 @@ use futures::future;
 use futures::{Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, SemaphorePermit, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::bytes::Bytes;
 use tokio_util::io::ReaderStream;
@@ -38,6 +38,9 @@ pub mod limits {
     pub const MAX_TEMP_EXTRACTION_BYTES: u64 = 500 * 1024 * 1024;
     /// Maximum files per archive listing
     pub const MAX_FILES_PER_ARCHIVE: usize = 10_000;
+    /// Free space temp extraction always leaves on the temp filesystem (5 GB),
+    /// so a huge nested release can't fill the host disk.
+    pub const MIN_FREE_TEMP_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 }
 
 /// A detected split RAR archive set.
@@ -801,33 +804,59 @@ const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 /// in-flight memory of one extraction to `STREAM_CHUNK_BYTES * STREAM_CHANNEL_DEPTH`.
 const STREAM_CHANNEL_DEPTH: usize = 4;
 
+/// Archive entries served at once. Each holds a blocking-pool thread or an
+/// unrar/7z process for as long as the client takes to read it, so a handful of
+/// slow clients must not be able to starve the blocking pool.
+const MAX_CONCURRENT_ARCHIVE_STREAMS: usize = 8;
+
+/// How long a request queues for a stream slot before it is told to retry.
+const ARCHIVE_STREAM_SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+static ARCHIVE_STREAM_SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_ARCHIVE_STREAMS);
+
+/// Temp extraction re-checks free space after this many bytes.
+const TEMP_SPACE_RECHECK_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Extracted bytes, produced incrementally rather than buffered whole. Entries
 /// can be multi-GB media files, and buffering them pinned that much RSS for the
 /// life of the process (glibc rarely returns large freed arenas).
 pub type ByteStream = Pin<Box<dyn Stream<Item = std::io::Result<Bytes>> + Send>>;
 
-/// A stream of an archive entry that also owns the temp dirs its outer layers
-/// were unpacked into, so they live until the last byte has been read.
+/// An opened entry and, when the archive records it, its uncompressed length.
+struct OpenedEntry {
+    stream: ByteStream,
+    len: Option<u64>,
+}
+
+/// A stream of an archive entry. Owns the temp dirs its outer layers were
+/// unpacked into and its concurrency slot, both released once it is dropped.
 pub struct EntryStream {
-    // Declared before `_temp_dirs` so the extractor (and any child process)
-    // is dropped before the files it reads are deleted.
+    // Field order is drop order: the extractor (and any child process) goes
+    // before the temp files it reads, and the slot is freed last.
     inner: ByteStream,
+    len: Option<u64>,
     _temp_dirs: Vec<tempfile::TempDir>,
+    _slot: SemaphorePermit<'static>,
 }
 
 impl EntryStream {
-    fn new(inner: ByteStream) -> Self {
+    fn new(
+        opened: OpenedEntry,
+        temp_dirs: Vec<tempfile::TempDir>,
+        slot: SemaphorePermit<'static>,
+    ) -> Self {
         Self {
-            inner,
-            _temp_dirs: Vec::new(),
+            inner: opened.stream,
+            len: opened.len,
+            _temp_dirs: temp_dirs,
+            _slot: slot,
         }
     }
 
-    fn holding(inner: ByteStream, temp_dirs: Vec<tempfile::TempDir>) -> Self {
-        Self {
-            inner,
-            _temp_dirs: temp_dirs,
-        }
+    /// Exact byte length, when known up front (zip, tar, plain files). unrar,
+    /// 7z and compressed single files don't report it before extracting.
+    pub fn content_length(&self) -> Option<u64> {
+        self.len
     }
 }
 
@@ -839,12 +868,61 @@ impl Stream for EntryStream {
     }
 }
 
-/// Write a stream to `dest`, returning the number of bytes written.
+/// Wait up to `wait` for a stream slot. Times out with `ErrorKind::ResourceBusy`.
+async fn acquire_stream_slot_within(
+    wait: std::time::Duration,
+) -> std::io::Result<SemaphorePermit<'static>> {
+    match tokio::time::timeout(wait, ARCHIVE_STREAM_SLOTS.acquire()).await {
+        Ok(Ok(permit)) => Ok(permit),
+        Ok(Err(_)) => Err(std::io::Error::other("archive stream slots closed")),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::ResourceBusy,
+            "too many concurrent archive extractions",
+        )),
+    }
+}
+
+async fn acquire_stream_slot() -> std::io::Result<SemaphorePermit<'static>> {
+    acquire_stream_slot_within(ARCHIVE_STREAM_SLOT_WAIT).await
+}
+
+/// Error unless the filesystem has room for another `TEMP_SPACE_RECHECK_BYTES`
+/// while still keeping `limits::MIN_FREE_TEMP_BYTES` free.
+fn ensure_temp_headroom(available_bytes: u64) -> std::io::Result<()> {
+    if available_bytes < limits::MIN_FREE_TEMP_BYTES.saturating_add(TEMP_SPACE_RECHECK_BYTES) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            format!(
+                "temp extraction stopped: {available_bytes} bytes free, keeping at least {}",
+                limits::MIN_FREE_TEMP_BYTES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn check_temp_space(dir: &Path) -> std::io::Result<()> {
+    let stat = rustix::fs::statvfs(dir)?;
+    ensure_temp_headroom(stat.f_bavail.saturating_mul(stat.f_frsize))
+}
+
+/// Write a stream to `dest`, returning the number of bytes written. Stops with
+/// `ErrorKind::StorageFull` rather than fill the disk: intermediate layers of a
+/// nested archive can be as large as the whole release.
 async fn write_stream_to_path(mut stream: ByteStream, dest: &Path) -> std::io::Result<u64> {
+    let dir = dest.parent().unwrap_or(Path::new("."));
+    check_temp_space(dir)?;
+
     let mut file = tokio::fs::File::create(dest).await?;
     let mut written = 0u64;
+    let mut since_check = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
+        since_check += chunk.len() as u64;
+        if since_check >= TEMP_SPACE_RECHECK_BYTES {
+            check_temp_space(dir)?;
+            since_check = 0;
+        }
         file.write_all(&chunk).await?;
         written += chunk.len() as u64;
     }
@@ -857,19 +935,17 @@ pub async fn concat_files_to_path(
     sources: &[std::path::PathBuf],
     dest: &Path,
 ) -> std::io::Result<u64> {
-    let mut out = tokio::fs::File::create(dest).await?;
-    let mut written = 0u64;
+    let mut parts = Vec::with_capacity(sources.len());
     for source in sources {
-        let mut input = tokio::fs::File::open(source).await?;
-        written += tokio::io::copy(&mut input, &mut out).await?;
+        let file = tokio::fs::File::open(source).await?;
+        parts.push(ReaderStream::with_capacity(file, STREAM_CHUNK_BYTES));
     }
-    out.flush().await?;
-    Ok(written)
+    write_stream_to_path(Box::pin(futures::stream::iter(parts).flatten()), dest).await
 }
 
 /// Hands a blocking extractor's reader to the async side in bounded chunks.
 struct ChunkSink {
-    opened: Option<oneshot::Sender<std::io::Result<()>>>,
+    opened: Option<oneshot::Sender<std::io::Result<Option<u64>>>>,
     tx: mpsc::Sender<std::io::Result<Bytes>>,
 }
 
@@ -877,7 +953,7 @@ impl ChunkSink {
     /// Pump `reader` into the channel. The first chunk is read before the
     /// open is acknowledged, so a corrupt entry or bad compressed header still
     /// surfaces as an open error (a 404) rather than a truncated 200.
-    fn pump(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
+    fn pump(&mut self, reader: &mut dyn Read, len: Option<u64>) -> std::io::Result<()> {
         let mut buf = vec![0u8; STREAM_CHUNK_BYTES];
         loop {
             let n = match reader.read(&mut buf) {
@@ -886,7 +962,7 @@ impl ChunkSink {
                 Err(e) => return Err(e),
             };
             if let Some(opened) = self.opened.take() {
-                let _ = opened.send(Ok(()));
+                let _ = opened.send(Ok(len));
             }
             if n == 0 {
                 return Ok(());
@@ -906,7 +982,7 @@ impl ChunkSink {
 /// Run a sync extractor on the blocking pool and expose its output as a stream.
 /// `extract` opens the entry and calls `sink.pump`; any error before the first
 /// chunk is returned from here, any error after it ends the stream with `Err`.
-async fn stream_blocking<F>(extract: F) -> std::io::Result<ByteStream>
+async fn stream_blocking<F>(extract: F) -> std::io::Result<OpenedEntry>
 where
     F: FnOnce(&mut ChunkSink) -> std::io::Result<()> + Send + 'static,
 {
@@ -921,7 +997,7 @@ where
         let result = extract(&mut sink);
         match sink.opened.take() {
             Some(opened) => {
-                let _ = opened.send(result);
+                let _ = opened.send(result.map(|()| None));
             }
             None => {
                 if let Err(e) = result {
@@ -931,18 +1007,34 @@ where
         }
     });
 
-    opened_rx
+    let len = opened_rx
         .await
         .map_err(|_| std::io::Error::other("extraction task ended unexpectedly"))??;
-    Ok(Box::pin(ReceiverStream::new(rx)))
+    Ok(OpenedEntry {
+        stream: Box::pin(ReceiverStream::new(rx)),
+        len,
+    })
 }
 
 /// Stream a CLI extractor's stdout. Waits for the first chunk (or exit) before
 /// returning, so a missing entry or unreadable archive is still an error here;
 /// a non-zero exit after data has flowed ends the stream with `Err`.
-async fn stream_command(mut cmd: Command, tool: &'static str) -> std::io::Result<ByteStream> {
+///
+/// `missing_marker` is for tools that exit 0 with no output when the entry
+/// doesn't exist (7z): stderr is captured, and the marker appearing in it turns
+/// an empty result into `NotFound` instead of an empty file.
+async fn stream_command(
+    mut cmd: Command,
+    tool: &'static str,
+    missing_marker: Option<&'static str>,
+) -> std::io::Result<OpenedEntry> {
+    let stderr = if missing_marker.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     cmd.stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         // Client disconnects drop the stream; don't leave unrar/7z running.
         .kill_on_drop(true);
     let mut child = cmd.spawn()?;
@@ -950,21 +1042,41 @@ async fn stream_command(mut cmd: Command, tool: &'static str) -> std::io::Result
         .stdout
         .take()
         .ok_or_else(|| std::io::Error::other(format!("{tool}: stdout not captured")))?;
+    let mut stderr = child.stderr.take();
 
     let mut first = vec![0u8; STREAM_CHUNK_BYTES];
     let n = stdout.read(&mut first).await?;
     if n == 0 {
-        let status = child.wait().await?;
-        if !status.success() {
+        let mut messages = Vec::new();
+        let (status, _) = tokio::join!(child.wait(), async {
+            if let Some(stderr) = stderr.as_mut() {
+                let _ = stderr.read_to_end(&mut messages).await;
+            }
+        });
+        if !status?.success() {
             return Err(std::io::Error::other(format!("{tool} extraction failed")));
         }
-        return Ok(Box::pin(futures::stream::empty()));
+        if let Some(marker) = missing_marker
+            && String::from_utf8_lossy(&messages).contains(marker)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{tool}: entry not found in archive"),
+            ));
+        }
+        return Ok(OpenedEntry {
+            stream: Box::pin(futures::stream::empty()),
+            len: Some(0),
+        });
     }
     first.truncate(n);
 
     let head = futures::stream::once(future::ready(Ok(Bytes::from(first))));
     let body = ReaderStream::with_capacity(stdout, STREAM_CHUNK_BYTES);
     let exit = futures::stream::once(async move {
+        // Held (unread) until exit: closing it early would hand 7z an EPIPE
+        // on its final status message. Its output is a few hundred bytes.
+        let _stderr = stderr;
         match child.wait().await {
             Ok(status) if status.success() => None,
             Ok(_) => Some(Err(std::io::Error::other(format!(
@@ -975,7 +1087,10 @@ async fn stream_command(mut cmd: Command, tool: &'static str) -> std::io::Result
     })
     .filter_map(future::ready);
 
-    Ok(Box::pin(head.chain(body).chain(exit)))
+    Ok(OpenedEntry {
+        stream: Box::pin(head.chain(body).chain(exit)),
+        len: None,
+    })
 }
 
 /// Stream a single file out of an archive.
@@ -985,9 +1100,9 @@ pub async fn stream_file(
     unrar_path: Option<&str>,
     sevenz_path: Option<&str>,
 ) -> std::io::Result<EntryStream> {
-    open_entry(archive_path, inner_path, unrar_path, sevenz_path)
-        .await
-        .map(EntryStream::new)
+    let slot = acquire_stream_slot().await?;
+    let opened = open_entry(archive_path, inner_path, unrar_path, sevenz_path).await?;
+    Ok(EntryStream::new(opened, Vec::new(), slot))
 }
 
 /// Extract a single file from an archive straight to `dest` on disk.
@@ -998,8 +1113,8 @@ pub async fn extract_file_to_path(
     sevenz_path: Option<&str>,
     dest: &Path,
 ) -> std::io::Result<u64> {
-    let stream = open_entry(archive_path, inner_path, unrar_path, sevenz_path).await?;
-    write_stream_to_path(stream, dest).await
+    let opened = open_entry(archive_path, inner_path, unrar_path, sevenz_path).await?;
+    write_stream_to_path(opened.stream, dest).await
 }
 
 async fn open_entry(
@@ -1007,7 +1122,7 @@ async fn open_entry(
     inner_path: &str,
     unrar_path: Option<&str>,
     sevenz_path: Option<&str>,
-) -> std::io::Result<ByteStream> {
+) -> std::io::Result<OpenedEntry> {
     let ext = Path::new(archive_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -1030,7 +1145,7 @@ async fn open_entry(
     }
 }
 
-async fn stream_from_zip(archive_path: &str, inner_path: &str) -> std::io::Result<ByteStream> {
+async fn stream_from_zip(archive_path: &str, inner_path: &str) -> std::io::Result<OpenedEntry> {
     let archive_path = archive_path.to_string();
     let inner_path = inner_path.to_string();
 
@@ -1043,7 +1158,8 @@ async fn stream_from_zip(archive_path: &str, inner_path: &str) -> std::io::Resul
             .by_name(&inner_path)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
 
-        sink.pump(&mut zip_file)
+        let len = zip_file.size();
+        sink.pump(&mut zip_file, Some(len))
     })
     .await
 }
@@ -1052,22 +1168,24 @@ async fn stream_from_rar(
     archive_path: &str,
     inner_path: &str,
     unrar_path: Option<&str>,
-) -> std::io::Result<ByteStream> {
-    // unrar p -inul: print the entry to stdout, no messages
+) -> std::io::Result<OpenedEntry> {
+    // unrar p -inul: print the entry to stdout, no messages. Exits non-zero
+    // when the entry is missing. `--` because release paths can start with `-`.
     let mut cmd = Command::new(unrar_path.unwrap_or("unrar"));
-    cmd.args(["p", "-inul", archive_path, inner_path]);
-    stream_command(cmd, "unrar").await
+    cmd.args(["p", "-inul", "--", archive_path, inner_path]);
+    stream_command(cmd, "unrar", None).await
 }
 
 async fn stream_from_7z(
     archive_path: &str,
     inner_path: &str,
     sevenz_path: Option<&str>,
-) -> std::io::Result<ByteStream> {
-    // 7z e -so: extract the entry to stdout
+) -> std::io::Result<OpenedEntry> {
+    // 7z e -so: extract the entry to stdout. -bso2 routes its messages to
+    // stderr, which is the only place a missing entry shows: 7z still exits 0.
     let mut cmd = Command::new(sevenz_path.unwrap_or("7z"));
-    cmd.args(["e", "-so", archive_path, inner_path]);
-    stream_command(cmd, "7z").await
+    cmd.args(["e", "-so", "-bso2", "-bsp0", "--", archive_path, inner_path]);
+    stream_command(cmd, "7z", Some("No files to process")).await
 }
 
 /// Extract multiple files from an archive to a temp directory.
@@ -1411,6 +1529,8 @@ pub async fn stream_from_distributed_rar(
     // parts[0] = "dir/a.zip", parts[1] = "file.rar", parts[2..] = path inside RAR
     let inner_file_path = parts[2..].join(ARCHIVE_DELIMITER);
 
+    let slot = acquire_stream_slot().await?;
+
     // Extract all RAR volumes from their respective archives to temp
     let source_refs: Vec<&str> = distributed_sources.iter().map(|s| s.as_str()).collect();
     let (temp_dir, extracted) =
@@ -1429,8 +1549,8 @@ pub async fn stream_from_distributed_rar(
         ));
     };
 
-    let stream = open_entry(&main_rar_path, &inner_file_path, unrar_path, sevenz_path).await?;
-    Ok(EntryStream::holding(stream, vec![temp_dir]))
+    let opened = open_entry(&main_rar_path, &inner_file_path, unrar_path, sevenz_path).await?;
+    Ok(EntryStream::new(opened, vec![temp_dir], slot))
 }
 
 /// Stream a file out of a distributed numeric split archive (e.g., .7z.001 spread across archives).
@@ -1462,6 +1582,8 @@ pub async fn stream_from_distributed_numeric_split(
     // parts[0] = "dir/a.zip", parts[1] = "file.7z.001", parts[2..] = path inside archive
     let inner_file_path = parts[2..].join(ARCHIVE_DELIMITER);
 
+    let slot = acquire_stream_slot().await?;
+
     // Extract all split volumes from their respective archives to temp
     let source_refs: Vec<&str> = distributed_sources.iter().map(|s| s.as_str()).collect();
     let (temp_dir, extracted) =
@@ -1490,14 +1612,14 @@ pub async fn stream_from_distributed_numeric_split(
     let reassembled_path = temp_dir.path().join(format!("reassembled.{archive_ext}"));
     concat_files_to_path(&paths, &reassembled_path).await?;
 
-    let stream = open_entry(
+    let opened = open_entry(
         &reassembled_path.to_string_lossy(),
         &inner_file_path,
         unrar_path,
         sevenz_path,
     )
     .await?;
-    Ok(EntryStream::holding(stream, vec![temp_dir]))
+    Ok(EntryStream::new(opened, vec![temp_dir], slot))
 }
 
 /// Stream a file through multiple archive layers.
@@ -1514,10 +1636,17 @@ pub async fn stream_nested_file(
 ) -> std::io::Result<EntryStream> {
     let parts: Vec<&str> = path.split(ARCHIVE_DELIMITER).collect();
 
+    let slot = acquire_stream_slot().await?;
+
     if parts.len() < 2 {
         // Not an archive path, read directly
         let file = tokio::fs::File::open(path).await?;
-        return Ok(EntryStream::new(Box::pin(ReaderStream::new(file))));
+        let len = file.metadata().await?.len();
+        let opened = OpenedEntry {
+            stream: Box::pin(ReaderStream::with_capacity(file, STREAM_CHUNK_BYTES)),
+            len: Some(len),
+        };
+        return Ok(EntryStream::new(opened, Vec::new(), slot));
     }
 
     let last = parts.len() - 1;
@@ -1571,8 +1700,8 @@ pub async fn stream_nested_file(
         temp_dirs.push(temp_dir);
     }
 
-    let stream = open_entry(&current_archive, parts[last], unrar_path, sevenz_path).await?;
-    Ok(EntryStream::holding(stream, temp_dirs))
+    let opened = open_entry(&current_archive, parts[last], unrar_path, sevenz_path).await?;
+    Ok(EntryStream::new(opened, temp_dirs, slot))
 }
 
 /// Check if a filename looks like the main file of a split RAR set
@@ -1673,7 +1802,7 @@ async fn list_tar_contents(archive_path: &str, archive_relative_path: &str) -> V
 }
 
 /// Stream a file out of a tar archive (optionally compressed with gz/bz2/xz).
-async fn stream_from_tar(archive_path: &str, inner_path: &str) -> std::io::Result<ByteStream> {
+async fn stream_from_tar(archive_path: &str, inner_path: &str) -> std::io::Result<OpenedEntry> {
     let archive_path = archive_path.to_string();
     let inner_path = inner_path.to_string();
 
@@ -1696,7 +1825,8 @@ async fn stream_from_tar(archive_path: &str, inner_path: &str) -> std::io::Resul
             let mut entry = entry?;
             let path = entry.path()?.to_string_lossy().to_string();
             if path == inner_path {
-                return sink.pump(&mut entry);
+                let len = entry.size();
+                return sink.pump(&mut entry, Some(len));
             }
         }
 
@@ -1750,7 +1880,7 @@ fn list_compressed_single(
 }
 
 /// Stream the decompressed contents of a single-file archive (file.gz, file.bz2, file.xz).
-async fn stream_decompress_single(archive_path: &str, ext: &str) -> std::io::Result<ByteStream> {
+async fn stream_decompress_single(archive_path: &str, ext: &str) -> std::io::Result<OpenedEntry> {
     let archive_path = archive_path.to_string();
     let ext = ext.to_string();
 
@@ -1758,9 +1888,9 @@ async fn stream_decompress_single(archive_path: &str, ext: &str) -> std::io::Res
         let file = std::fs::File::open(&archive_path)?;
 
         match ext.as_str() {
-            "gz" => sink.pump(&mut flate2::read::GzDecoder::new(file)),
-            "bz2" => sink.pump(&mut bzip2::read::BzDecoder::new(file)),
-            "xz" => sink.pump(&mut liblzma::read::XzDecoder::new(file)),
+            "gz" => sink.pump(&mut flate2::read::GzDecoder::new(file), None),
+            "bz2" => sink.pump(&mut bzip2::read::BzDecoder::new(file), None),
+            "xz" => sink.pump(&mut liblzma::read::XzDecoder::new(file), None),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("decompression not supported for .{ext}"),
@@ -1773,6 +1903,52 @@ async fn stream_decompress_single(archive_path: &str, ext: &str) -> std::io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_temp_headroom_refuses_near_reserve() {
+        let floor = limits::MIN_FREE_TEMP_BYTES + TEMP_SPACE_RECHECK_BYTES;
+        assert!(ensure_temp_headroom(floor).is_ok());
+        assert!(ensure_temp_headroom(u64::MAX).is_ok());
+
+        let err = ensure_temp_headroom(floor - 1).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull);
+        assert_eq!(
+            ensure_temp_headroom(0).unwrap_err().kind(),
+            std::io::ErrorKind::StorageFull
+        );
+    }
+
+    #[test]
+    fn test_check_temp_space_reads_real_filesystem() {
+        // The test machine's temp dir should have far more than the reserve
+        // free; this mostly proves the statvfs call itself works.
+        let dir = std::env::temp_dir();
+        let stat = rustix::fs::statvfs(&dir).unwrap();
+        let available = stat.f_bavail.saturating_mul(stat.f_frsize);
+        assert_eq!(
+            check_temp_space(&dir).is_ok(),
+            ensure_temp_headroom(available).is_ok()
+        );
+    }
+
+    /// Only lib unit test that touches the stream slots, so holding all of
+    /// them here can't starve another test.
+    #[tokio::test]
+    async fn test_stream_slots_time_out_as_resource_busy() {
+        let all = ARCHIVE_STREAM_SLOTS
+            .acquire_many(MAX_CONCURRENT_ARCHIVE_STREAMS as u32)
+            .await
+            .unwrap();
+
+        let err = acquire_stream_slot_within(std::time::Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ResourceBusy);
+
+        drop(all);
+        let slot = acquire_stream_slot_within(std::time::Duration::from_millis(50)).await;
+        assert!(slot.is_ok(), "slot should be free once the holders drop");
+    }
 
     #[test]
     fn test_is_archive_extension() {

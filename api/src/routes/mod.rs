@@ -8,6 +8,7 @@ pub mod decision_logs;
 pub mod definitions;
 pub mod download_clients;
 pub mod downloads;
+pub mod file_serving;
 pub mod filesystem;
 pub mod indexer_category_mappings;
 pub mod indexer_rss_cache;

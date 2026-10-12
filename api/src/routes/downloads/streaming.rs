@@ -1,9 +1,10 @@
 use axum::{
     Json,
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    body::Body,
+    extract::{Path, Query, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{
-        IntoResponse,
+        IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
 };
@@ -11,13 +12,13 @@ use futures::TryStreamExt;
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
-use tokio_util::io::ReaderStream;
 use tracing::warn;
 use uuid::Uuid;
 
 use crate::archive;
 use crate::auth::require_auth;
 use crate::auth::require_auth_with_token;
+use crate::routes::file_serving::serve_plain_file;
 use crate::repositories::downloads as downloads_repo;
 use crate::state::AppState;
 use crate::types::DownloadStreamEvent;
@@ -46,6 +47,7 @@ pub async fn download_file(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
+    request: Request,
 ) -> impl IntoResponse {
     if require_auth(&state, &headers).await.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -61,20 +63,17 @@ pub async fn download_file(
         }
     };
 
-    let file = match tokio::fs::File::open(&file_path).await {
-        Ok(file) => file,
-        Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
-    };
-
-    let stream = ReaderStream::new(file);
-    let body = axum::body::Body::from_stream(stream);
-    (StatusCode::OK, body).into_response()
+    match serve_plain_file(&file_path, request).await {
+        Some(response) => response,
+        None => (StatusCode::NOT_FOUND, "file not found").into_response(),
+    }
 }
 
 pub async fn download_file_by_id(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, file_id)): Path<(Uuid, Uuid)>,
+    request: Request,
 ) -> impl IntoResponse {
     if require_auth(&state, &headers).await.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -95,10 +94,8 @@ pub async fn download_file_by_id(
     // Try the file directly first — if it exists on disk, serve it regardless of
     // what the path string looks like. This is ground truth: filenames with `!`
     // (e.g., "Teen Titans Go!") won't accidentally trigger archive extraction.
-    if let Ok(file) = tokio::fs::File::open(absolute_path).await {
-        let stream = ReaderStream::new(file);
-        let body = axum::body::Body::from_stream(stream);
-        return (StatusCode::OK, body).into_response();
+    if let Some(response) = serve_plain_file(absolute_path, request).await {
+        return response;
     }
 
     // File doesn't exist directly — try archive extraction if the path looks
@@ -116,13 +113,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(stream) => {
-                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
-                }
-                Err(err) => {
-                    warn!(error = %err, path = %absolute_path, "Distributed RAR extraction failed");
-                    return (StatusCode::NOT_FOUND, "file not found in archive").into_response();
-                }
+                Ok(stream) => return archive_response(stream, absolute_path),
+                Err(err) => return archive_error_response(&err, absolute_path, "Distributed RAR extraction failed"),
             }
         }
 
@@ -139,13 +131,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(stream) => {
-                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
-                }
-                Err(err) => {
-                    warn!(error = %err, path = %absolute_path, "Distributed numeric split extraction failed");
-                    return (StatusCode::NOT_FOUND, "file not found in archive").into_response();
-                }
+                Ok(stream) => return archive_response(stream, absolute_path),
+                Err(err) => return archive_error_response(&err, absolute_path, "Distributed numeric split extraction failed"),
             }
         }
 
@@ -163,13 +150,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(stream) => {
-                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
-                }
-                Err(err) => {
-                    warn!(error = %err, path = %absolute_path, "Nested archive extraction failed");
-                    return (StatusCode::NOT_FOUND, "file not found in archive").into_response();
-                }
+                Ok(stream) => return archive_response(stream, absolute_path),
+                Err(err) => return archive_error_response(&err, absolute_path, "Nested archive extraction failed"),
             }
         }
 
@@ -183,12 +165,9 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(stream) => {
-                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
-                }
+                Ok(stream) => return archive_response(stream, absolute_path),
                 Err(err) => {
-                    warn!(error = %err, archive = %archive_part, inner = %inner_path, "Archive extraction failed");
-                    return (StatusCode::NOT_FOUND, "file not found in archive").into_response();
+                    return archive_error_response(&err, absolute_path, "Archive extraction failed");
                 }
             }
         }
@@ -199,11 +178,40 @@ pub async fn download_file_by_id(
 
 /// Archive entries are streamed after the 200 is sent, so a failure part-way
 /// can only abort the connection. Log it, or a truncated transfer is silent.
-fn archive_body(stream: archive::EntryStream, path: &str) -> axum::body::Body {
+/// Entries can't be seeked, so any Range header is ignored and the whole entry
+/// sent (which HTTP permits); `Accept-Ranges: none` tells clients not to try.
+fn archive_response(stream: archive::EntryStream, path: &str) -> Response {
+    let content_length = stream.content_length();
     let path = path.to_string();
-    axum::body::Body::from_stream(stream.inspect_err(move |err| {
+    let body = Body::from_stream(stream.inspect_err(move |err| {
         warn!(error = %err, path = %path, "Archive extraction failed mid-stream");
-    }))
+    }));
+
+    let mut response = (StatusCode::OK, body).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("none"));
+    if let Some(len) = content_length {
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    }
+    response
+}
+
+fn archive_error_response(err: &std::io::Error, path: &str, context: &str) -> Response {
+    warn!(error = %err, path = %path, "{context}");
+    match err.kind() {
+        std::io::ErrorKind::ResourceBusy => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "30")],
+            "too many archive extractions in progress",
+        )
+            .into_response(),
+        std::io::ErrorKind::StorageFull => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "not enough temp space to extract file",
+        )
+            .into_response(),
+        _ => (StatusCode::NOT_FOUND, "file not found in archive").into_response(),
+    }
 }
 
 pub async fn stream_downloads(

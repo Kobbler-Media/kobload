@@ -2,16 +2,16 @@
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde::Deserialize;
-use tokio_util::io::ReaderStream;
 use tracing::warn;
 use uuid::Uuid;
 
 use crate::auth::require_auth;
+use crate::routes::file_serving::serve_plain_file;
 use crate::repositories::watch_directories as wd_repo;
 use crate::state::AppState;
 
@@ -62,6 +62,7 @@ pub async fn serve_file_content(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((dir_id, file_id)): Path<(Uuid, Uuid)>,
+    request: Request,
 ) -> impl IntoResponse {
     if require_auth(&state, &headers).await.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -82,13 +83,8 @@ pub async fn serve_file_content(
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    // Open and stream the file
-    let disk_file = match tokio::fs::File::open(&file.file_path).await {
-        Ok(f) => f,
-        Err(_) => return (StatusCode::NOT_FOUND, "file not found on disk").into_response(),
-    };
-
-    let stream = ReaderStream::new(disk_file);
-    let body = axum::body::Body::from_stream(stream);
-    (StatusCode::OK, body).into_response()
+    match serve_plain_file(&file.file_path, request).await {
+        Some(response) => response,
+        None => (StatusCode::NOT_FOUND, "file not found on disk").into_response(),
+    }
 }
