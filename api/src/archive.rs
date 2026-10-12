@@ -5,9 +5,18 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
-use tokio::process::Command;
+use std::task::{Context, Poll};
 
+use futures::future;
+use futures::{Stream, StreamExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::bytes::Bytes;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::download_clients::ScannedFile;
@@ -785,13 +794,220 @@ async fn list_7z_contents(
     files
 }
 
-/// Extract a single file from an archive, returning its contents
-pub async fn extract_file(
+/// Chunk size for pumping extracted data. Also the most a single read holds in memory.
+const STREAM_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Chunks queued between a blocking extractor and the consumer. Bounds the
+/// in-flight memory of one extraction to `STREAM_CHUNK_BYTES * STREAM_CHANNEL_DEPTH`.
+const STREAM_CHANNEL_DEPTH: usize = 4;
+
+/// Extracted bytes, produced incrementally rather than buffered whole. Entries
+/// can be multi-GB media files, and buffering them pinned that much RSS for the
+/// life of the process (glibc rarely returns large freed arenas).
+pub type ByteStream = Pin<Box<dyn Stream<Item = std::io::Result<Bytes>> + Send>>;
+
+/// A stream of an archive entry that also owns the temp dirs its outer layers
+/// were unpacked into, so they live until the last byte has been read.
+pub struct EntryStream {
+    // Declared before `_temp_dirs` so the extractor (and any child process)
+    // is dropped before the files it reads are deleted.
+    inner: ByteStream,
+    _temp_dirs: Vec<tempfile::TempDir>,
+}
+
+impl EntryStream {
+    fn new(inner: ByteStream) -> Self {
+        Self {
+            inner,
+            _temp_dirs: Vec::new(),
+        }
+    }
+
+    fn holding(inner: ByteStream, temp_dirs: Vec<tempfile::TempDir>) -> Self {
+        Self {
+            inner,
+            _temp_dirs: temp_dirs,
+        }
+    }
+}
+
+impl Stream for EntryStream {
+    type Item = std::io::Result<Bytes>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx)
+    }
+}
+
+/// Write a stream to `dest`, returning the number of bytes written.
+async fn write_stream_to_path(mut stream: ByteStream, dest: &Path) -> std::io::Result<u64> {
+    let mut file = tokio::fs::File::create(dest).await?;
+    let mut written = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk).await?;
+        written += chunk.len() as u64;
+    }
+    file.flush().await?;
+    Ok(written)
+}
+
+/// Concatenate `sources` in order into `dest` without loading any of them whole.
+pub async fn concat_files_to_path(
+    sources: &[std::path::PathBuf],
+    dest: &Path,
+) -> std::io::Result<u64> {
+    let mut out = tokio::fs::File::create(dest).await?;
+    let mut written = 0u64;
+    for source in sources {
+        let mut input = tokio::fs::File::open(source).await?;
+        written += tokio::io::copy(&mut input, &mut out).await?;
+    }
+    out.flush().await?;
+    Ok(written)
+}
+
+/// Hands a blocking extractor's reader to the async side in bounded chunks.
+struct ChunkSink {
+    opened: Option<oneshot::Sender<std::io::Result<()>>>,
+    tx: mpsc::Sender<std::io::Result<Bytes>>,
+}
+
+impl ChunkSink {
+    /// Pump `reader` into the channel. The first chunk is read before the
+    /// open is acknowledged, so a corrupt entry or bad compressed header still
+    /// surfaces as an open error (a 404) rather than a truncated 200.
+    fn pump(&mut self, reader: &mut dyn Read) -> std::io::Result<()> {
+        let mut buf = vec![0u8; STREAM_CHUNK_BYTES];
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(n) => n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            if let Some(opened) = self.opened.take() {
+                let _ = opened.send(Ok(()));
+            }
+            if n == 0 {
+                return Ok(());
+            }
+            if self
+                .tx
+                .blocking_send(Ok(Bytes::copy_from_slice(&buf[..n])))
+                .is_err()
+            {
+                // Consumer went away (client disconnected); stop extracting.
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Run a sync extractor on the blocking pool and expose its output as a stream.
+/// `extract` opens the entry and calls `sink.pump`; any error before the first
+/// chunk is returned from here, any error after it ends the stream with `Err`.
+async fn stream_blocking<F>(extract: F) -> std::io::Result<ByteStream>
+where
+    F: FnOnce(&mut ChunkSink) -> std::io::Result<()> + Send + 'static,
+{
+    let (opened_tx, opened_rx) = oneshot::channel();
+    let (tx, rx) = mpsc::channel(STREAM_CHANNEL_DEPTH);
+
+    tokio::task::spawn_blocking(move || {
+        let mut sink = ChunkSink {
+            opened: Some(opened_tx),
+            tx,
+        };
+        let result = extract(&mut sink);
+        match sink.opened.take() {
+            Some(opened) => {
+                let _ = opened.send(result);
+            }
+            None => {
+                if let Err(e) = result {
+                    let _ = sink.tx.blocking_send(Err(e));
+                }
+            }
+        }
+    });
+
+    opened_rx
+        .await
+        .map_err(|_| std::io::Error::other("extraction task ended unexpectedly"))??;
+    Ok(Box::pin(ReceiverStream::new(rx)))
+}
+
+/// Stream a CLI extractor's stdout. Waits for the first chunk (or exit) before
+/// returning, so a missing entry or unreadable archive is still an error here;
+/// a non-zero exit after data has flowed ends the stream with `Err`.
+async fn stream_command(mut cmd: Command, tool: &'static str) -> std::io::Result<ByteStream> {
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        // Client disconnects drop the stream; don't leave unrar/7z running.
+        .kill_on_drop(true);
+    let mut child = cmd.spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other(format!("{tool}: stdout not captured")))?;
+
+    let mut first = vec![0u8; STREAM_CHUNK_BYTES];
+    let n = stdout.read(&mut first).await?;
+    if n == 0 {
+        let status = child.wait().await?;
+        if !status.success() {
+            return Err(std::io::Error::other(format!("{tool} extraction failed")));
+        }
+        return Ok(Box::pin(futures::stream::empty()));
+    }
+    first.truncate(n);
+
+    let head = futures::stream::once(future::ready(Ok(Bytes::from(first))));
+    let body = ReaderStream::with_capacity(stdout, STREAM_CHUNK_BYTES);
+    let exit = futures::stream::once(async move {
+        match child.wait().await {
+            Ok(status) if status.success() => None,
+            Ok(_) => Some(Err(std::io::Error::other(format!(
+                "{tool} extraction failed"
+            )))),
+            Err(e) => Some(Err(e)),
+        }
+    })
+    .filter_map(future::ready);
+
+    Ok(Box::pin(head.chain(body).chain(exit)))
+}
+
+/// Stream a single file out of an archive.
+pub async fn stream_file(
     archive_path: &str,
     inner_path: &str,
     unrar_path: Option<&str>,
     sevenz_path: Option<&str>,
-) -> std::io::Result<Vec<u8>> {
+) -> std::io::Result<EntryStream> {
+    open_entry(archive_path, inner_path, unrar_path, sevenz_path)
+        .await
+        .map(EntryStream::new)
+}
+
+/// Extract a single file from an archive straight to `dest` on disk.
+pub async fn extract_file_to_path(
+    archive_path: &str,
+    inner_path: &str,
+    unrar_path: Option<&str>,
+    sevenz_path: Option<&str>,
+    dest: &Path,
+) -> std::io::Result<u64> {
+    let stream = open_entry(archive_path, inner_path, unrar_path, sevenz_path).await?;
+    write_stream_to_path(stream, dest).await
+}
+
+async fn open_entry(
+    archive_path: &str,
+    inner_path: &str,
+    unrar_path: Option<&str>,
+    sevenz_path: Option<&str>,
+) -> std::io::Result<ByteStream> {
     let ext = Path::new(archive_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -799,14 +1015,14 @@ pub async fn extract_file(
         .unwrap_or_default();
 
     if is_tar_compressed(archive_path) || ext == "tar" {
-        return extract_from_tar(archive_path, inner_path).await;
+        return stream_from_tar(archive_path, inner_path).await;
     }
 
     match ext.as_str() {
-        "zip" => extract_from_zip(archive_path, inner_path).await,
-        "rar" => extract_from_rar(archive_path, inner_path, unrar_path).await,
-        "7z" => extract_from_7z(archive_path, inner_path, sevenz_path).await,
-        "gz" | "bz2" | "xz" => decompress_single(archive_path, &ext).await,
+        "zip" => stream_from_zip(archive_path, inner_path).await,
+        "rar" => stream_from_rar(archive_path, inner_path, unrar_path).await,
+        "7z" => stream_from_7z(archive_path, inner_path, sevenz_path).await,
+        "gz" | "bz2" | "xz" => stream_decompress_single(archive_path, &ext).await,
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "unsupported archive format",
@@ -814,12 +1030,11 @@ pub async fn extract_file(
     }
 }
 
-/// Extract a file from a ZIP archive
-async fn extract_from_zip(archive_path: &str, inner_path: &str) -> std::io::Result<Vec<u8>> {
+async fn stream_from_zip(archive_path: &str, inner_path: &str) -> std::io::Result<ByteStream> {
     let archive_path = archive_path.to_string();
     let inner_path = inner_path.to_string();
 
-    tokio::task::spawn_blocking(move || {
+    stream_blocking(move |sink| {
         let file = std::fs::File::open(&archive_path)?;
         let mut archive = zip::ZipArchive::new(file)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -828,62 +1043,31 @@ async fn extract_from_zip(archive_path: &str, inner_path: &str) -> std::io::Resu
             .by_name(&inner_path)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e))?;
 
-        let mut buffer = Vec::new();
-        zip_file.read_to_end(&mut buffer)?;
-        Ok(buffer)
+        sink.pump(&mut zip_file)
     })
     .await
-    .map_err(std::io::Error::other)?
 }
 
-/// Extract a file from a RAR archive using unrar CLI
-async fn extract_from_rar(
+async fn stream_from_rar(
     archive_path: &str,
     inner_path: &str,
     unrar_path: Option<&str>,
-) -> std::io::Result<Vec<u8>> {
-    let unrar = unrar_path.unwrap_or("unrar");
-
-    // Run: unrar p -inul archive.rar inner_path
-    // -p = print to stdout
-    // -inul = disable all messages
-    let output = Command::new(unrar)
-        .args(["p", "-inul", archive_path, inner_path])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        return Err(std::io::Error::other("unrar extraction failed"));
-    }
-
-    Ok(output.stdout)
+) -> std::io::Result<ByteStream> {
+    // unrar p -inul: print the entry to stdout, no messages
+    let mut cmd = Command::new(unrar_path.unwrap_or("unrar"));
+    cmd.args(["p", "-inul", archive_path, inner_path]);
+    stream_command(cmd, "unrar").await
 }
 
-/// Extract a file from a 7z archive using 7z CLI
-async fn extract_from_7z(
+async fn stream_from_7z(
     archive_path: &str,
     inner_path: &str,
     sevenz_path: Option<&str>,
-) -> std::io::Result<Vec<u8>> {
-    let sevenz = sevenz_path.unwrap_or("7z");
-
-    // Run: 7z e -so archive.7z inner_path
-    // -e = extract
-    // -so = write to stdout
-    let output = Command::new(sevenz)
-        .args(["e", "-so", archive_path, inner_path])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        return Err(std::io::Error::other("7z extraction failed"));
-    }
-
-    Ok(output.stdout)
+) -> std::io::Result<ByteStream> {
+    // 7z e -so: extract the entry to stdout
+    let mut cmd = Command::new(sevenz_path.unwrap_or("7z"));
+    cmd.args(["e", "-so", archive_path, inner_path]);
+    stream_command(cmd, "7z").await
 }
 
 /// Extract multiple files from an archive to a temp directory.
@@ -905,8 +1089,6 @@ pub async fn extract_files_to_temp(
     let mut extracted = HashMap::new();
 
     for &inner_path in inner_paths {
-        let data = extract_file(archive_path, inner_path, unrar_path, sevenz_path).await?;
-
         // Use just the filename, not the full inner path, to avoid directory issues
         let filename = Path::new(inner_path)
             .file_name()
@@ -914,7 +1096,7 @@ pub async fn extract_files_to_temp(
             .unwrap_or(inner_path);
         let dest_path = temp_dir.path().join(filename);
 
-        tokio::fs::write(&dest_path, &data).await?;
+        extract_file_to_path(archive_path, inner_path, unrar_path, sevenz_path, &dest_path).await?;
         extracted.insert(inner_path.to_string(), dest_path);
     }
 
@@ -1183,8 +1365,6 @@ pub async fn extract_from_multiple_archives_to_temp(
             ));
         };
 
-        let data = extract_file(archive_path, inner_path, unrar_path, sevenz_path).await?;
-
         // Use just the filename
         let filename = Path::new(inner_path)
             .file_name()
@@ -1192,23 +1372,23 @@ pub async fn extract_from_multiple_archives_to_temp(
             .unwrap_or(inner_path);
         let dest_path = temp_dir.path().join(filename);
 
-        tokio::fs::write(&dest_path, &data).await?;
+        extract_file_to_path(archive_path, inner_path, unrar_path, sevenz_path, &dest_path).await?;
         extracted.insert(full_path.to_string(), dest_path);
     }
 
     Ok((temp_dir, extracted))
 }
 
-/// Extract a file from a distributed split RAR (volumes spread across multiple archives).
+/// Stream a file out of a distributed split RAR (volumes spread across multiple archives).
 ///
 /// Takes the final file path (e.g., "dir/a.zip!/file.rar!/book.epub") and the list
 /// of all source archive paths containing RAR volumes.
-pub async fn extract_from_distributed_rar(
+pub async fn stream_from_distributed_rar(
     final_path: &str,
     distributed_sources: &[String],
     unrar_path: Option<&str>,
     sevenz_path: Option<&str>,
-) -> std::io::Result<Vec<u8>> {
+) -> std::io::Result<EntryStream> {
     if distributed_sources.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1240,7 +1420,7 @@ pub async fn extract_from_distributed_rar(
     let main_rar_path = extracted
         .iter()
         .find(|(src, _)| src.to_lowercase().ends_with(".rar"))
-        .map(|(_, path)| path);
+        .map(|(_, path)| path.to_string_lossy().into_owned());
 
     let Some(main_rar_path) = main_rar_path else {
         return Err(std::io::Error::new(
@@ -1249,45 +1429,20 @@ pub async fn extract_from_distributed_rar(
         ));
     };
 
-    // Now extract the target file from the reassembled RAR
-    let result = extract_file(
-        main_rar_path.to_str().unwrap_or(""),
-        &inner_file_path,
-        unrar_path,
-        sevenz_path,
-    )
-    .await;
-
-    // Clean up temp dir
-    drop(temp_dir);
-
-    result
+    let stream = open_entry(&main_rar_path, &inner_file_path, unrar_path, sevenz_path).await?;
+    Ok(EntryStream::holding(stream, vec![temp_dir]))
 }
 
-/// Reassemble numeric split volumes (.001, .002, etc.) into a single file.
-///
-/// Takes paths to all volume files in order and concatenates them.
-async fn reassemble_numeric_split(volume_paths: &[std::path::PathBuf]) -> std::io::Result<Vec<u8>> {
-    let mut result = Vec::new();
-
-    for path in volume_paths {
-        let data = tokio::fs::read(path).await?;
-        result.extend(data);
-    }
-
-    Ok(result)
-}
-
-/// Extract a file from a distributed numeric split archive (e.g., .7z.001 spread across archives).
+/// Stream a file out of a distributed numeric split archive (e.g., .7z.001 spread across archives).
 ///
 /// Takes the final file path and the list of all source archive paths containing split volumes.
-pub async fn extract_from_distributed_numeric_split(
+pub async fn stream_from_distributed_numeric_split(
     final_path: &str,
     distributed_sources: &[String],
     archive_type: Option<&str>,
     unrar_path: Option<&str>,
     sevenz_path: Option<&str>,
-) -> std::io::Result<Vec<u8>> {
+) -> std::io::Result<EntryStream> {
     if distributed_sources.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1329,184 +1484,95 @@ pub async fn extract_from_distributed_numeric_split(
         ));
     }
 
-    // Reassemble the split archive
-    let paths: Vec<_> = volume_paths.iter().map(|(_, p)| p.clone()).collect();
-    let reassembled = reassemble_numeric_split(&paths).await?;
-
-    // Write reassembled archive to temp
+    // Reassemble the split archive on disk
+    let paths: Vec<_> = volume_paths.into_iter().map(|(_, p)| p).collect();
     let archive_ext = archive_type.unwrap_or("bin");
     let reassembled_path = temp_dir.path().join(format!("reassembled.{archive_ext}"));
-    tokio::fs::write(&reassembled_path, &reassembled).await?;
+    concat_files_to_path(&paths, &reassembled_path).await?;
 
-    // Now extract the target file from the reassembled archive
-    let result = extract_file(
-        reassembled_path.to_str().unwrap_or(""),
+    let stream = open_entry(
+        &reassembled_path.to_string_lossy(),
         &inner_file_path,
         unrar_path,
         sevenz_path,
     )
-    .await;
-
-    // Clean up temp dir
-    drop(temp_dir);
-
-    result
+    .await?;
+    Ok(EntryStream::holding(stream, vec![temp_dir]))
 }
 
-/// Extract a file through multiple archive layers.
+/// Stream a file through multiple archive layers.
 ///
-/// Handles paths like "outer.zip!/inner.rar!/file.epub" by extracting through each level.
+/// Handles paths like "outer.zip!/inner.rar!/file.epub": each intermediate
+/// archive is unpacked to a temp file (archives need a seekable file, not a
+/// stream), and only the innermost entry is streamed.
 /// Also handles split RAR reassembly when sibling volumes are provided.
-pub async fn extract_nested_file(
+pub async fn stream_nested_file(
     path: &str,
     split_rar_volumes: Option<&[String]>,
     unrar_path: Option<&str>,
     sevenz_path: Option<&str>,
-) -> std::io::Result<Vec<u8>> {
-    // Clone strings to owned to allow for recursive calls
-    let path = path.to_string();
-    let split_rar_volumes = split_rar_volumes.map(|v| v.to_vec());
-    let unrar_path = unrar_path.map(|s| s.to_string());
-    let sevenz_path = sevenz_path.map(|s| s.to_string());
+) -> std::io::Result<EntryStream> {
+    let parts: Vec<&str> = path.split(ARCHIVE_DELIMITER).collect();
 
-    extract_nested_file_owned(path, split_rar_volumes, unrar_path, sevenz_path).await
-}
+    if parts.len() < 2 {
+        // Not an archive path, read directly
+        let file = tokio::fs::File::open(path).await?;
+        return Ok(EntryStream::new(Box::pin(ReaderStream::new(file))));
+    }
 
-/// Inner implementation of nested file extraction with owned strings.
-fn extract_nested_file_owned(
-    path: String,
-    split_rar_volumes: Option<Vec<String>>,
-    unrar_path: Option<String>,
-    sevenz_path: Option<String>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<Vec<u8>>> + Send>> {
-    Box::pin(async move {
-        let parts: Vec<&str> = path.split(ARCHIVE_DELIMITER).collect();
+    let last = parts.len() - 1;
+    let mut temp_dirs: Vec<tempfile::TempDir> = Vec::new();
+    let mut current_archive = parts[0].to_string();
+    let mut next = 1;
 
-        if parts.len() < 2 {
-            // Not an archive path, read directly
-            return tokio::fs::read(&path).await;
-        }
+    // A split RAR in the outermost archive can only be read by unrar with all
+    // of its volumes alongside it.
+    if last > 1
+        && is_split_rar_main_file(parts[1])
+        && let Some(volumes) = split_rar_volumes
+    {
+        let mut all_inner_paths: Vec<&str> = vec![parts[1]];
+        all_inner_paths.extend(volumes.iter().map(|s| s.as_str()));
 
-        if parts.len() == 2 {
-            // Single level: archive!/file - use existing extract_file
-            return extract_file(
-                parts[0],
-                parts[1],
-                unrar_path.as_deref(),
-                sevenz_path.as_deref(),
-            )
-            .await;
-        }
+        let (temp_dir, extracted) =
+            extract_files_to_temp(parts[0], &all_inner_paths, unrar_path, sevenz_path).await?;
 
-        // Multi-level extraction: outer!/middle!/inner
-        // We need to extract through each level
+        current_archive = extracted
+            .get(parts[1])
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "main RAR file not extracted")
+            })?
+            .to_string_lossy()
+            .into_owned();
+        temp_dirs.push(temp_dir);
+        next = 2;
+    }
 
-        // Start with the outermost archive
-        let outermost = parts[0];
+    for &inner_path in &parts[next..last] {
+        // The temp file's extension is how the next level picks its extractor
+        let ext = Path::new(inner_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
 
-        // For each intermediate level, extract to temp and recurse
-        let mut current_data: Option<Vec<u8>> = None;
-        let mut _temp_dirs: Vec<tempfile::TempDir> = Vec::new(); // Keep temp dirs alive
+        let temp_dir = tempfile::tempdir()?;
+        let temp_archive_path = temp_dir.path().join(format!("archive.{ext}"));
+        extract_file_to_path(
+            &current_archive,
+            inner_path,
+            unrar_path,
+            sevenz_path,
+            &temp_archive_path,
+        )
+        .await?;
 
-        for i in 1..parts.len() {
-            let inner_path = parts[i];
-            let is_last = i == parts.len() - 1;
+        current_archive = temp_archive_path.to_string_lossy().into_owned();
+        temp_dirs.push(temp_dir);
+    }
 
-            if i == 1 {
-                // First extraction from the outermost archive
-                // Check if this is a split RAR that needs all volumes extracted first
-                if !is_last
-                    && is_split_rar_main_file(inner_path)
-                    && let Some(volumes) = split_rar_volumes.as_ref()
-                {
-                    // Extract all RAR volumes to temp
-                    let mut all_inner_paths: Vec<&str> = vec![inner_path];
-                    all_inner_paths.extend(volumes.iter().map(|s| s.as_str()));
-
-                    let (temp_dir, extracted) = extract_files_to_temp(
-                        outermost,
-                        &all_inner_paths,
-                        unrar_path.as_deref(),
-                        sevenz_path.as_deref(),
-                    )
-                    .await?;
-
-                    // Get the path to the main RAR file in temp
-                    let main_rar_path = extracted.get(inner_path).ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "main RAR file not extracted",
-                        )
-                    })?;
-
-                    // Now extract from the reassembled RAR
-                    // The remaining path is parts[2..].join(ARCHIVE_DELIMITER)
-                    let remaining_path = parts[i + 1..].join(ARCHIVE_DELIMITER);
-                    let nested_path = format!(
-                        "{}{}{}",
-                        main_rar_path.display(),
-                        ARCHIVE_DELIMITER,
-                        remaining_path
-                    );
-                    let result =
-                        extract_nested_file_owned(nested_path, None, unrar_path, sevenz_path).await;
-
-                    _temp_dirs.push(temp_dir);
-                    return result;
-                }
-
-                // Regular extraction from outermost
-                current_data = Some(
-                    extract_file(
-                        outermost,
-                        inner_path,
-                        unrar_path.as_deref(),
-                        sevenz_path.as_deref(),
-                    )
-                    .await?,
-                );
-            } else {
-                // Subsequent extractions need the previous level written to temp
-                let data = current_data.take().ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "no data from previous level",
-                    )
-                })?;
-
-                // Determine extension of previous level to know archive type
-                let prev_path = parts[i - 1];
-                let prev_ext = Path::new(prev_path)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                    .unwrap_or_default();
-
-                // Write to temp file
-                let temp_dir = tempfile::tempdir()?;
-                let temp_archive_path = temp_dir.path().join(format!("archive.{}", prev_ext));
-                tokio::fs::write(&temp_archive_path, &data).await?;
-
-                // Extract from temp archive
-                let temp_archive_str = temp_archive_path.to_string_lossy();
-                current_data = Some(
-                    extract_file(
-                        &temp_archive_str,
-                        inner_path,
-                        unrar_path.as_deref(),
-                        sevenz_path.as_deref(),
-                    )
-                    .await?,
-                );
-
-                _temp_dirs.push(temp_dir);
-            }
-        }
-
-        current_data.ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "extraction produced no data")
-        })
-    })
+    let stream = open_entry(&current_archive, parts[last], unrar_path, sevenz_path).await?;
+    Ok(EntryStream::holding(stream, temp_dirs))
 }
 
 /// Check if a filename looks like the main file of a split RAR set
@@ -1606,12 +1672,12 @@ async fn list_tar_contents(archive_path: &str, archive_relative_path: &str) -> V
     .unwrap_or_default()
 }
 
-/// Extract a file from a tar archive.
-async fn extract_from_tar(archive_path: &str, inner_path: &str) -> std::io::Result<Vec<u8>> {
+/// Stream a file out of a tar archive (optionally compressed with gz/bz2/xz).
+async fn stream_from_tar(archive_path: &str, inner_path: &str) -> std::io::Result<ByteStream> {
     let archive_path = archive_path.to_string();
     let inner_path = inner_path.to_string();
 
-    tokio::task::spawn_blocking(move || {
+    stream_blocking(move |sink| {
         let file = std::fs::File::open(&archive_path)?;
 
         let lower = archive_path.to_lowercase();
@@ -1630,9 +1696,7 @@ async fn extract_from_tar(archive_path: &str, inner_path: &str) -> std::io::Resu
             let mut entry = entry?;
             let path = entry.path()?.to_string_lossy().to_string();
             if path == inner_path {
-                let mut buf = Vec::new();
-                entry.read_to_end(&mut buf)?;
-                return Ok(buf);
+                return sink.pump(&mut entry);
             }
         }
 
@@ -1642,7 +1706,6 @@ async fn extract_from_tar(archive_path: &str, inner_path: &str) -> std::io::Resu
         ))
     })
     .await
-    .map_err(std::io::Error::other)?
 }
 
 /// For compressed single files (file.gz, file.bz2, file.xz), report the inner file.
@@ -1686,40 +1749,25 @@ fn list_compressed_single(
     }]
 }
 
-/// Decompress a single-file compressed archive (gz only for now).
-async fn decompress_single(archive_path: &str, ext: &str) -> std::io::Result<Vec<u8>> {
+/// Stream the decompressed contents of a single-file archive (file.gz, file.bz2, file.xz).
+async fn stream_decompress_single(archive_path: &str, ext: &str) -> std::io::Result<ByteStream> {
     let archive_path = archive_path.to_string();
     let ext = ext.to_string();
 
-    tokio::task::spawn_blocking(move || {
+    stream_blocking(move |sink| {
         let file = std::fs::File::open(&archive_path)?;
-        let mut buf = Vec::new();
 
         match ext.as_str() {
-            "gz" => {
-                let mut decoder = flate2::read::GzDecoder::new(file);
-                decoder.read_to_end(&mut buf)?;
-            }
-            "bz2" => {
-                let mut decoder = bzip2::read::BzDecoder::new(file);
-                decoder.read_to_end(&mut buf)?;
-            }
-            "xz" => {
-                let mut decoder = liblzma::read::XzDecoder::new(file);
-                decoder.read_to_end(&mut buf)?;
-            }
-            _ => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("decompression not supported for .{ext}"),
-                ));
-            }
+            "gz" => sink.pump(&mut flate2::read::GzDecoder::new(file)),
+            "bz2" => sink.pump(&mut bzip2::read::BzDecoder::new(file)),
+            "xz" => sink.pump(&mut liblzma::read::XzDecoder::new(file)),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("decompression not supported for .{ext}"),
+            )),
         }
-
-        Ok(buf)
     })
     .await
-    .map_err(std::io::Error::other)?
 }
 
 #[cfg(test)]

@@ -3,19 +3,20 @@ use std::path::Path;
 /// Detect file format from magic bytes (file content header).
 /// Returns a normalized format string (e.g., "epub", "pdf") and MIME type.
 pub fn detect_from_bytes(buf: &[u8]) -> Option<FormatInfo> {
-    let kind = infer::get(buf)?;
-    let mime = kind.mime_type();
-    let ext = normalize_extension(kind.extension());
-    Some(FormatInfo {
-        extension: ext.to_string(),
-        mime_type: mime.to_string(),
-    })
+    infer::get(buf).map(format_info)
 }
 
 /// Detect file format from a file path using magic bytes.
 pub fn detect_from_file(path: &Path) -> Option<FormatInfo> {
-    let buf = std::fs::read(path).ok()?;
-    detect_from_bytes(&buf)
+    // Reads only the header; these can be multi-GB media files.
+    infer::get_from_path(path).ok()?.map(format_info)
+}
+
+fn format_info(kind: infer::Type) -> FormatInfo {
+    FormatInfo {
+        extension: normalize_extension(kind.extension()).to_string(),
+        mime_type: kind.mime_type().to_string(),
+    }
 }
 
 /// Detect format from filename/title text (for search results before download).

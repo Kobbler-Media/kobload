@@ -467,18 +467,13 @@ pub async fn expand_archives(
                     continue;
                 }
 
-                // Concatenate all volumes
-                let mut reassembled = Vec::new();
-                for (_, path) in &volume_paths {
-                    if let Ok(data) = std::fs::read(path) {
-                        reassembled.extend(data);
-                    }
-                }
-
-                // Write reassembled archive to temp
+                // Concatenate all volumes into the reassembled archive on disk
+                let volume_files: Vec<_> = volume_paths.into_iter().map(|(_, p)| p).collect();
                 let archive_ext = set.archive_type.as_deref().unwrap_or("bin");
                 let reassembled_path = temp_dir.path().join(format!("reassembled.{archive_ext}"));
-                if let Err(err) = std::fs::write(&reassembled_path, &reassembled) {
+                if let Err(err) =
+                    archive::concat_files_to_path(&volume_files, &reassembled_path).await
+                {
                     tracing::warn!(
                         base_name = %set.base_name,
                         error = %err,

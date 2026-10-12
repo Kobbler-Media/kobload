@@ -7,6 +7,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+use futures::TryStreamExt;
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
@@ -107,7 +108,7 @@ pub async fn download_file_by_id(
         if let Some(distributed_sources) = &file_info.distributed_rar_sources
             && !distributed_sources.is_empty()
         {
-            match archive::extract_from_distributed_rar(
+            match archive::stream_from_distributed_rar(
                 absolute_path,
                 distributed_sources,
                 state.unrar_path.as_deref(),
@@ -115,9 +116,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(data) => {
-                    let body = axum::body::Body::from(data);
-                    return (StatusCode::OK, body).into_response();
+                Ok(stream) => {
+                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
                 }
                 Err(err) => {
                     warn!(error = %err, path = %absolute_path, "Distributed RAR extraction failed");
@@ -130,7 +130,7 @@ pub async fn download_file_by_id(
         if let Some(distributed_sources) = &file_info.distributed_numeric_sources
             && !distributed_sources.is_empty()
         {
-            match archive::extract_from_distributed_numeric_split(
+            match archive::stream_from_distributed_numeric_split(
                 absolute_path,
                 distributed_sources,
                 file_info.numeric_split_type.as_deref(),
@@ -139,9 +139,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(data) => {
-                    let body = axum::body::Body::from(data);
-                    return (StatusCode::OK, body).into_response();
+                Ok(stream) => {
+                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
                 }
                 Err(err) => {
                     warn!(error = %err, path = %absolute_path, "Distributed numeric split extraction failed");
@@ -156,7 +155,7 @@ pub async fn download_file_by_id(
         if delimiter_count > 1 {
             // Multi-level: e.g., ZIP!/RAR!/file.epub
             // Use the nested extraction function that handles split RAR reassembly
-            match archive::extract_nested_file(
+            match archive::stream_nested_file(
                 absolute_path,
                 file_info.split_rar_volumes.as_deref(),
                 state.unrar_path.as_deref(),
@@ -164,9 +163,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(data) => {
-                    let body = axum::body::Body::from(data);
-                    return (StatusCode::OK, body).into_response();
+                Ok(stream) => {
+                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
                 }
                 Err(err) => {
                     warn!(error = %err, path = %absolute_path, "Nested archive extraction failed");
@@ -177,7 +175,7 @@ pub async fn download_file_by_id(
 
         // Single level extraction
         if let Some((archive_part, inner_path)) = archive::split_archive_path(absolute_path) {
-            match archive::extract_file(
+            match archive::stream_file(
                 archive_part,
                 inner_path,
                 state.unrar_path.as_deref(),
@@ -185,9 +183,8 @@ pub async fn download_file_by_id(
             )
             .await
             {
-                Ok(data) => {
-                    let body = axum::body::Body::from(data);
-                    return (StatusCode::OK, body).into_response();
+                Ok(stream) => {
+                    return (StatusCode::OK, archive_body(stream, absolute_path)).into_response();
                 }
                 Err(err) => {
                     warn!(error = %err, archive = %archive_part, inner = %inner_path, "Archive extraction failed");
@@ -198,6 +195,15 @@ pub async fn download_file_by_id(
     }
 
     (StatusCode::NOT_FOUND, "file not found on disk").into_response()
+}
+
+/// Archive entries are streamed after the 200 is sent, so a failure part-way
+/// can only abort the connection. Log it, or a truncated transfer is silent.
+fn archive_body(stream: archive::EntryStream, path: &str) -> axum::body::Body {
+    let path = path.to_string();
+    axum::body::Body::from_stream(stream.inspect_err(move |err| {
+        warn!(error = %err, path = %path, "Archive extraction failed mid-stream");
+    }))
 }
 
 pub async fn stream_downloads(
