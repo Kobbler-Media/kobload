@@ -811,8 +811,9 @@ async fn score_source_releases(
     profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
     protocol_cache: &mut HashMap<Option<Uuid>, Option<String>>,
     collector: Option<(&DecisionCollector, Uuid)>,
-    processed_by_pattern: &mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>,
+    mut review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
 ) {
+    use crate::services::want::koblem_review;
     use crate::services::want::scoring::score_release;
 
     // Phase 1: Pre-compute all pattern-invariant data (DB/async calls happen here)
@@ -834,6 +835,9 @@ async fn score_source_releases(
 
             // Build ScoringConfig once per pattern
             let config = build_scoring_config(prep, trash_filters.as_deref());
+            let review_title = review_queue
+                .is_some()
+                .then(|| koblem_review::review_wanted_title(prep.parsed_media_want.as_ref()));
 
             for release in releases {
                 // In-memory dedup: skip if already matched in a previous cycle
@@ -866,10 +870,12 @@ async fn score_source_releases(
                 // that scored it. Dispatching per-pattern prevents cross-pattern
                 // contamination (reject reasons computed against another pattern's
                 // media_want leaking into this pattern's review request).
-                processed_by_pattern
-                    .entry(prep.pattern.id)
-                    .or_default()
-                    .push(pr.clone());
+                if let Some(queue) = review_queue.as_deref_mut()
+                    && let Some(title) = review_title.as_deref()
+                    && koblem_review::worth_reviewing(&pr, title)
+                {
+                    queue.entry(prep.pattern.id).or_default().push(pr.clone());
+                }
 
                 if !pr.is_candidate() {
                     continue;
@@ -930,6 +936,15 @@ pub(crate) fn koblem_dispatch_plan<'a>(
     plan
 }
 
+/// Whether scored releases should be collected for koblem review at all.
+async fn koblem_reviews_enabled(state: &AppState) -> bool {
+    state.nats.is_available()
+        && app_settings::get_koblem_settings(&state.pool)
+            .await
+            .unwrap_or_default()
+            .enabled
+}
+
 /// Fire one koblem review per pattern that had at least one scored release.
 ///
 /// This replaces the earlier per-winner dispatch inside `select_and_execute_winners`,
@@ -944,13 +959,7 @@ async fn dispatch_koblem_reviews(
     profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
     priority: &str,
 ) {
-    if !state.nats.is_available() {
-        return;
-    }
-    let koblem_settings = app_settings::get_koblem_settings(&state.pool)
-        .await
-        .unwrap_or_default();
-    if !koblem_settings.enabled {
+    if processed_by_pattern.is_empty() || !koblem_reviews_enabled(state).await {
         return;
     }
 
@@ -1136,6 +1145,7 @@ pub async fn process_releases(
     let mut protocol_cache: HashMap<Option<Uuid>, Option<String>> = HashMap::new();
     let mut processed_by_pattern: HashMap<Uuid, Vec<crate::watch::ProcessedRelease>> =
         HashMap::new();
+    let collect_reviews = koblem_reviews_enabled(state).await;
     score_source_releases(
         state,
         source,
@@ -1145,7 +1155,7 @@ pub async fn process_releases(
         &mut profile_cache,
         &mut protocol_cache,
         None,
-        &mut processed_by_pattern,
+        collect_reviews.then_some(&mut processed_by_pattern),
     )
     .await;
 
@@ -1472,8 +1482,11 @@ pub async fn run_watch_service(state: AppState) {
         let mut profile_cache: HashMap<Uuid, Option<QualityProfileRow>> = HashMap::new();
         let mut protocol_cache: HashMap<Option<Uuid>, Option<String>> = HashMap::new();
         let mut all_patterns: HashMap<Uuid, watch_repo::WatchPatternRow> = HashMap::new();
+        // Holds releases for koblem until the end of the cycle, so it spans every
+        // source; only the ones koblem would actually be sent are kept.
         let mut processed_by_pattern: HashMap<Uuid, Vec<crate::watch::ProcessedRelease>> =
             HashMap::new();
+        let collect_reviews = koblem_reviews_enabled(&state).await;
 
         // One collector per source when feed logging is enabled
         let mut source_collectors: Vec<DecisionCollector> = Vec::new();
@@ -1555,7 +1568,7 @@ pub async fn run_watch_service(state: AppState) {
                         &mut profile_cache,
                         &mut protocol_cache,
                         coll_ref,
-                        &mut processed_by_pattern,
+                        collect_reviews.then_some(&mut processed_by_pattern),
                     )
                     .await;
                     // Collect patterns for the selection phase
@@ -1621,7 +1634,7 @@ pub async fn run_watch_service(state: AppState) {
                             &mut profile_cache,
                             &mut protocol_cache,
                             None,
-                            &mut processed_by_pattern,
+                            collect_reviews.then_some(&mut processed_by_pattern),
                         )
                         .await;
 

@@ -1,6 +1,6 @@
 mod downloads;
 mod episode_fallback;
-pub(crate) mod koblem_review;
+pub mod koblem_review;
 pub(crate) mod scoring;
 mod search;
 mod service;

@@ -47,38 +47,7 @@ pub async fn publish_review(
     let mut candidates: Vec<ReviewCandidate> = Vec::new();
 
     for pr in processed {
-        // Skip: garbage source quality (CAM, telesync)
-        if let Some(ref pq) = pr.parsed_quality
-            && let Some(ref source) = pq.source
-            && HARD_REJECT_SOURCES.contains(&source.as_str())
-        {
-            continue;
-        }
-
-        // Skip: hard structural rejects (code can't get these wrong)
-        if let Some(reason) = pr.structural_reject_reason
-            && reason.is_hard_reject()
-        {
-            continue;
-        }
-
-        // Skip: quality-rejected for hard reasons (rejected_source, etc.)
-        // but keep quality-rejected for soft reasons (the LLM has quality checks too)
-        if pr.quality_rejected
-            && pr.quality_reject_reasons.iter().any(|r| {
-                matches!(
-                    r,
-                    nats_jobs::QualityRejectReason::RejectedSource
-                        | nats_jobs::QualityRejectReason::RejectedLanguage
-                )
-            })
-        {
-            continue;
-        }
-
-        // Keep everything else — no_match, soft rejects, candidates.
-        // But skip releases with zero title overlap (completely unrelated content).
-        if !has_title_overlap(&pr.release.title, &ctx.wanted_title) {
+        if !worth_reviewing(pr, &ctx.wanted_title) {
             continue;
         }
 
@@ -165,6 +134,51 @@ pub async fn publish_review(
         .await;
 
     Some(correlation_id)
+}
+
+/// The title `worth_reviewing` compares releases against for this want.
+pub fn review_wanted_title(media_want: Option<&MediaWant>) -> String {
+    extract_want_context(media_want).wanted_title
+}
+
+/// Whether `publish_review` would forward this release to koblem.
+///
+/// Callers that collect releases for a later review apply this as they score,
+/// so the releases it would drop are never retained. An RSS cycle scores every
+/// release against every pattern, and keeping all of those used gigabytes.
+pub fn worth_reviewing(pr: &ProcessedRelease, wanted_title: &str) -> bool {
+    // Garbage source quality (CAM, telesync)
+    if let Some(ref pq) = pr.parsed_quality
+        && let Some(ref source) = pq.source
+        && HARD_REJECT_SOURCES.contains(&source.as_str())
+    {
+        return false;
+    }
+
+    // Hard structural rejects (code can't get these wrong)
+    if let Some(reason) = pr.structural_reject_reason
+        && reason.is_hard_reject()
+    {
+        return false;
+    }
+
+    // Quality-rejected for hard reasons (rejected_source, etc.), but keep
+    // soft quality rejects (the LLM has quality checks too)
+    if pr.quality_rejected
+        && pr.quality_reject_reasons.iter().any(|r| {
+            matches!(
+                r,
+                nats_jobs::QualityRejectReason::RejectedSource
+                    | nats_jobs::QualityRejectReason::RejectedLanguage
+            )
+        })
+    {
+        return false;
+    }
+
+    // Keep everything else — no_match, soft rejects, candidates — unless the
+    // title has zero overlap (completely unrelated content).
+    has_title_overlap(&pr.release.title, wanted_title)
 }
 
 /// Minimum similarity to forward a release to koblem for LLM review.
