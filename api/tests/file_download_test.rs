@@ -1,9 +1,9 @@
 mod common;
 
 use common::TestServer;
+use futures::StreamExt;
 use reqwest::StatusCode;
 use serde_json::json;
-use futures::StreamExt;
 use std::io::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -489,7 +489,10 @@ async fn test_stream_zip_entry_in_bounded_chunks() {
         out.extend_from_slice(&chunk);
     }
 
-    assert!(chunks > 1, "entry should arrive in several chunks, got {chunks}");
+    assert!(
+        chunks > 1,
+        "entry should arrive in several chunks, got {chunks}"
+    );
     assert_eq!(out, data);
 }
 
@@ -569,23 +572,15 @@ async fn test_stream_tar_gz_entry() {
         builder.into_inner().unwrap().finish().unwrap();
     }
 
-    let stream = kobload_api::archive::stream_file(
-        tar_path.to_str().unwrap(),
-        "dir/book.epub",
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    let stream =
+        kobload_api::archive::stream_file(tar_path.to_str().unwrap(), "dir/book.epub", None, None)
+            .await
+            .unwrap();
     assert_eq!(collect(stream).await, data);
 
-    let missing = kobload_api::archive::stream_file(
-        tar_path.to_str().unwrap(),
-        "dir/nope.epub",
-        None,
-        None,
-    )
-    .await;
+    let missing =
+        kobload_api::archive::stream_file(tar_path.to_str().unwrap(), "dir/nope.epub", None, None)
+            .await;
     assert!(missing.is_err());
 }
 
@@ -637,7 +632,10 @@ async fn test_stream_nested_zip_large_inner_entry() {
     write_zip(&outer_path, &[("inner.zip", &inner_bytes)]);
 
     let delim = kobload_api::archive::ARCHIVE_DELIMITER;
-    let nested = format!("{}{delim}inner.zip{delim}deep/file.bin", outer_path.display());
+    let nested = format!(
+        "{}{delim}inner.zip{delim}deep/file.bin",
+        outer_path.display()
+    );
 
     let mut stream = kobload_api::archive::stream_nested_file(&nested, None, None, None)
         .await
@@ -654,7 +652,10 @@ async fn test_stream_nested_zip_large_inner_entry() {
     assert_eq!(out, data);
 
     let missing = kobload_api::archive::stream_nested_file(
-        &format!("{}{delim}inner.zip{delim}deep/missing.bin", outer_path.display()),
+        &format!(
+            "{}{delim}inner.zip{delim}deep/missing.bin",
+            outer_path.display()
+        ),
         None,
         None,
         None,
@@ -737,11 +738,15 @@ async fn test_download_file_by_id_from_zip_streams_entry() {
     assert_eq!(resp.bytes(), data.as_slice());
     // zip records the uncompressed size, so the length is known up front
     assert_eq!(
-        resp.headers.get("content-length").and_then(|v| v.to_str().ok()),
+        resp.headers
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()),
         Some(data.len().to_string().as_str())
     );
     assert_eq!(
-        resp.headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+        resp.headers
+            .get("accept-ranges")
+            .and_then(|v| v.to_str().ok()),
         Some("none")
     );
 
@@ -756,7 +761,9 @@ async fn test_download_file_by_id_from_zip_streams_entry() {
     assert_eq!(resp.bytes(), data.as_slice());
 
     let resp = client
-        .get(&format!("/api/v1/downloads/{download_id}/files/{missing_id}"))
+        .get(&format!(
+            "/api/v1/downloads/{download_id}/files/{missing_id}"
+        ))
         .await;
     resp.assert_status(StatusCode::NOT_FOUND);
 }
@@ -814,7 +821,9 @@ async fn test_plain_file_routes_support_range() {
         assert_eq!(resp.status, StatusCode::PARTIAL_CONTENT, "{url}");
         assert_eq!(resp.bytes(), &data[1000..2000], "{url}");
         assert_eq!(
-            resp.headers.get("content-range").and_then(|v| v.to_str().ok()),
+            resp.headers
+                .get("content-range")
+                .and_then(|v| v.to_str().ok()),
             Some(format!("bytes 1000-1999/{}", data.len()).as_str()),
             "{url}"
         );
@@ -823,7 +832,9 @@ async fn test_plain_file_routes_support_range() {
         resp.assert_status(StatusCode::OK);
         assert_eq!(resp.bytes(), data.as_slice(), "{url}");
         assert_eq!(
-            resp.headers.get("accept-ranges").and_then(|v| v.to_str().ok()),
+            resp.headers
+                .get("accept-ranges")
+                .and_then(|v| v.to_str().ok()),
             Some("bytes"),
             "{url}"
         );
@@ -933,7 +944,7 @@ async fn test_stream_rar_inside_zip_via_unrar() {
         .unwrap();
     assert_eq!(stream.content_length(), None, "unrar doesn't report length");
     let content = String::from_utf8(collect(stream).await).unwrap();
-    assert!(content.starts_with("KOBLOAD_TEST_CONTENT_LINE_1_FOR_RAR"));
+    assert!(content.starts_with("KOBLOAD_TEST_CONTENT_FOR_RAR_12345"));
 
     // unrar exits non-zero for a missing entry
     let missing = format!(
@@ -992,7 +1003,10 @@ async fn test_stream_distributed_numeric_split_via_7z() {
     let first = fixtures_dir().join("test_kobload_dist_001.zip");
     let sources = distributed_numeric_sources();
 
-    let path = format!("{}{delim}test_archive.7z.001{delim}content.txt", first.display());
+    let path = format!(
+        "{}{delim}test_archive.7z.001{delim}content.txt",
+        first.display()
+    );
     let stream = kobload_api::archive::stream_from_distributed_numeric_split(
         &path,
         &sources,
@@ -1018,7 +1032,10 @@ async fn test_stream_distributed_numeric_split_missing_entry_is_not_found() {
     let first = fixtures_dir().join("test_kobload_dist_001.zip");
     let sources = distributed_numeric_sources();
 
-    let path = format!("{}{delim}test_archive.7z.001{delim}missing.txt", first.display());
+    let path = format!(
+        "{}{delim}test_archive.7z.001{delim}missing.txt",
+        first.display()
+    );
     let err = kobload_api::archive::stream_from_distributed_numeric_split(
         &path,
         &sources,

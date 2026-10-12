@@ -1214,7 +1214,14 @@ pub async fn extract_files_to_temp(
             .unwrap_or(inner_path);
         let dest_path = temp_dir.path().join(filename);
 
-        extract_file_to_path(archive_path, inner_path, unrar_path, sevenz_path, &dest_path).await?;
+        extract_file_to_path(
+            archive_path,
+            inner_path,
+            unrar_path,
+            sevenz_path,
+            &dest_path,
+        )
+        .await?;
         extracted.insert(inner_path.to_string(), dest_path);
     }
 
@@ -1490,7 +1497,14 @@ pub async fn extract_from_multiple_archives_to_temp(
             .unwrap_or(inner_path);
         let dest_path = temp_dir.path().join(filename);
 
-        extract_file_to_path(archive_path, inner_path, unrar_path, sevenz_path, &dest_path).await?;
+        extract_file_to_path(
+            archive_path,
+            inner_path,
+            unrar_path,
+            sevenz_path,
+            &dest_path,
+        )
+        .await?;
         extracted.insert(full_path.to_string(), dest_path);
     }
 

@@ -11,8 +11,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::auth::require_auth;
-use crate::routes::file_serving::serve_plain_file;
 use crate::repositories::watch_directories as wd_repo;
+use crate::routes::file_serving::serve_plain_file;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]

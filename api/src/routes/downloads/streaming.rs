@@ -18,8 +18,8 @@ use uuid::Uuid;
 use crate::archive;
 use crate::auth::require_auth;
 use crate::auth::require_auth_with_token;
-use crate::routes::file_serving::serve_plain_file;
 use crate::repositories::downloads as downloads_repo;
+use crate::routes::file_serving::serve_plain_file;
 use crate::state::AppState;
 use crate::types::DownloadStreamEvent;
 
@@ -114,7 +114,13 @@ pub async fn download_file_by_id(
             .await
             {
                 Ok(stream) => return archive_response(stream, absolute_path),
-                Err(err) => return archive_error_response(&err, absolute_path, "Distributed RAR extraction failed"),
+                Err(err) => {
+                    return archive_error_response(
+                        &err,
+                        absolute_path,
+                        "Distributed RAR extraction failed",
+                    );
+                }
             }
         }
 
@@ -132,7 +138,13 @@ pub async fn download_file_by_id(
             .await
             {
                 Ok(stream) => return archive_response(stream, absolute_path),
-                Err(err) => return archive_error_response(&err, absolute_path, "Distributed numeric split extraction failed"),
+                Err(err) => {
+                    return archive_error_response(
+                        &err,
+                        absolute_path,
+                        "Distributed numeric split extraction failed",
+                    );
+                }
             }
         }
 
@@ -151,7 +163,13 @@ pub async fn download_file_by_id(
             .await
             {
                 Ok(stream) => return archive_response(stream, absolute_path),
-                Err(err) => return archive_error_response(&err, absolute_path, "Nested archive extraction failed"),
+                Err(err) => {
+                    return archive_error_response(
+                        &err,
+                        absolute_path,
+                        "Nested archive extraction failed",
+                    );
+                }
             }
         }
 
@@ -167,7 +185,11 @@ pub async fn download_file_by_id(
             {
                 Ok(stream) => return archive_response(stream, absolute_path),
                 Err(err) => {
-                    return archive_error_response(&err, absolute_path, "Archive extraction failed");
+                    return archive_error_response(
+                        &err,
+                        absolute_path,
+                        "Archive extraction failed",
+                    );
                 }
             }
         }
