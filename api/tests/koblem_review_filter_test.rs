@@ -117,7 +117,9 @@ fn hard_structural_reject_is_not_kept() {
     pr.decision = ScoringDecision::Rejected;
     pr.structural_rejected = true;
     pr.structural_reject_reason = Some(StructuralRejectReason::YearMismatch);
-    pr.reject_reasons = vec![RejectReason::Structural(StructuralRejectReason::YearMismatch)];
+    pr.reject_reasons = vec![RejectReason::Structural(
+        StructuralRejectReason::YearMismatch,
+    )];
     assert!(!worth_reviewing(&pr, &wanted()));
 }
 

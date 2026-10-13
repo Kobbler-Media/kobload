@@ -149,15 +149,28 @@ fn capture_round_trips_and_replays() {
 
     let corpus = read_capture(dir.path()).unwrap();
     assert_eq!(corpus.len(), 2, "duplicate fetch should not be recorded");
-    let guids: Vec<_> = corpus[0].fetch.releases.iter().map(|r| r.guid.as_str()).collect();
+    let guids: Vec<_> = corpus[0]
+        .fetch
+        .releases
+        .iter()
+        .map(|r| r.guid.as_str())
+        .collect();
     assert_eq!(guids, ["g-hit", "g-miss"]);
-    let guids: Vec<_> = corpus[1].fetch.releases.iter().map(|r| r.guid.as_str()).collect();
+    let guids: Vec<_> = corpus[1]
+        .fetch
+        .releases
+        .iter()
+        .map(|r| r.guid.as_str())
+        .collect();
     assert_eq!(guids, ["g-late"]);
     assert!(
         Arc::ptr_eq(&corpus[0].prepared, &corpus[1].prepared),
         "an unchanged pattern set is stored once"
     );
-    assert_eq!(corpus[0].fetch.releases[0].raw_data, json!({"attr": "value"}));
+    assert_eq!(
+        corpus[0].fetch.releases[0].raw_data,
+        json!({"attr": "value"})
+    );
 
     let first = &corpus[0];
     let replay = replay_scoring(
@@ -190,7 +203,10 @@ fn capture_round_trips_and_replays() {
 #[test]
 fn replay_is_pinned_to_capture_time() {
     let prepared = prepared_patterns();
-    let releases = [release("g-hit", "Law.and.Order.SVU.S28E02.1080p.WEB.H264-FLUX")];
+    let releases = [release(
+        "g-hit",
+        "Law.and.Order.SVU.S28E02.1080p.WEB.H264-FLUX",
+    )];
     let replay = replay_scoring(&prepared, &releases, SOURCE_ID, None, captured_at());
     // Published at the capture time, so zero days old: the full freshness
     // bonus, whatever today's date is.
@@ -267,7 +283,10 @@ fn trash_rows_round_trip_through_capture() {
     );
     let corpus = read_capture(dir.path()).unwrap();
     let trash = corpus[0].trash.as_ref().expect("trash rows were captured");
-    assert_eq!(trash.check_blocklist("Show.S01E01.SAMPLE.mkv", None), Some("lq"));
+    assert_eq!(
+        trash.check_blocklist("Show.S01E01.SAMPLE.mkv", None),
+        Some("lq")
+    );
     assert_eq!(trash.check_blocklist("Show.S01E01.1080p.mkv", None), None);
 }
 

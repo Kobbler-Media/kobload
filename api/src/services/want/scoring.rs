@@ -74,9 +74,7 @@ pub fn freshness_tiebreaker(release: &Release) -> f64 {
     ) else {
         return 0.0;
     };
-    let age_days = (crate::clock::now_utc() - publish_date)
-        .whole_days()
-        .max(0) as f64;
+    let age_days = (crate::clock::now_utc() - publish_date).whole_days().max(0) as f64;
     // Decay curve: 0.08 at 0 days, ~0.04 at 30 days, ~0.02 at 90 days, ~0.0 at 365+
     // Usenet gets a 2x multiplier since old posts are more likely to be incomplete
     let base = 0.08 * (-age_days / 120.0_f64).exp();

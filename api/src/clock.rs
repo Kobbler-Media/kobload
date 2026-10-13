@@ -14,7 +14,9 @@ thread_local! {
 }
 
 pub fn now_utc() -> OffsetDateTime {
-    PINNED.with(Cell::get).unwrap_or_else(OffsetDateTime::now_utc)
+    PINNED
+        .with(Cell::get)
+        .unwrap_or_else(OffsetDateTime::now_utc)
 }
 
 /// Run `f` with [`now_utc`] returning `now` on this thread.

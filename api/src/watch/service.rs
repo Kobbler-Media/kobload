@@ -825,7 +825,9 @@ async fn score_source_releases(
     let prepare_ms = prepare_start.elapsed().as_millis() as u64;
 
     if let Some(capture) = capture {
-        capture.record(&state.pool, source, &prepared, releases).await;
+        capture
+            .record(&state.pool, source, &prepared, releases)
+            .await;
     }
 
     // Get trash filters once for all patterns
@@ -1083,9 +1085,8 @@ pub fn replay_scoring(
                 total_score: entry.processed.total_score,
             })
             .collect();
-        candidates.sort_by(|a, b| {
-            (a.pattern_id, &a.episode_key).cmp(&(b.pattern_id, &b.episode_key))
-        });
+        candidates
+            .sort_by(|a, b| (a.pattern_id, &a.episode_key).cmp(&(b.pattern_id, &b.episode_key)));
 
         let mut queue = HashMap::new();
         score_prepared(
@@ -1100,7 +1101,10 @@ pub fn replay_scoring(
         let review = queue
             .into_iter()
             .map(|(pattern_id, prs)| {
-                (pattern_id, prs.into_iter().map(|pr| pr.release.guid).collect())
+                (
+                    pattern_id,
+                    prs.into_iter().map(|pr| pr.release.guid).collect(),
+                )
             })
             .collect();
 

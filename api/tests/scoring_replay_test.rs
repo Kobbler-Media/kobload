@@ -87,7 +87,12 @@ fn rss_scoring_matches_golden_snapshot() {
 
     let mut diffs = Vec::new();
     for (i, (want, got)) in golden.iter().zip(&replays).enumerate() {
-        compare(want, got, &format!("fetch[{i}] ({})", got["fetch"]), &mut diffs);
+        compare(
+            want,
+            got,
+            &format!("fetch[{i}] ({})", got["fetch"]),
+            &mut diffs,
+        );
     }
     assert!(
         diffs.is_empty(),
@@ -106,7 +111,10 @@ fn rss_scoring_matches_golden_snapshot() {
 fn compare(want: &Value, got: &Value, path: &str, diffs: &mut Vec<String>) {
     match (want, got) {
         (Value::Number(a), Value::Number(b)) => {
-            let (a, b) = (a.as_f64().unwrap_or(f64::NAN), b.as_f64().unwrap_or(f64::NAN));
+            let (a, b) = (
+                a.as_f64().unwrap_or(f64::NAN),
+                b.as_f64().unwrap_or(f64::NAN),
+            );
             if (a - b).abs() > FLOAT_TOLERANCE {
                 diffs.push(format!("{path}: {a} -> {b}"));
             }
@@ -142,7 +150,10 @@ fn compare(want: &Value, got: &Value, path: &str, diffs: &mut Vec<String>) {
 
 /// Identify a matched pair or candidate in a diff path.
 fn label(v: &Value) -> String {
-    match (v.get("pattern_id"), v.get("release").or_else(|| v.get("guid"))) {
+    match (
+        v.get("pattern_id"),
+        v.get("release").or_else(|| v.get("guid")),
+    ) {
         (Some(p), Some(r)) => format!("{{pattern {p}, release {r}}}"),
         _ => String::new(),
     }

@@ -82,9 +82,7 @@ fn agrees_with_score_release_for_targets() {
 fn agrees_with_score_release_for_patterns() {
     let patterns = vec!["Dune Part Two".to_string(), "MotoGP 2026".to_string()];
     assert_agrees(&ScoringConfig::new(&[], &patterns, 0.75, None, None));
-    assert_agrees(
-        &ScoringConfig::new(&[], &patterns, 0.75, None, None).with_match_mode("exact"),
-    );
+    assert_agrees(&ScoringConfig::new(&[], &patterns, 0.75, None, None).with_match_mode("exact"));
 }
 
 #[test]
