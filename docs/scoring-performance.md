@@ -136,7 +136,8 @@ when all of these hold:
 - **Time.** At least 5 days, and ideally the full 7-day window, so it covers a
   weekly TV cycle and at least one F1/MotoGP race weekend (practice,
   qualifying, sprint and race).
-- **Sources.** Every enabled source (19 in October 2026) shows fetches on most
+- **Sources.** Every RSS-polled source (8 in October 2026; the Cardigann ones
+  aren't polled) shows fetches on most
   days, including the 30-minute MyAnonaMouse feed and the busiest Newznab feeds.
 - **Busy periods.** Each day has a few thousand new releases. A quiet day
   usually means an indexer was down, so extend the capture.
