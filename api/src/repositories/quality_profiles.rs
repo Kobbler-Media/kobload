@@ -1,12 +1,12 @@
 //! Quality profile repository.
 
 use super::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Executor, Postgres};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityProfileRow {
     pub id: Uuid,
     pub name: String,

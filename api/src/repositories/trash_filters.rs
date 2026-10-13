@@ -3,6 +3,7 @@ use time::OffsetDateTime;
 
 use super::Result;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrashFilterRow {
     pub category: String,
     pub spec_name: String,

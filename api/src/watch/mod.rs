@@ -1,3 +1,4 @@
+pub mod capture;
 pub mod episode_key;
 pub mod hash_index_rss;
 pub mod holds;

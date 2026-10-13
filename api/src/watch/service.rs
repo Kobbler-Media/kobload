@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
@@ -565,13 +565,16 @@ struct CandidateEntry {
 /// Pre-computed pattern data for the scoring hot loop.
 ///
 /// All async/DB work is done once per pattern during preparation.
-/// The inner release loop uses only in-memory lookups.
-struct PreparedPattern {
+/// The inner release loop uses only in-memory lookups. Serializable so a
+/// scoring capture can replay the loop without the database.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PreparedPattern {
     pattern: watch_repo::WatchPatternRow,
     quality_profile: Option<QualityProfileRow>,
     match_config: ResolvedMatchConfig,
     categories: Vec<i32>,
-    matched_guids: HashSet<String>,
+    // Ordered so a captured pattern set serializes (and hashes) the same each time.
+    matched_guids: BTreeSet<String>,
     _is_season: bool,
     /// Pre-parsed MediaWant (avoids repeated serde_json::from_value per release).
     parsed_media_want: Option<nats_jobs::MediaWant>,
@@ -638,7 +641,9 @@ async fn prepare_patterns(
         // Batch-load matched GUIDs
         let matched_guids = watch_repo::matched_guids_for_pattern(&state.pool, pattern.id)
             .await
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
 
         let is_season = pattern
             .media_want
@@ -811,114 +816,301 @@ async fn score_source_releases(
     profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
     protocol_cache: &mut HashMap<Option<Uuid>, Option<String>>,
     collector: Option<(&DecisionCollector, Uuid)>,
-    mut review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
+    review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
+    capture: Option<&mut super::capture::ScoringCapture>,
 ) {
-    use crate::services::want::koblem_review;
-    use crate::services::want::scoring::{release_matches, score_release};
-
     // Phase 1: Pre-compute all pattern-invariant data (DB/async calls happen here)
+    let prepare_start = std::time::Instant::now();
     let prepared = prepare_patterns(state, source, patterns, profile_cache, protocol_cache).await;
+    let prepare_ms = prepare_start.elapsed().as_millis() as u64;
+
+    if let Some(capture) = capture {
+        capture.record(&state.pool, source, &prepared, releases).await;
+    }
 
     // Get trash filters once for all patterns
     let trash_filters = state.trash_filters.get_filters();
 
     // Phase 2: Score releases against prepared patterns (pure in-memory).
-    // Regex-heavy quality parsing + Jaro-Winkler similarity over 200-300
-    // releases × N patterns is pure CPU with no await points; run it via
-    // run_cpu_bound so it can't starve JetStream consumers on the runtime.
-    run_cpu_bound(|| {
-        for prep in &prepared {
-            // Skip patterns with no match config (no targets and no patterns)
-            if prep.match_config.match_targets.is_empty() && prep.match_config.patterns.is_empty() {
+    // Regex-heavy quality parsing + Jaro-Winkler similarity over releases × N
+    // patterns is pure CPU with no await points; run it via run_cpu_bound so it
+    // can't starve JetStream consumers on the runtime.
+    let score_start = std::time::Instant::now();
+    let stats = run_cpu_bound(|| {
+        score_prepared(
+            &prepared,
+            releases,
+            source.id,
+            trash_filters.as_deref(),
+            collector,
+            review_queue,
+            candidates,
+        )
+    });
+    info!(
+        source = %source.name,
+        releases = releases.len(),
+        patterns = prepared.len(),
+        pairs = stats.pairs,
+        fully_scored = stats.fully_scored,
+        prepare_ms,
+        score_ms = score_start.elapsed().as_millis() as u64,
+        "Scored source releases"
+    );
+}
+
+/// Counters from one pass of [`score_prepared`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ScoringPassStats {
+    /// Release × pattern pairs that reached scoring.
+    pub pairs: usize,
+    /// Pairs that went through the full `score_release` gates.
+    pub fully_scored: usize,
+}
+
+fn has_match_config(prep: &PreparedPattern) -> bool {
+    !prep.match_config.match_targets.is_empty() || !prep.match_config.patterns.is_empty()
+}
+
+/// Cheap per-pair checks that drop a release before any scoring.
+fn pair_gated_out(prep: &PreparedPattern, release: &Release) -> bool {
+    // In-memory dedup: skip if already matched in a previous cycle
+    if prep.matched_guids.contains(&release.guid) {
+        return true;
+    }
+
+    // Check exclusion before scoring (info_hash matching not supported by ScoringConfig)
+    if is_release_excluded(&prep.pattern, &release.title) {
+        return true;
+    }
+
+    // In-memory category validation (done before score_release since
+    // ScoringConfig doesn't carry per-pattern categories for RSS)
+    prep.pattern.media_type_id.is_some()
+        && !prep.categories.is_empty()
+        && !release_matches_categories(&release.category_ids, &prep.categories)
+}
+
+/// The scoring loop itself: no IO, so a captured fetch replays it exactly.
+fn score_prepared(
+    prepared: &[PreparedPattern],
+    releases: &[Release],
+    source_id: Uuid,
+    trash_filters: Option<&TrashFilterSet>,
+    collector: Option<(&DecisionCollector, Uuid)>,
+    mut review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
+    candidates: &mut HashMap<CandidateKey, CandidateEntry>,
+) -> ScoringPassStats {
+    use crate::services::want::koblem_review;
+    use crate::services::want::scoring::{release_matches, score_release};
+
+    let mut stats = ScoringPassStats::default();
+
+    for prep in prepared {
+        // Skip patterns with no match config (no targets and no patterns)
+        if !has_match_config(prep) {
+            continue;
+        }
+
+        // Build ScoringConfig once per pattern
+        let config = build_scoring_config(prep, trash_filters);
+        let review_title = review_queue
+            .is_some()
+            .then(|| koblem_review::review_wanted_title(prep.parsed_media_want.as_ref()));
+
+        for release in releases {
+            if pair_gated_out(prep, release) {
+                continue;
+            }
+            stats.pairs += 1;
+
+            // Nearly every release × pattern pair is a no-match, and the full
+            // gates (quality, TRaSH, structural parses) cost milliseconds each.
+            // A no-match is only used by the decision log or by a koblem
+            // review of a related title; otherwise it's dropped, so don't
+            // compute it.
+            if collector.is_none()
+                && !release_matches(release, &config)
+                && review_title
+                    .as_deref()
+                    .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
+            {
                 continue;
             }
 
-            // Build ScoringConfig once per pattern
-            let config = build_scoring_config(prep, trash_filters.as_deref());
-            let review_title = review_queue
-                .is_some()
-                .then(|| koblem_review::review_wanted_title(prep.parsed_media_want.as_ref()));
+            stats.fully_scored += 1;
+            let pr = score_release(release, &config);
 
-            for release in releases {
-                // In-memory dedup: skip if already matched in a previous cycle
-                if prep.matched_guids.contains(&release.guid) {
-                    continue;
+            // Record evaluation in decision collector if enabled
+            if let Some((coll, call_id)) = collector {
+                record_scoring_result(coll, call_id, &pr, prep);
+            }
+
+            // Collect processed release for koblem review, keyed by the pattern
+            // that scored it. Dispatching per-pattern prevents cross-pattern
+            // contamination (reject reasons computed against another pattern's
+            // media_want leaking into this pattern's review request).
+            if let Some(queue) = review_queue.as_deref_mut()
+                && let Some(title) = review_title.as_deref()
+                && koblem_review::worth_reviewing(&pr, title)
+            {
+                queue.entry(prep.pattern.id).or_default().push(pr.clone());
+            }
+
+            if !pr.is_candidate() {
+                continue;
+            }
+
+            let key = (prep.pattern.id, pr.episode_key.clone());
+
+            let entry = CandidateEntry {
+                processed: pr,
+                source_id,
+                _pattern_id: prep.pattern.id,
+                is_upgrade: false,
+                replaces_download_id: None,
+            };
+
+            // Keep only the best candidate per group
+            match candidates.entry(key) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(entry);
                 }
-
-                // Check exclusion before scoring (info_hash matching not supported by ScoringConfig)
-                if is_release_excluded(&prep.pattern, &release.title) {
-                    continue;
-                }
-
-                // In-memory category validation (done before score_release since
-                // ScoringConfig doesn't carry per-pattern categories for RSS)
-                if prep.pattern.media_type_id.is_some()
-                    && !prep.categories.is_empty()
-                    && !release_matches_categories(&release.category_ids, &prep.categories)
-                {
-                    continue;
-                }
-
-                // Nearly every release × pattern pair is a no-match, and the full
-                // gates (quality, TRaSH, structural parses) cost milliseconds each.
-                // A no-match is only used by the decision log or by a koblem
-                // review of a related title; otherwise it's dropped, so don't
-                // compute it.
-                if collector.is_none()
-                    && !release_matches(release, &config)
-                    && review_title
-                        .as_deref()
-                        .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
-                {
-                    continue;
-                }
-
-                let pr = score_release(release, &config);
-
-                // Record evaluation in decision collector if enabled
-                if let Some((coll, call_id)) = collector {
-                    record_scoring_result(coll, call_id, &pr, prep);
-                }
-
-                // Collect processed release for koblem review, keyed by the pattern
-                // that scored it. Dispatching per-pattern prevents cross-pattern
-                // contamination (reject reasons computed against another pattern's
-                // media_want leaking into this pattern's review request).
-                if let Some(queue) = review_queue.as_deref_mut()
-                    && let Some(title) = review_title.as_deref()
-                    && koblem_review::worth_reviewing(&pr, title)
-                {
-                    queue.entry(prep.pattern.id).or_default().push(pr.clone());
-                }
-
-                if !pr.is_candidate() {
-                    continue;
-                }
-
-                let key = (prep.pattern.id, pr.episode_key.clone());
-
-                let entry = CandidateEntry {
-                    processed: pr,
-                    source_id: source.id,
-                    _pattern_id: prep.pattern.id,
-                    is_upgrade: false,
-                    replaces_download_id: None,
-                };
-
-                // Keep only the best candidate per group
-                match candidates.entry(key) {
-                    std::collections::hash_map::Entry::Vacant(e) => {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if entry.processed.is_better_than(&e.get().processed) {
                         e.insert(entry);
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut e) => {
-                        if entry.processed.is_better_than(&e.get().processed) {
-                            e.insert(entry);
-                        }
                     }
                 }
             }
         }
-    });
+    }
+
+    stats
+}
+
+/// One captured fetch replayed through the scoring loop, for golden comparison.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ScoringReplay {
+    /// Every release × pattern pair that matched, fully scored, in loop order.
+    /// Scored without the match pre-check, so it is the reference the
+    /// optimised loop has to agree with. `release` is replaced by its guid.
+    pub matched: Vec<serde_json::Value>,
+    /// What the RSS path selected: the best candidate per (pattern, episode).
+    pub candidates: Vec<ReplayCandidate>,
+    /// Release guids that would be queued for koblem review, per pattern, if
+    /// reviews were enabled.
+    pub review: BTreeMap<Uuid, Vec<String>>,
+    /// Counters from the production-mode pass (reviews off). Not part of the
+    /// snapshot: optimisations are expected to change them.
+    #[serde(skip)]
+    pub stats: ScoringPassStats,
+}
+
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReplayCandidate {
+    pub pattern_id: Uuid,
+    pub episode_key: Option<String>,
+    pub guid: String,
+    pub total_score: f64,
+}
+
+/// Run the production scoring pass (reviews and decision log off) over a
+/// captured fetch, for benchmarks and allocation profiling.
+pub fn rss_scoring_pass(
+    prepared: &[PreparedPattern],
+    releases: &[Release],
+    source_id: Uuid,
+    trash_filters: Option<&TrashFilterSet>,
+    captured_at: time::OffsetDateTime,
+) -> ScoringPassStats {
+    crate::clock::with_pinned_now(captured_at, || {
+        score_prepared(
+            prepared,
+            releases,
+            source_id,
+            trash_filters,
+            None,
+            None,
+            &mut HashMap::new(),
+        )
+    })
+}
+
+/// Replay a captured fetch with the clock pinned to when it was captured.
+pub fn replay_scoring(
+    prepared: &[PreparedPattern],
+    releases: &[Release],
+    source_id: Uuid,
+    trash_filters: Option<&TrashFilterSet>,
+    captured_at: time::OffsetDateTime,
+) -> ScoringReplay {
+    use crate::services::want::scoring::score_release;
+
+    crate::clock::with_pinned_now(captured_at, || {
+        let mut matched = Vec::new();
+        for prep in prepared.iter().filter(|p| has_match_config(p)) {
+            let config = build_scoring_config(prep, trash_filters);
+            for release in releases.iter().filter(|r| !pair_gated_out(prep, r)) {
+                let pr = score_release(release, &config);
+                if pr.match_score.is_none() {
+                    continue;
+                }
+                let mut value = serde_json::to_value(&pr).unwrap_or_default();
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("release".into(), pr.release.guid.clone().into());
+                    obj.insert("pattern_id".into(), prep.pattern.id.to_string().into());
+                }
+                matched.push(value);
+            }
+        }
+
+        let mut candidates = HashMap::new();
+        let stats = score_prepared(
+            prepared,
+            releases,
+            source_id,
+            trash_filters,
+            None,
+            None,
+            &mut candidates,
+        );
+        let mut candidates: Vec<ReplayCandidate> = candidates
+            .into_iter()
+            .map(|((pattern_id, episode_key), entry)| ReplayCandidate {
+                pattern_id,
+                episode_key,
+                guid: entry.processed.release.guid,
+                total_score: entry.processed.total_score,
+            })
+            .collect();
+        candidates.sort_by(|a, b| {
+            (a.pattern_id, &a.episode_key).cmp(&(b.pattern_id, &b.episode_key))
+        });
+
+        let mut queue = HashMap::new();
+        score_prepared(
+            prepared,
+            releases,
+            source_id,
+            trash_filters,
+            None,
+            Some(&mut queue),
+            &mut HashMap::new(),
+        );
+        let review = queue
+            .into_iter()
+            .map(|(pattern_id, prs)| {
+                (pattern_id, prs.into_iter().map(|pr| pr.release.guid).collect())
+            })
+            .collect();
+
+        ScoringReplay {
+            matched,
+            candidates,
+            review,
+            stats,
+        }
+    })
 }
 
 /// One pattern's slice of the pooled `processed_by_pattern` map, ready to hand
@@ -1170,6 +1362,7 @@ pub async fn process_releases(
         &mut protocol_cache,
         None,
         collect_reviews.then_some(&mut processed_by_pattern),
+        None,
     )
     .await;
 
@@ -1271,6 +1464,7 @@ pub async fn process_release(
 }
 
 /// Resolved match configuration extracted from a WatchPatternRow.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct ResolvedMatchConfig {
     pub patterns: Vec<String>,
     pub match_targets: Vec<super::types::MatchTarget>,
@@ -1451,6 +1645,7 @@ async fn cleanup_orphaned_patterns(pool: &PgPool) {
 
 /// Main watch service loop - runs periodically if there are active patterns
 pub async fn run_watch_service(state: AppState) {
+    let mut capture = super::capture::ScoringCapture::from_env();
     loop {
         // Skip this cycle if backlog search is running
         if state
@@ -1583,6 +1778,7 @@ pub async fn run_watch_service(state: AppState) {
                         &mut protocol_cache,
                         coll_ref,
                         collect_reviews.then_some(&mut processed_by_pattern),
+                        capture.as_mut(),
                     )
                     .await;
                     // Collect patterns for the selection phase
@@ -1649,6 +1845,7 @@ pub async fn run_watch_service(state: AppState) {
                             &mut protocol_cache,
                             None,
                             collect_reviews.then_some(&mut processed_by_pattern),
+                            capture.as_mut(),
                         )
                         .await;
 

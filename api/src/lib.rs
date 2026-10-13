@@ -3,6 +3,7 @@
 pub mod archive;
 pub mod auth;
 pub mod backup;
+pub mod clock;
 pub mod cpu_bound;
 pub mod debrid;
 pub mod decision_log;

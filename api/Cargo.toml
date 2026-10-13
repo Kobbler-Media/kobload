@@ -100,6 +100,14 @@ http = "1.5.0"
 rustls = "0.23.43"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 nats-jobs = { path = "../../koblibs/nats-jobs" }
+# Scoring benchmarks and allocation profiling over a captured corpus
+# (docs/scoring-performance.md).
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
+dhat = "0.3.3"
+
+[[bench]]
+name = "scoring"
+harness = false
 
 [lints.clippy]
 # Route helpers that can fail early return the HTTP response they want sent, so the Err

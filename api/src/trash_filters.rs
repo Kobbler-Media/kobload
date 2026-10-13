@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -257,6 +257,11 @@ impl TrashFilterSet {
                 .map(|(g, b)| (g.to_ascii_lowercase(), *b))
                 .collect(),
         }
+    }
+
+    /// Compile a filter set from stored rows, as the cache does on load.
+    pub fn from_rows(rows: &[TrashFilterRow]) -> Self {
+        compile(rows)
     }
 
     /// Returns (blocklist_rule_count, tier_bonus_count).
@@ -636,8 +641,9 @@ fn dedup_rows(rows: &mut Vec<TrashFilterRow>) {
 // ---------------------------------------------------------------------------
 
 fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
-    // Partition rows by category.
-    let mut by_category: HashMap<&str, Vec<&TrashFilterRow>> = HashMap::new();
+    // Partition rows by category. Ordered, because `check_blocklist` reports the
+    // first matching category; with a HashMap that varied between restarts.
+    let mut by_category: BTreeMap<&str, Vec<&TrashFilterRow>> = BTreeMap::new();
     for row in rows {
         by_category.entry(&row.category).or_default().push(row);
     }

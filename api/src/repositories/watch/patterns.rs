@@ -103,7 +103,7 @@ where
 }
 
 /// Watch pattern row from database.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct WatchPatternRow {
     pub id: Uuid,
     pub source_system: String,

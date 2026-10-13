@@ -74,7 +74,7 @@ pub fn freshness_tiebreaker(release: &Release) -> f64 {
     ) else {
         return 0.0;
     };
-    let age_days = (time::OffsetDateTime::now_utc() - publish_date)
+    let age_days = (crate::clock::now_utc() - publish_date)
         .whole_days()
         .max(0) as f64;
     // Decay curve: 0.08 at 0 days, ~0.04 at 30 days, ~0.02 at 90 days, ~0.0 at 365+
@@ -1237,7 +1237,7 @@ pub fn structural_reject_with_parsed(
     // Leniency: allow grabbing up to AIR_DATE_LENIENCY_DAYS before the listed
     // air_date (timezone safety — listed dates are often US-centric, episode
     // may already be available elsewhere).
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = crate::clock::now_utc().date();
     let air_date_leniency = AIR_DATE_LENIENCY_DAYS;
     let publish_date_reject_days = match search_context {
         SearchContext::Rss => PUBLISH_DATE_BEFORE_AIR_REJECT_DAYS_RSS,
@@ -1550,8 +1550,7 @@ pub fn structural_reject_with_parsed(
                         .as_ref()
                         .and_then(|d| parse_iso_date(d))
                         .is_none_or(|date| {
-                            let cutoff =
-                                time::OffsetDateTime::now_utc().date() - time::Duration::days(30);
+                            let cutoff = crate::clock::now_utc().date() - time::Duration::days(30);
                             date > cutoff
                         })
                 }
