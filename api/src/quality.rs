@@ -876,14 +876,25 @@ pub fn merge_preferences(
 /// parse runs for every release × pattern pair in an RSS cycle, so compiling a
 /// regex per call dominated scoring time. It also left tokens like `hdr10+`
 /// unescaped, so they could never match.
+///
+/// A `.` in `word` matches any separator, as titles from indexers that swap dots
+/// for spaces ("WEB DL", "H 264") relied on the old regex's wildcard `.`.
 fn has_word(lower: &str, word: &str) -> bool {
     let Some(first_len) = word.chars().next().map(char::len_utf8) else {
         return false;
     };
+    let (anchor, rest) = word
+        .split_once('.')
+        .map_or((word, None), |(a, _)| (a, Some(&word[a.len()..])));
     let mut from = 0;
-    while let Some(offset) = lower[from..].find(word) {
+    while let Some(offset) = lower[from..].find(anchor) {
         let start = from + offset;
-        let end = start + word.len();
+        let Some(end) = rest.map_or(Some(start + anchor.len()), |rest| {
+            match_separated(lower, start + anchor.len(), rest)
+        }) else {
+            from = start + first_len;
+            continue;
+        };
         let before_ok = lower[..start]
             .chars()
             .next_back()
@@ -899,6 +910,22 @@ fn has_word(lower: &str, word: &str) -> bool {
         from = start + first_len;
     }
     false
+}
+
+fn match_separated(lower: &str, mut pos: usize, pattern: &str) -> Option<usize> {
+    for p in pattern.chars() {
+        let c = lower[pos..].chars().next()?;
+        let ok = if p == '.' {
+            c.is_whitespace() || matches!(c, '.' | '-')
+        } else {
+            c == p
+        };
+        if !ok {
+            return None;
+        }
+        pos += c.len_utf8();
+    }
+    Some(pos)
 }
 
 /// Find first matching item from a list of patterns.

@@ -67,3 +67,37 @@ fn token_at_start_and_end_of_title() {
     assert!(p.is_proper);
     assert_eq!(p.source.as_deref(), Some("hdtv"));
 }
+
+#[test]
+fn dotted_tokens_match_space_and_dash_separators() {
+    // The old regex let `.` match any character, and indexers that swap dots for
+    // spaces produce titles like these.
+    type Check = fn(&kobload_api::quality::ParsedQuality) -> bool;
+    let cases: &[(&str, Check)] = &[
+        ("Movie 2023 1080p WEB DL DDP5 1 H 264-GRP", |p| {
+            p.source.as_deref() == Some("web-dl") && p.codec.as_deref() == Some("avc")
+        }),
+        ("Movie 2023 1080p WEB Rip x265-GRP", |p| {
+            p.source.as_deref() == Some("webrip")
+        }),
+        ("Movie.2023.2160p.WEB-DL.H-265-GRP", |p| {
+            p.codec.as_deref() == Some("hevc")
+        }),
+        ("Movie 2023 2160p WEB-DL Dolby Vision HDR-GRP", |p| {
+            p.is_dolby_vision
+        }),
+        ("Movie 2023 1080p BluRay Half-SBS x264-GRP", |p| p.is_3d),
+        ("Movie 2023 1080p BluRay x264 NFO Fix-GRP", |p| p.is_nfo_fix),
+    ];
+    for (title, check) in cases {
+        let parsed = parse_quality(title);
+        assert!(check(&parsed), "{title}: {parsed:?}");
+    }
+}
+
+#[test]
+fn dotted_tokens_do_not_match_arbitrary_characters() {
+    let p = parse_quality("Movie.2023.1080p.WEBxDL.Hx264-GRP");
+    assert_ne!(p.source.as_deref(), Some("web-dl"));
+    assert_ne!(p.codec.as_deref(), Some("avc"));
+}
