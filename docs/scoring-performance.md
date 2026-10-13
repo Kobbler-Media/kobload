@@ -127,11 +127,35 @@ KOBLOAD_SCORING_CORPUS=/path/to/scoring-capture \
   cargo test --release --test scoring_replay_test -- --nocapture
 ```
 
-Verify the dataset before trusting it:
+### Is the capture ready?
 
-- Does it span several days, all sources and the busy periods?
-- Does `matched` include real candidates, rejects and sport and TV-season wants?
-- Spot-check a few candidates against what production actually grabbed.
+`scripts/scoring-corpus/capture-stats.sh data/scoring-capture` summarises a
+capture on the server without building anything. Treat it as complete enough
+when all of these hold:
+
+- **Time.** At least 5 days, and ideally the full 7-day window, so it covers a
+  weekly TV cycle and at least one F1/MotoGP race weekend (practice,
+  qualifying, sprint and race).
+- **Sources.** Every enabled source (19 in October 2026) shows fetches on most
+  days, including the 30-minute MyAnonaMouse feed and the busiest Newznab feeds.
+- **Busy periods.** Each day has a few thousand new releases. A quiet day
+  usually means an indexer was down, so extend the capture.
+- **Patterns.** More than one pattern set, meaning wants were added or
+  fulfilled during the window, and no fetches without TRaSH rows.
+- **Matches** (on the dev machine, from the replay's `--nocapture` output and
+  the golden file):
+  - a few hundred matched pairs and dozens of candidates
+  - accepts plus several reject reasons: quality, TRaSH blocklist, structural
+    mismatch, sport session mismatch, season-pack gates
+  - TV episode, TV season, movie and sport wants all represented
+- **Agreement with production.** Pick about 10 candidates from the window and
+  check what production actually grabbed for those wants. Any disagreement
+  should be explained by something outside scoring, such as already
+  downloaded, an upgrade cutoff, a hold, or a manual grab.
+- **Stable.** After blessing, the replay passes twice in a row.
+
+If one of these is missing, start a new window: delete `capture.json` and the
+other files, or point at a new directory. Don't stretch the old window.
 
 Keep that directory and its golden file as the reference for all of the work
 below.
