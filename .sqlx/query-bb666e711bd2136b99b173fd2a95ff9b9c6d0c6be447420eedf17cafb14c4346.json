@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE indexer_sources SET\n            last_failure_at = NOW(),\n            consecutive_failures = consecutive_failures + 1,\n            last_error = $2\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bb666e711bd2136b99b173fd2a95ff9b9c6d0c6be447420eedf17cafb14c4346"
+}

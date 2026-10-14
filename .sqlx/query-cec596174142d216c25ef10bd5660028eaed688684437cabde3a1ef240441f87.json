@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE indexer_sources SET\n            last_failure_at = NOW(),\n            consecutive_failures = 1,\n            last_error = $2,\n            rate_limited_until = NOW() + ($3 || ' seconds')::interval\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cec596174142d216c25ef10bd5660028eaed688684437cabde3a1ef240441f87"
+}

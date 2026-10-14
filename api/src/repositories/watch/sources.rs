@@ -432,7 +432,8 @@ where
     Ok(result.rows_affected() > 0)
 }
 
-/// Update indexer source state after check.
+/// Update indexer source state after an RSS poll. This sets the RSS poll timer,
+/// `last_check_at`.
 pub async fn update_indexer_source_state<'e, E>(
     exec: E,
     id: Uuid,
@@ -523,7 +524,11 @@ where
 }
 
 /// Record a successful request to an indexer (resets failure tracking).
-/// Also updates last_check_at for rate limiting purposes.
+///
+/// The `record_*` health helpers run for searches as well as RSS polls, so they
+/// leave `last_check_at` alone: it is the RSS poll timer, set by
+/// `update_indexer_source_state`. Bumping it on every search kept a heavily
+/// searched indexer from ever looking due for RSS.
 pub async fn record_success<'e, E>(exec: E, id: Uuid) -> Result<()>
 where
     E: Executor<'e, Database = Postgres>,
@@ -531,7 +536,6 @@ where
     sqlx::query!(
         r#"
         UPDATE indexer_sources SET
-            last_check_at = NOW(),
             last_success_at = NOW(),
             consecutive_failures = 0,
             last_error = NULL,
@@ -547,7 +551,6 @@ where
 }
 
 /// Record a failed request to an indexer (increments failure count).
-/// Also updates last_check_at for rate limiting purposes.
 pub async fn record_failure<'e, E>(exec: E, id: Uuid, error: &str) -> Result<()>
 where
     E: Executor<'e, Database = Postgres>,
@@ -555,7 +558,6 @@ where
     sqlx::query!(
         r#"
         UPDATE indexer_sources SET
-            last_check_at = NOW(),
             last_failure_at = NOW(),
             consecutive_failures = consecutive_failures + 1,
             last_error = $2
@@ -581,7 +583,6 @@ where
     sqlx::query!(
         r#"
         UPDATE indexer_sources SET
-            last_check_at = NOW(),
             last_failure_at = NOW(),
             consecutive_failures = 1,
             last_error = $2,
@@ -626,7 +627,6 @@ where
     sqlx::query!(
         r#"
         UPDATE indexer_sources SET
-            last_check_at = NOW(),
             last_failure_at = NOW(),
             consecutive_failures = 1,
             last_error = $2,
