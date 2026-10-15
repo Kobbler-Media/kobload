@@ -202,6 +202,34 @@ pub fn clean_title(name: &str) -> String {
         .to_string()
 }
 
+/// A quality/flag token at the very end of a title, preceded by at least one
+/// other word.
+static TRAILING_QUALITY_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"\s(?:{})\s*$", QUALITY_TOKENS.as_str())).unwrap()
+});
+
+/// Clean the part of a movie release name that precedes the year.
+///
+/// Unlike `clean_title`, quality/flag tokens are only stripped from the end:
+/// before the year they are title words more often than tags —
+/// "The.Odyssey.The.Real.Story.2026" must keep "Real", "Real.Steel.2011" must
+/// keep "Real". Trailing tags ("Dao.AKA.The.Blade.REPACK.1995") still go.
+/// No release-group strip either: the group trails the whole name, so here it
+/// would only eat a hyphenated last word ("Spider-Man" → "Spider").
+pub fn clean_pre_year_title(name: &str) -> String {
+    let name = strip_site_watermarks(name);
+    let name = name.replace(['.', '_'], " ");
+    let mut name = name.replace(" - ", " ");
+    while let Some(start) = TRAILING_QUALITY_TOKEN_RE.find(&name).map(|m| m.start()) {
+        name.truncate(start);
+    }
+    let name = remove_quality_brackets(&name);
+    let name = normalize_spaces(&name);
+    name.trim_end_matches(['-', '–', '—', '.', '_'])
+        .trim()
+        .to_string()
+}
+
 /// Clean an audiobook title — lighter than `clean_title`, only removes
 /// extensions, release groups, and normalizes spacing. Does NOT strip
 /// quality tokens (which would false-positive on words like "Greek",
@@ -831,6 +859,31 @@ mod tests {
         assert_eq!(clean_title("Barry - "), "Barry");
         assert_eq!(clean_title("Shrinking -"), "Shrinking");
         assert_eq!(clean_title("Show.Name.-"), "Show Name");
+    }
+
+    #[test]
+    fn test_clean_pre_year_title_keeps_mid_title_flag_words() {
+        // "Real" is a release flag token, but mid-title it's part of the name.
+        assert_eq!(
+            clean_pre_year_title("The.Odyssey.The.Real.Story"),
+            "The Odyssey The Real Story"
+        );
+        assert_eq!(clean_pre_year_title("Real.Steel"), "Real Steel");
+        assert_eq!(clean_pre_year_title("The.Italian.Job"), "The Italian Job");
+    }
+
+    #[test]
+    fn test_clean_pre_year_title_strips_trailing_tags() {
+        assert_eq!(clean_pre_year_title("Dao.AKA.The.Blade.REPACK"), "Dao AKA The Blade");
+        assert_eq!(clean_pre_year_title("Avatar.3D"), "Avatar");
+        assert_eq!(clean_pre_year_title("Movie.Name.PROPER.3D"), "Movie Name");
+        // Never strips the whole title.
+        assert_eq!(clean_pre_year_title("Limited"), "Limited");
+    }
+
+    #[test]
+    fn test_clean_pre_year_title_keeps_hyphenated_last_word() {
+        assert_eq!(clean_pre_year_title("Spider-Man"), "Spider-Man");
     }
 
     #[test]

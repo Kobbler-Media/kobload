@@ -10,7 +10,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::common::clean_title;
+use super::common::{clean_pre_year_title, clean_title};
 use super::types::{MovieParsed, ParsedMedia};
 
 // =============================================================================
@@ -122,7 +122,7 @@ fn extract_movie_title(name: &str, year_pos: Option<usize>) -> String {
         // The year regex captures digits but the preceding delimiter (e.g. '(' in "(2018)")
         // is NOT part of the capture. Trim any trailing delimiter so we don't get "Bao (".
         let title_part = name[..pos].trim_end_matches(|c: char| "([.- ".contains(c));
-        return clean_title(title_part);
+        return clean_pre_year_title(title_part);
     }
 
     // Otherwise, just clean the whole thing
@@ -247,6 +247,31 @@ mod tests {
         } else {
             panic!("Expected Movie");
         }
+    }
+
+    #[test]
+    fn test_movie_title_keeps_flag_word_mid_title() {
+        // Regression: "Real" was stripped as the REAL release flag, giving
+        // "The Odyssey The Story".
+        let (title, _, _) =
+            parse_movie("The.Odyssey.The.Real.Story.2026.1080p.FNDG.WEB-DL.AAC2.0.H.264-NYXIS");
+        assert_eq!(title, "The Odyssey The Real Story");
+
+        let (title, _, _) = parse_movie("Real.Steel.2011.1080p.BluRay.x264-GROUP");
+        assert_eq!(title, "Real Steel");
+    }
+
+    #[test]
+    fn test_movie_title_strips_trailing_flag_before_year() {
+        let (title, _, _) =
+            parse_movie("Dao.AKA.The.Blade.REPACK.1995.1080p.NF.WEB-DL.AAC2.0.x264-Gohan");
+        assert_eq!(title, "Dao AKA The Blade");
+    }
+
+    #[test]
+    fn test_movie_title_keeps_hyphenated_last_word() {
+        let (title, _, _) = parse_movie("Spider-Man.2002.1080p.BluRay.x264-GROUP");
+        assert_eq!(title, "Spider-Man");
     }
 
     #[test]

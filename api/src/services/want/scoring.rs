@@ -146,19 +146,35 @@ fn normalize_author_tokens(author: &str) -> Vec<String> {
 /// a want for either "Dao" or "The Blade". When the parsed title contains an
 /// `aka` token we compare against each split segment in addition to the full
 /// parsed title.
-fn any_title_similar(wanted: &str, alternates: Option<&[String]>, parsed: &str) -> bool {
-    if title_candidate_matches(wanted, parsed) {
+///
+/// `reject_extensions` additionally rejects a parsed title that is the wanted
+/// title plus trailing words (see [`extends_title`]). Callers only set it when
+/// the release had a year, so the parsed title is exactly the pre-year text
+/// rather than a whole name with unrecognised tags left in.
+fn any_title_similar(
+    wanted: &str,
+    alternates: Option<&[String]>,
+    parsed: &str,
+    reject_extensions: bool,
+) -> bool {
+    if title_candidate_matches(wanted, parsed, reject_extensions) {
         return true;
     }
     if let Some(alts) = alternates {
-        return alts.iter().any(|alt| title_candidate_matches(alt, parsed));
+        return alts
+            .iter()
+            .any(|alt| title_candidate_matches(alt, parsed, reject_extensions));
     }
     false
 }
 
 /// Check `wanted` against `parsed`, accounting for AKA-joined release titles.
-fn title_candidate_matches(wanted: &str, parsed: &str) -> bool {
-    if titles_similar(wanted, parsed) {
+fn title_candidate_matches(wanted: &str, parsed: &str, reject_extensions: bool) -> bool {
+    let matches = |candidate: &str| {
+        titles_similar(wanted, candidate)
+            && !(reject_extensions && extends_title(wanted, candidate))
+    };
+    if matches(parsed) {
         return true;
     }
     // Split on " aka " (case-insensitive) and try each half.
@@ -172,8 +188,76 @@ fn title_candidate_matches(wanted: &str, parsed: &str) -> bool {
         .split(|s| s.eq_ignore_ascii_case("aka"))
         .any(|segment| {
             let joined = segment.join(" ");
-            !joined.trim().is_empty() && titles_similar(wanted, &joined)
+            !joined.trim().is_empty() && matches(&joined)
         })
+}
+
+/// Words an edition tag can leave at the end of a pre-year movie title
+/// ("Movie.Directors.Cut.2024"). Mirrors `EDITION_RE` in the movie parser.
+const EDITION_WORDS: &[&str] = &[
+    "director",
+    "directors",
+    "cut",
+    "extended",
+    "edition",
+    "theatrical",
+    "unrated",
+    "uncut",
+    "imax",
+    "remastered",
+    "remaster",
+    "4k",
+    "criterion",
+    "collection",
+    "special",
+    "anniversary",
+    "collector",
+    "collectors",
+    "ultimate",
+    "final",
+    "redux",
+    "workprint",
+    "fanedit",
+    "fan",
+    "edit",
+    "regraded",
+    "hybrid",
+    "open",
+    "matte",
+];
+
+fn is_edition_word(token: &str) -> bool {
+    EDITION_WORDS.contains(&token)
+        // "30th" in "30th Anniversary"
+        || ["st", "nd", "rd", "th"].iter().any(|suffix| {
+            token
+                .strip_suffix(suffix)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
+/// True when `parsed` is the whole of `wanted` followed by extra words:
+/// "The Odyssey The Real Story" / "The Odyssey The Making of an Epic" for
+/// "The Odyssey", "Dune Part Two" for "Dune". `titles_similar` only measures
+/// overlap against the shorter title, so these companion docs and subtitled
+/// sequels pass it — and they usually share the year too.
+///
+/// A leading article is ignored on both sides (releases drop it), as are
+/// trailing edition words. A shorter release title is never an extension:
+/// releases routinely drop a TMDB subtitle.
+fn extends_title(wanted: &str, parsed: &str) -> bool {
+    fn without_article(mut tokens: Vec<String>) -> Vec<String> {
+        if tokens.len() > 1 && matches!(tokens[0].as_str(), "the" | "an") {
+            tokens.remove(0);
+        }
+        tokens
+    }
+    let wanted = without_article(normalize_title_tokens(wanted));
+    let mut parsed = without_article(normalize_title_tokens(parsed));
+    while parsed.len() > wanted.len() && parsed.last().is_some_and(|t| is_edition_word(t)) {
+        parsed.pop();
+    }
+    !wanted.is_empty() && parsed.len() > wanted.len() && parsed.starts_with(&wanted)
 }
 
 /// Returns the `parse_release` media_kind used by structural gates for a given MediaWant.
@@ -1156,7 +1240,12 @@ pub fn structural_reject_with_parsed(
         && let ParsedMedia::Movie(movie) = &parsed.media
         && !wanted.is_empty()
         && !movie.title.is_empty()
-        && !any_title_similar(wanted, alternate_titles.as_deref(), &movie.title)
+        && !any_title_similar(
+            wanted,
+            alternate_titles.as_deref(),
+            &movie.title,
+            movie.year.is_some(),
+        )
     {
         return Some(StructuralRejectReason::TitleMismatch);
     }
@@ -5351,6 +5440,116 @@ mod tests {
             make_release("Harry.Potter.and.the.Philosophers.Stone.2001.1080p.BluRay.x264-REFiNED");
         let mw = movie_want("Harry Potter and the Philosophers Stone", Some(2001), None);
         assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),);
+    }
+
+    #[test]
+    fn test_movie_rejects_companion_docs_extending_wanted_title() {
+        // Regression: these were grabbed for a "The Odyssey (2026)" want — the
+        // wanted title is a prefix and the year matches.
+        let mw = movie_want("The Odyssey", Some(2026), None);
+        for title in [
+            "The.Odyssey.The.Real.Story.2026.1080p.FNDG.WEB-DL.AAC2.0.H.264-NYXIS",
+            "The.Odyssey.The.Making.of.an.Epic.2026.1080p.WEB.h264-EDITH",
+            "The.Odyssey.The.Making.of.an.Epic.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-Kitsune",
+        ] {
+            let release = make_release_dated(title, "2026-10-14T00:00:00Z");
+            assert_eq!(
+                structural_reject(&release, Some(&mw), SearchContext::default()),
+                Some(StructuralRejectReason::TitleMismatch),
+                "{title}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_movie_rejects_subtitled_sequel_for_shorter_want() {
+        let release = make_release("Dune.Part.Two.2024.1080p.WEB-DL.x264-GROUP");
+        let mw = movie_want("Dune", Some(2024), None);
+        assert_eq!(
+            structural_reject(&release, Some(&mw), SearchContext::default()),
+            Some(StructuralRejectReason::TitleMismatch),
+        );
+    }
+
+    #[test]
+    fn test_movie_accepts_exact_title_and_dropped_article() {
+        let mw = movie_want("The Odyssey", Some(2026), None);
+        for title in [
+            "The.Odyssey.2026.1080p.WEB-DL.x264-GROUP",
+            "Odyssey.2026.1080p.WEB-DL.x264-GROUP",
+        ] {
+            let release = make_release_dated(title, "2026-10-14T00:00:00Z");
+            assert!(
+                structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
+                "{title}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_movie_accepts_edition_words_before_year() {
+        let mw = movie_want("Blade Runner", Some(1982), None);
+        for title in [
+            "Blade.Runner.Final.Cut.1982.1080p.BluRay.x264-GROUP",
+            "Blade.Runner.Directors.Cut.1982.1080p.BluRay.x264-GROUP",
+            "Blade.Runner.30th.Anniversary.Edition.1982.1080p.BluRay.x264-GROUP",
+        ] {
+            let release = make_release(title);
+            assert!(
+                structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
+                "{title}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_movie_accepts_release_dropping_tmdb_subtitle() {
+        // Shorter release title is not an extension.
+        let release = make_release("Mission.Impossible.Dead.Reckoning.2023.1080p.WEB-DL-GROUP");
+        let mw = movie_want("Mission Impossible Dead Reckoning Part One", Some(2023), None);
+        assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none());
+    }
+
+    #[test]
+    fn test_movie_extended_title_accepted_via_alternate_title() {
+        let release = make_release("Star.Wars.Episode.IV.A.New.Hope.1977.1080p.BluRay-GROUP");
+        assert_eq!(
+            structural_reject(
+                &release,
+                Some(&movie_want("Star Wars", Some(1977), None)),
+                SearchContext::default(),
+            ),
+            Some(StructuralRejectReason::TitleMismatch),
+        );
+        let mw = movie_want(
+            "Star Wars",
+            Some(1977),
+            Some(vec!["Star Wars: Episode IV - A New Hope".to_string()]),
+        );
+        assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none());
+    }
+
+    #[test]
+    fn test_movie_aka_segment_still_matches_shorter_want() {
+        let release =
+            make_release("Dao.AKA.The.Blade.REPACK.1995.1080p.NF.WEB-DL.AAC2.0.x264-Gohan");
+        for wanted in ["Dao", "The Blade"] {
+            let mw = movie_want(wanted, Some(1995), None);
+            assert!(
+                structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
+                "{wanted}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_movie_yearless_release_skips_extension_check() {
+        // Without a year the parsed title is the whole cleaned name, which can
+        // carry unrecognised tags; leave those to fuzzy scoring.
+        let release =
+            make_release_dated("Movie.Name.NORDiC.1080p.WEB-DL-GROUP", "2026-03-01T00:00:00Z");
+        let mw = movie_want("Movie Name", Some(2026), None);
+        assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none());
     }
 
     // ── Book ─────────────────────────────────────────────────────────
