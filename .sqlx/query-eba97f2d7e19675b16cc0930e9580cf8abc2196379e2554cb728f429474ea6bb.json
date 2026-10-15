@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH confirmed AS (\n            UPDATE watch_matches wm\n            SET import_confirmed_at = NOW()\n            FROM downloads d\n            WHERE wm.download_id = $1\n              AND d.id = wm.download_id\n              AND wm.import_confirmed_at IS NULL\n              AND d.status NOT IN ('failed', 'cancelled')\n            RETURNING wm.id, wm.watch_pattern_id, wm.episode_key, wm.release_data,\n                      wm.created_at\n        )\n        UPDATE watch_matches old\n        SET action = 'replaced'\n        FROM confirmed new\n        WHERE old.watch_pattern_id = new.watch_pattern_id\n          AND old.id <> new.id\n          AND old.created_at < new.created_at\n          AND old.import_confirmed_at IS NOT NULL\n          AND old.rejected = FALSE\n          AND old.action <> 'replaced'\n          AND (\n              old.episode_key IS NOT DISTINCT FROM new.episode_key\n              OR old.download_id::text = new.release_data->>'replaces_download_id'\n          )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eba97f2d7e19675b16cc0930e9580cf8abc2196379e2554cb728f429474ea6bb"
+}

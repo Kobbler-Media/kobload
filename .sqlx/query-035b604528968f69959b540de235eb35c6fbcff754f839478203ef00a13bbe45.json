@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT release_title\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND (episode_key = $2 OR episode_key = 'SEASON_PACK')\n          AND import_confirmed_at IS NOT NULL\n          AND quality_score IS NOT NULL\n          AND rejected = FALSE\n          AND action <> 'replaced'\n        ORDER BY quality_score DESC\n        LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "release_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "release_title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "035b604528968f69959b540de235eb35c6fbcff754f839478203ef00a13bbe45"
+}

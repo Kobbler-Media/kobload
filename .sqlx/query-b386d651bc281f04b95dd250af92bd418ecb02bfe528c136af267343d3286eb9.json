@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT download_id as \"download_id?\"\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND import_confirmed_at IS NOT NULL\n          AND rejected = FALSE\n        ORDER BY import_confirmed_at DESC\n        LIMIT 1",
+  "query": "SELECT download_id as \"download_id?\"\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND import_confirmed_at IS NOT NULL\n          AND rejected = FALSE\n          AND action <> 'replaced'\n        ORDER BY import_confirmed_at DESC\n        LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       true
     ]
   },
-  "hash": "2631eb6cf7e294b09686ad424db9d5a0166276c25121bf464501b53360dd1674"
+  "hash": "b386d651bc281f04b95dd250af92bd418ecb02bfe528c136af267343d3286eb9"
 }

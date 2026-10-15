@@ -73,9 +73,14 @@ async fn searches_do_not_delay_the_next_rss_poll() {
     let polled = polled_20_minutes_ago(pool, id).await;
     assert!(is_due(pool, id).await);
 
-    watch_repo::record_success(pool, id).await.expect("search ok");
+    watch_repo::record_success(pool, id)
+        .await
+        .expect("search ok");
     assert_eq!(last_check_at(pool, id).await, Some(polled));
-    assert!(is_due(pool, id).await, "a successful search must not reset the RSS timer");
+    assert!(
+        is_due(pool, id).await,
+        "a successful search must not reset the RSS timer"
+    );
 
     watch_repo::record_failure(pool, id, "search timed out")
         .await

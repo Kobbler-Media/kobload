@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            wp.id as pattern_id,\n            EXISTS(\n                SELECT 1 FROM watch_matches wm\n                JOIN downloads d ON d.id = wm.download_id\n                WHERE wm.watch_pattern_id = wp.id\n                  AND wm.download_id IS NOT NULL\n                  AND d.status NOT IN ('failed', 'cancelled')\n                  AND wm.import_confirmed_at IS NULL\n                  AND wm.rejected = FALSE\n            ) as \"has_active!\",\n            EXISTS(\n                SELECT 1 FROM watch_matches\n                WHERE watch_pattern_id = wp.id\n                  AND import_confirmed_at IS NOT NULL\n                  AND rejected = FALSE\n                  AND action <> 'replaced'\n            ) as \"has_imported!\",\n            EXISTS(\n                SELECT 1 FROM watch_matches\n                WHERE watch_pattern_id = wp.id\n                  AND held = TRUE\n            ) as \"has_held!\"\n        FROM watch_patterns wp\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pattern_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_patterns",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "has_active!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "has_imported!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "has_held!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a4e9599e5d5e65b32b969f26ce0cd96d7f5a3115956941f33c8db540e90468a1"
+}

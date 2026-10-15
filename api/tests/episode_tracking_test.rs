@@ -10,6 +10,7 @@ mod common;
 
 use common::TestServer;
 use kobload_api::repositories::{downloads as downloads_repo, watch as watch_repo};
+use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -621,7 +622,7 @@ async fn test_list_status_returns_to_searching_after_import_rejected() {
             &json!({}),
         )
         .await
-        .assert_ok();
+        .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(list_status(&server, pattern_id).await, "searching");
 }
 
@@ -683,7 +684,7 @@ async fn test_new_movie_import_replaces_previous_import() {
             &json!({}),
         )
         .await
-        .assert_ok();
+        .assert_status(StatusCode::NO_CONTENT);
     assert!(
         !watch_repo::pattern_has_imported_download(pool, pattern_id)
             .await
@@ -801,8 +802,7 @@ async fn test_late_confirmation_of_older_grab_does_not_replace_newer() {
     let pattern_id = create_movie_pattern(pool).await;
 
     let (older, older_dl) =
-        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.A", None, false)
-            .await;
+        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.A", None, false).await;
     let (newer, _) =
         insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.B", None, true).await;
 

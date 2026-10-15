@@ -5506,7 +5506,11 @@ mod tests {
     fn test_movie_accepts_release_dropping_tmdb_subtitle() {
         // Shorter release title is not an extension.
         let release = make_release("Mission.Impossible.Dead.Reckoning.2023.1080p.WEB-DL-GROUP");
-        let mw = movie_want("Mission Impossible Dead Reckoning Part One", Some(2023), None);
+        let mw = movie_want(
+            "Mission Impossible Dead Reckoning Part One",
+            Some(2023),
+            None,
+        );
         assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none());
     }
 
@@ -5546,8 +5550,10 @@ mod tests {
     fn test_movie_yearless_release_skips_extension_check() {
         // Without a year the parsed title is the whole cleaned name, which can
         // carry unrecognised tags; leave those to fuzzy scoring.
-        let release =
-            make_release_dated("Movie.Name.NORDiC.1080p.WEB-DL-GROUP", "2026-03-01T00:00:00Z");
+        let release = make_release_dated(
+            "Movie.Name.NORDiC.1080p.WEB-DL-GROUP",
+            "2026-03-01T00:00:00Z",
+        );
         let mw = movie_want("Movie Name", Some(2026), None);
         assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none());
     }

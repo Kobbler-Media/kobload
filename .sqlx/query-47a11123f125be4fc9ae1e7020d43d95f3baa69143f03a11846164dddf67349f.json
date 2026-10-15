@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT download_id as \"download_id?\"\n        FROM watch_matches\n        WHERE watch_pattern_id = $1\n          AND (episode_key = $2 OR episode_key = 'SEASON_PACK')\n          AND import_confirmed_at IS NOT NULL\n          AND rejected = FALSE\n          AND action <> 'replaced'\n        ORDER BY import_confirmed_at DESC\n        LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "download_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "download_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "47a11123f125be4fc9ae1e7020d43d95f3baa69143f03a11846164dddf67349f"
+}

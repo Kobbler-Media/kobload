@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT DISTINCT wp.id, wp.source_system, wp.source_id,\n                  wp.upgrade_allowed as \"upgrade_allowed!\"\n        FROM watch_patterns wp\n        JOIN watch_matches wm ON wm.watch_pattern_id = wp.id\n        WHERE wp.enabled = TRUE\n          AND wp.upgrade_until IS NULL\n          AND wm.rejected = FALSE\n          AND wm.import_confirmed_at IS NOT NULL\n          AND (wp.media_want IS NULL OR wp.media_want->>'kind' != 'tv_season')",
+  "query": "SELECT DISTINCT wp.id, wp.source_system, wp.source_id,\n                  wp.upgrade_allowed as \"upgrade_allowed!\"\n        FROM watch_patterns wp\n        JOIN watch_matches wm ON wm.watch_pattern_id = wp.id\n        WHERE wp.enabled = TRUE\n          AND wp.upgrade_until IS NULL\n          AND wm.rejected = FALSE\n          AND wm.action <> 'replaced'\n          AND wm.import_confirmed_at IS NOT NULL\n          AND (wp.media_want IS NULL OR wp.media_want->>'kind' != 'tv_season')",
   "describe": {
     "columns": [
       {
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "f081a1a80f1e17f8f3fabd3118b0c882ae26b264a546522576106679f1643924"
+  "hash": "12151ca4c5bfaf654070bd0d00dd0b5447fe8ef7ea1d2a60d22c7b90188f8328"
 }

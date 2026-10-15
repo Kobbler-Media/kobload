@@ -204,9 +204,8 @@ pub fn clean_title(name: &str) -> String {
 
 /// A quality/flag token at the very end of a title, preceded by at least one
 /// other word.
-static TRAILING_QUALITY_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"\s(?:{})\s*$", QUALITY_TOKENS.as_str())).unwrap()
-});
+static TRAILING_QUALITY_TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"\s(?:{})\s*$", QUALITY_TOKENS.as_str())).unwrap());
 
 /// Clean the part of a movie release name that precedes the year.
 ///
@@ -874,7 +873,10 @@ mod tests {
 
     #[test]
     fn test_clean_pre_year_title_strips_trailing_tags() {
-        assert_eq!(clean_pre_year_title("Dao.AKA.The.Blade.REPACK"), "Dao AKA The Blade");
+        assert_eq!(
+            clean_pre_year_title("Dao.AKA.The.Blade.REPACK"),
+            "Dao AKA The Blade"
+        );
         assert_eq!(clean_pre_year_title("Avatar.3D"), "Avatar");
         assert_eq!(clean_pre_year_title("Movie.Name.PROPER.3D"), "Movie Name");
         // Never strips the whole title.
