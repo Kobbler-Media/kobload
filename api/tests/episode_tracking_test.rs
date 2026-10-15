@@ -78,6 +78,29 @@ async fn insert_match_with_download(
     episode_key: Option<&str>,
     imported: bool,
 ) -> (Uuid, Uuid) {
+    insert_match_with_download_data(
+        pool,
+        client_id,
+        pattern_id,
+        release_title,
+        episode_key,
+        imported,
+        json!({}),
+    )
+    .await
+}
+
+/// [`insert_match_with_download`] with explicit `release_data` (e.g. an
+/// upgrade's `replaces_download_id`).
+async fn insert_match_with_download_data(
+    pool: &sqlx::PgPool,
+    client_id: Uuid,
+    pattern_id: Uuid,
+    release_title: &str,
+    episode_key: Option<&str>,
+    imported: bool,
+    release_data: serde_json::Value,
+) -> (Uuid, Uuid) {
     // Create a real download
     let download_id = downloads_repo::create_download(
         pool,
@@ -101,7 +124,7 @@ async fn insert_match_with_download(
         indexer_source_id: None,
         release_guid: &format!("guid-{}", Uuid::now_v7()),
         release_title,
-        release_data: Some(&json!({})),
+        release_data: Some(&release_data),
         match_score: 0.9,
         matched_pattern: "DTF St Louis S01",
         action: "downloaded",
@@ -526,6 +549,20 @@ async fn test_episode_key_extraction_various_formats() {
 // Pattern List Status Tests
 // =============================================================================
 
+async fn create_movie_pattern(pool: &sqlx::PgPool) -> Uuid {
+    let pattern_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO watch_patterns (id, source_system, source_id, callback_url, patterns, media_want, match_mode, auto_download, enabled, upgrade_allowed)
+         VALUES ($1, 'kobbler', 'movie_1', 'http://localhost/callback', '{}', $2, 'fuzzy', true, true, true)"
+    )
+    .bind(pattern_id)
+    .bind(json!({"kind": "movie", "title": "The Odyssey", "year": 2026}))
+    .execute(pool)
+    .await
+    .expect("create pattern");
+    pattern_id
+}
+
 async fn list_status(server: &TestServer, pattern_id: Uuid) -> String {
     let resp = server.admin_client().get("/api/v1/watch?limit=200").await;
     resp.assert_ok();
@@ -549,16 +586,7 @@ async fn test_list_status_returns_to_searching_after_import_rejected() {
     let pool = &server.pool;
     let client_id = ensure_download_client(pool).await;
 
-    let pattern_id = Uuid::now_v7();
-    sqlx::query(
-        "INSERT INTO watch_patterns (id, source_system, source_id, callback_url, patterns, media_want, match_mode, auto_download, enabled, upgrade_allowed)
-         VALUES ($1, 'kobbler', 'movie_reject', 'http://localhost/callback', '{}', $2, 'fuzzy', true, true, true)"
-    )
-    .bind(pattern_id)
-    .bind(json!({"kind": "movie", "title": "The Odyssey", "year": 2026}))
-    .execute(pool)
-    .await
-    .expect("create pattern");
+    let pattern_id = create_movie_pattern(pool).await;
 
     assert_eq!(list_status(&server, pattern_id).await, "searching");
 
@@ -595,4 +623,208 @@ async fn test_list_status_returns_to_searching_after_import_rejected() {
         .await
         .assert_ok();
     assert_eq!(list_status(&server, pattern_id).await, "searching");
+}
+
+// =============================================================================
+// Import Replacement Tests
+// =============================================================================
+
+async fn match_action(pool: &sqlx::PgPool, match_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT action FROM watch_matches WHERE id = $1")
+        .bind(match_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// A movie upgrade replaces the earlier import, so rejecting the upgrade leaves
+/// nothing imported and the pattern searches again. Previously the replaced
+/// (and deleted) earlier copy still counted and kept it "upgrading".
+#[tokio::test]
+async fn test_new_movie_import_replaces_previous_import() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+    let pattern_id = create_movie_pattern(pool).await;
+
+    let (ts_match, ts_dl) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "The.Odyssey.2026.1080p.TS-Custom",
+        None,
+        true,
+    )
+    .await;
+    let (web_match, web_dl) = insert_match_with_download_data(
+        pool,
+        client_id,
+        pattern_id,
+        "The.Odyssey.The.Real.Story.2026.1080p.WEB-DL-NYXIS",
+        None,
+        true,
+        json!({"replaces_download_id": ts_dl.to_string()}),
+    )
+    .await;
+
+    assert_eq!(match_action(pool, ts_match).await, "replaced");
+    assert_eq!(match_action(pool, web_match).await, "downloaded");
+    assert_eq!(
+        watch_repo::get_latest_imported_download_for_pattern(pool, pattern_id)
+            .await
+            .unwrap(),
+        Some(web_dl)
+    );
+
+    server
+        .admin_client()
+        .post_json(
+            &format!("/api/v1/watch/matches/{web_match}/reject"),
+            &json!({}),
+        )
+        .await
+        .assert_ok();
+    assert!(
+        !watch_repo::pattern_has_imported_download(pool, pattern_id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(list_status(&server, pattern_id).await, "searching");
+}
+
+/// Replacement doesn't depend on `replaces_download_id` for single-file wants:
+/// any later import replaces the earlier one.
+#[tokio::test]
+async fn test_movie_import_without_replaces_id_still_replaces() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+    let pattern_id = create_movie_pattern(pool).await;
+
+    let (first, _) =
+        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.A", None, true).await;
+    let (second, _) =
+        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.B", None, true).await;
+
+    assert_eq!(match_action(pool, first).await, "replaced");
+    assert_eq!(match_action(pool, second).await, "downloaded");
+}
+
+#[tokio::test]
+async fn test_episode_import_replaces_only_same_episode() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+    let pattern_id = create_tv_season_pattern(pool).await;
+
+    let (e01_old, _) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "DTF.St.Louis.S01E01.720p",
+        Some("S01E01"),
+        true,
+    )
+    .await;
+    let (e02, _) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "DTF.St.Louis.S01E02.720p",
+        Some("S01E02"),
+        true,
+    )
+    .await;
+    let (e01_new, _) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "DTF.St.Louis.S01E01.1080p",
+        Some("S01E01"),
+        true,
+    )
+    .await;
+    // A pack covers E02 but doesn't say it replaces it, so E02 stays.
+    let (pack, _) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "DTF.St.Louis.S01.1080p",
+        Some("SEASON_PACK"),
+        true,
+    )
+    .await;
+
+    assert_eq!(match_action(pool, e01_old).await, "replaced");
+    assert_eq!(match_action(pool, e01_new).await, "downloaded");
+    assert_eq!(match_action(pool, e02).await, "downloaded");
+    assert_eq!(match_action(pool, pack).await, "downloaded");
+}
+
+#[tokio::test]
+async fn test_explicit_replaces_download_id_crosses_episode_keys() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+    let pattern_id = create_tv_season_pattern(pool).await;
+
+    let (pack, pack_dl) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "DTF.St.Louis.S01.720p",
+        Some("SEASON_PACK"),
+        true,
+    )
+    .await;
+    insert_match_with_download_data(
+        pool,
+        client_id,
+        pattern_id,
+        "DTF.St.Louis.S01E01.1080p",
+        Some("S01E01"),
+        true,
+        json!({"replaces_download_id": pack_dl.to_string()}),
+    )
+    .await;
+
+    assert_eq!(match_action(pool, pack).await, "replaced");
+}
+
+/// A confirmation arriving late for an older grab must not replace the newer
+/// import that already landed.
+#[tokio::test]
+async fn test_late_confirmation_of_older_grab_does_not_replace_newer() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+    let pattern_id = create_movie_pattern(pool).await;
+
+    let (older, older_dl) =
+        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.A", None, false)
+            .await;
+    let (newer, _) =
+        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.B", None, true).await;
+
+    watch_repo::mark_match_import_confirmed(pool, older_dl)
+        .await
+        .unwrap();
+
+    assert_eq!(match_action(pool, newer).await, "downloaded");
+    assert_eq!(match_action(pool, older).await, "downloaded");
+}
+
+#[tokio::test]
+async fn test_rejected_import_is_not_relabelled_replaced() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+    let pattern_id = create_movie_pattern(pool).await;
+
+    let (first, _) =
+        insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.A", None, true).await;
+    watch_repo::reject_match(pool, first, None).await.unwrap();
+    insert_match_with_download(pool, client_id, pattern_id, "The.Odyssey.B", None, true).await;
+
+    assert_eq!(match_action(pool, first).await, "rejected");
 }

@@ -793,6 +793,7 @@ where
             WHERE wm.watch_pattern_id = $1
               AND wm.import_confirmed_at IS NOT NULL
               AND wm.rejected = FALSE
+              AND wm.action <> 'replaced'
               AND (d.id IS NULL OR d.status NOT IN ('failed', 'cancelled'))
         ) as "exists!"
         "#,
@@ -839,7 +840,8 @@ where
         WHERE watch_pattern_id = $1
           AND import_confirmed_at IS NOT NULL
           AND quality_score IS NOT NULL
-          AND rejected = FALSE"#,
+          AND rejected = FALSE
+          AND action <> 'replaced'"#,
         pattern_id
     )
     .fetch_one(exec)
@@ -864,6 +866,7 @@ where
         WHERE watch_pattern_id = $1
           AND import_confirmed_at IS NOT NULL
           AND rejected = FALSE
+          AND action <> 'replaced'
         ORDER BY import_confirmed_at DESC
         LIMIT 1"#,
         pattern_id
@@ -959,7 +962,8 @@ where
     Ok(row.and_then(|r| r.watch_pattern_id.map(|pid| (pid, r.release_title))))
 }
 
-/// Mark watch matches as import-confirmed for a given download.
+/// Mark watch matches as import-confirmed for a given download, and mark the
+/// imports it replaced as `action = 'replaced'`.
 ///
 /// Called when `confirm_import` succeeds on the downloads table.
 /// This preserves import state on the watch_match row so it survives
@@ -968,18 +972,44 @@ where
 /// Joins `downloads` so a `failed`/`cancelled` download can never be marked
 /// imported — the stamp gates per-episode re-search, so a late confirmation
 /// racing a content-validation failure would otherwise strand the episode.
+///
+/// Replacement: the importer swaps the old file out, so an earlier import for
+/// the same slot no longer describes anything on disk. Left counted, it kept a
+/// pattern "upgrading" after the user rejected the newer copy, against a file
+/// that was already gone. A slot is the episode key (NULL for movies and other
+/// single-file wants), plus whatever download the match explicitly
+/// `replaces_download_id` — an episode upgrading a season pack. Only matches
+/// created before the newly confirmed one are replaced, so a late confirmation
+/// of an older grab can't knock out the newer import.
 pub async fn mark_match_import_confirmed<'e, E>(exec: E, download_id: Uuid) -> Result<()>
 where
     E: Executor<'e, Database = Postgres>,
 {
     sqlx::query!(
-        r#"UPDATE watch_matches wm
-        SET import_confirmed_at = NOW()
-        FROM downloads d
-        WHERE wm.download_id = $1
-          AND d.id = wm.download_id
-          AND wm.import_confirmed_at IS NULL
-          AND d.status NOT IN ('failed', 'cancelled')"#,
+        r#"WITH confirmed AS (
+            UPDATE watch_matches wm
+            SET import_confirmed_at = NOW()
+            FROM downloads d
+            WHERE wm.download_id = $1
+              AND d.id = wm.download_id
+              AND wm.import_confirmed_at IS NULL
+              AND d.status NOT IN ('failed', 'cancelled')
+            RETURNING wm.id, wm.watch_pattern_id, wm.episode_key, wm.release_data,
+                      wm.created_at
+        )
+        UPDATE watch_matches old
+        SET action = 'replaced'
+        FROM confirmed new
+        WHERE old.watch_pattern_id = new.watch_pattern_id
+          AND old.id <> new.id
+          AND old.created_at < new.created_at
+          AND old.import_confirmed_at IS NOT NULL
+          AND old.rejected = FALSE
+          AND old.action <> 'replaced'
+          AND (
+              old.episode_key IS NOT DISTINCT FROM new.episode_key
+              OR old.download_id::text = new.release_data->>'replaces_download_id'
+          )"#,
         download_id,
     )
     .execute(exec)
@@ -1044,6 +1074,7 @@ pub async fn episode_has_imported_download(
               AND (wm.episode_key = $2 OR wm.episode_key = 'SEASON_PACK')
               AND wm.import_confirmed_at IS NOT NULL
               AND wm.rejected = FALSE
+              AND wm.action <> 'replaced'
               AND (d.id IS NULL OR d.status NOT IN ('failed', 'cancelled'))
         ) as "exists!"
         "#,
@@ -1068,7 +1099,8 @@ pub async fn get_best_imported_quality_for_episode(
           AND (episode_key = $2 OR episode_key = 'SEASON_PACK')
           AND import_confirmed_at IS NOT NULL
           AND quality_score IS NOT NULL
-          AND rejected = FALSE"#,
+          AND rejected = FALSE
+          AND action <> 'replaced'"#,
         pattern_id,
         episode_key,
     )
@@ -1095,6 +1127,7 @@ pub async fn get_best_imported_title_for_episode(
           AND import_confirmed_at IS NOT NULL
           AND quality_score IS NOT NULL
           AND rejected = FALSE
+          AND action <> 'replaced'
         ORDER BY quality_score DESC
         LIMIT 1"#,
         pattern_id,
@@ -1118,6 +1151,7 @@ pub async fn get_best_imported_title_for_pattern(
           AND import_confirmed_at IS NOT NULL
           AND quality_score IS NOT NULL
           AND rejected = FALSE
+          AND action <> 'replaced'
         ORDER BY quality_score DESC
         LIMIT 1"#,
         pattern_id,
@@ -1140,6 +1174,7 @@ pub async fn get_latest_imported_download_for_episode(
           AND (episode_key = $2 OR episode_key = 'SEASON_PACK')
           AND import_confirmed_at IS NOT NULL
           AND rejected = FALSE
+          AND action <> 'replaced'
         ORDER BY import_confirmed_at DESC
         LIMIT 1"#,
         pattern_id,
@@ -1161,7 +1196,8 @@ pub async fn get_imported_episode_keys(
         WHERE watch_pattern_id = $1
           AND episode_key IS NOT NULL
           AND import_confirmed_at IS NOT NULL
-          AND rejected = FALSE"#,
+          AND rejected = FALSE
+          AND action <> 'replaced'"#,
         pattern_id,
     )
     .fetch_all(pool)
@@ -1251,6 +1287,7 @@ where
                 WHERE watch_pattern_id = wp.id
                   AND import_confirmed_at IS NOT NULL
                   AND rejected = FALSE
+                  AND action <> 'replaced'
             ) as "has_imported!",
             EXISTS(
                 SELECT 1 FROM watch_matches

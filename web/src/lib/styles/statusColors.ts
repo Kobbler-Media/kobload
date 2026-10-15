@@ -63,6 +63,7 @@ const matchActionMap: Record<string, { bg: string; color: string; label: string 
   held: { bg: '#a855f7', color: '#fff', label: 'Held' },
   skipped: { bg: '#eab308', color: '#000', label: 'Skipped' },
   upgrade: { bg: '#8b5cf6', color: '#fff', label: 'Upgrade' },
+  replaced: { bg: '#6b7280', color: '#fff', label: 'Replaced' },
   rejected: { bg: '#ef4444', color: '#fff', label: 'Rejected' },
   error: { bg: '#ef4444', color: '#fff', label: 'Error' }
 };

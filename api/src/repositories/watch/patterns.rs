@@ -923,6 +923,7 @@ where
         WHERE wp.enabled = TRUE
           AND wp.upgrade_until IS NULL
           AND wm.rejected = FALSE
+          AND wm.action <> 'replaced'
           AND wm.import_confirmed_at IS NOT NULL
           AND (wp.media_want IS NULL OR wp.media_want->>'kind' != 'tv_season')"#
     )
