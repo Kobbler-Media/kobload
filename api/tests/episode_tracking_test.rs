@@ -521,3 +521,78 @@ async fn test_episode_key_extraction_various_formats() {
         &eps
     ));
 }
+
+// =============================================================================
+// Pattern List Status Tests
+// =============================================================================
+
+async fn list_status(server: &TestServer, pattern_id: Uuid) -> String {
+    let resp = server.admin_client().get("/api/v1/watch?limit=200").await;
+    resp.assert_ok();
+    let body: serde_json::Value = resp.json();
+    body["items"]
+        .as_array()
+        .expect("items should be an array")
+        .iter()
+        .find(|p| p["id"] == pattern_id.to_string())
+        .expect("pattern should be listed")["status"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Rejecting a pattern's only import must put it back to "searching" — the UI
+/// showed "upgrading" for it because the list status didn't carry imports.
+#[tokio::test]
+async fn test_list_status_returns_to_searching_after_import_rejected() {
+    let server = TestServer::start().await;
+    let pool = &server.pool;
+    let client_id = ensure_download_client(pool).await;
+
+    let pattern_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO watch_patterns (id, source_system, source_id, callback_url, patterns, media_want, match_mode, auto_download, enabled, upgrade_allowed)
+         VALUES ($1, 'kobbler', 'movie_reject', 'http://localhost/callback', '{}', $2, 'fuzzy', true, true, true)"
+    )
+    .bind(pattern_id)
+    .bind(json!({"kind": "movie", "title": "The Odyssey", "year": 2026}))
+    .execute(pool)
+    .await
+    .expect("create pattern");
+
+    assert_eq!(list_status(&server, pattern_id).await, "searching");
+
+    let (match_id, _) = insert_match_with_download(
+        pool,
+        client_id,
+        pattern_id,
+        "The.Odyssey.The.Real.Story.2026.1080p.WEB-DL-NYXIS",
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(list_status(&server, pattern_id).await, "satisfied");
+
+    // Pattern updates are broadcast to the UI's stream with this same body;
+    // it used to report "searching" here because it ignored the import.
+    let resp = server
+        .admin_client()
+        .patch_json(
+            &format!("/api/v1/watch/{pattern_id}"),
+            &json!({"enabled": true}),
+        )
+        .await;
+    resp.assert_ok();
+    let body: serde_json::Value = resp.json();
+    assert_eq!(body["status"], "satisfied");
+
+    server
+        .admin_client()
+        .post_json(
+            &format!("/api/v1/watch/matches/{match_id}/reject"),
+            &json!({}),
+        )
+        .await
+        .assert_ok();
+    assert_eq!(list_status(&server, pattern_id).await, "searching");
+}

@@ -29,6 +29,60 @@ fn default_pattern_limit() -> i64 {
     50
 }
 
+/// `From<WatchPatternRow>` can't see downloads, so on its own it reports every
+/// pattern with an import as "searching". Responses that reach the UI (list,
+/// stream snapshot, stream updates) go through one of these instead.
+fn apply_download_state(
+    resp: &mut WatchPatternResponse,
+    ds: Option<&watch_repo::PatternDownloadState>,
+) {
+    resp.status = compute_pattern_status(
+        resp.enabled,
+        resp.upgrade_allowed,
+        resp.upgrade_until,
+        ds.is_some_and(|s| s.has_active),
+        ds.is_some_and(|s| s.has_imported),
+        ds.is_some_and(|s| s.has_held),
+    );
+}
+
+async fn with_download_states(
+    pool: &sqlx::PgPool,
+    mut items: Vec<WatchPatternResponse>,
+) -> Vec<WatchPatternResponse> {
+    let download_states = watch_repo::batch_pattern_download_state(pool)
+        .await
+        .unwrap_or_default();
+    let state_map: std::collections::HashMap<uuid::Uuid, &watch_repo::PatternDownloadState> =
+        download_states.iter().map(|s| (s.pattern_id, s)).collect();
+    for resp in &mut items {
+        let ds = state_map.get(&resp.id).copied();
+        apply_download_state(resp, ds);
+    }
+    items
+}
+
+async fn with_download_state(
+    pool: &sqlx::PgPool,
+    mut resp: WatchPatternResponse,
+) -> WatchPatternResponse {
+    let id = resp.id;
+    let ds = watch_repo::PatternDownloadState {
+        pattern_id: id,
+        has_active: watch_repo::pattern_has_active_download(pool, id)
+            .await
+            .unwrap_or(false),
+        has_imported: watch_repo::pattern_has_imported_download(pool, id)
+            .await
+            .unwrap_or(false),
+        has_held: watch_repo::pattern_has_held_match(pool, id)
+            .await
+            .unwrap_or(false),
+    };
+    apply_download_state(&mut resp, Some(&ds));
+    resp
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct WatchListQuery {
     #[serde(default)]
@@ -215,35 +269,11 @@ pub(super) async fn list_watch_patterns(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Batch-fetch download state for all patterns
-    let download_states = watch_repo::batch_pattern_download_state(&state.pool)
-        .await
-        .unwrap_or_default();
-    let state_map: std::collections::HashMap<uuid::Uuid, &watch_repo::PatternDownloadState> =
-        download_states.iter().map(|s| (s.pattern_id, s)).collect();
-
-    let items: Vec<WatchPatternResponse> = list_response
-        .items
-        .into_iter()
-        .map(|p| {
-            let ds = state_map.get(&p.id);
-            let has_active = ds.is_some_and(|s| s.has_active);
-            let has_imported = ds.is_some_and(|s| s.has_imported);
-            let has_held = ds.is_some_and(|s| s.has_held);
-
-            let mut resp: WatchPatternResponse = p.into();
-
-            resp.status = compute_pattern_status(
-                resp.enabled,
-                resp.upgrade_allowed,
-                resp.upgrade_until,
-                has_active,
-                has_imported,
-                has_held,
-            );
-            resp
-        })
-        .collect();
+    let items = with_download_states(
+        &state.pool,
+        list_response.items.into_iter().map(Into::into).collect(),
+    )
+    .await;
 
     Ok(Json(ListWatchPatternsResponse {
         items,
@@ -279,7 +309,13 @@ pub(super) async fn stream_watch_patterns(
     )
     .await
     {
-        Ok(response) => response.items.into_iter().map(Into::into).collect(),
+        Ok(response) => {
+            with_download_states(
+                &state.pool,
+                response.items.into_iter().map(Into::into).collect(),
+            )
+            .await
+        }
         Err(err) => {
             tracing::warn!(error = %err, "Failed to fetch initial watch patterns for stream");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -363,7 +399,7 @@ pub(super) async fn create_watch_pattern(
             )
         })?;
 
-    let response: WatchPatternResponse = pattern.into();
+    let response = with_download_state(&state.pool, pattern.into()).await;
     let _ = state
         .watch_pattern_events
         .send(WatchPatternStreamEvent::Created {
@@ -424,7 +460,7 @@ pub(super) async fn update_watch_pattern(
             )
         })?;
 
-    let response: WatchPatternResponse = pattern.into();
+    let response = with_download_state(&state.pool, pattern.into()).await;
     let _ = state
         .watch_pattern_events
         .send(WatchPatternStreamEvent::Updated {
@@ -485,7 +521,7 @@ pub(super) async fn update_watch_pattern_by_source(
             )
         })?;
 
-    let response: WatchPatternResponse = pattern.into();
+    let response = with_download_state(&state.pool, pattern.into()).await;
     let _ = state
         .watch_pattern_events
         .send(WatchPatternStreamEvent::Updated {
@@ -772,7 +808,7 @@ pub(super) async fn patch_watch_pattern(
             )
         })?;
 
-    let response: WatchPatternResponse = pattern.into();
+    let response = with_download_state(&state.pool, pattern.into()).await;
     let _ = state
         .watch_pattern_events
         .send(WatchPatternStreamEvent::Updated {

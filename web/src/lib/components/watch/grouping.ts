@@ -23,9 +23,12 @@ export function getEffectiveStatus(p: WatchPattern): string {
     return p.episode_progress.downloading > 0 ? 'downloading' : 'searching';
   }
   // upgrade_until is now the post-coverage cleanup timer, not the eligibility
-  // gate. Pattern is "upgrading" whenever upgrade_allowed is true; once the
-  // cleanup timer expires the pattern will be removed entirely.
-  if (p.upgrade_allowed) {
+  // gate. Pattern is "upgrading" whenever upgrade_allowed is true and something
+  // has been imported; once the cleanup timer expires the pattern will be
+  // removed entirely. Without an import (none yet, or every import rejected)
+  // the server's searching/downloading/held status stands.
+  const hasImport = p.status === 'upgrading' || p.status === 'satisfied';
+  if (p.upgrade_allowed && hasImport) {
     if (p.upgrade_until && new Date(p.upgrade_until) <= new Date()) {
       return 'satisfied';
     }
