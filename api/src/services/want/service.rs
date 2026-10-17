@@ -15,11 +15,15 @@ pub async fn handle_want(
     ctx: &WantServiceContext<'_>,
     mut request: WantServiceRequest,
 ) -> Result<WantServiceResult, WantServiceError> {
-    let watch_pattern_id = create_or_update_watch_pattern(ctx.pool, &request)
+    let pattern = create_or_update_watch_pattern(ctx.pool, &request)
         .await
         .map_err(|e| WantServiceError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let watch_pattern_id = pattern.id;
 
     request.watch_pattern_id = Some(watch_pattern_id);
+    // The client only sends the exclusions it knows about; the pattern also holds
+    // the releases Kobload watched fail, merged in by the upsert above.
+    request.excluded_releases = pattern.excluded_releases;
 
     // Serialise against any other trigger (backlog_search, RSS feed_sync, manual,
     // research re-search) that might also be searching this pattern right now.
@@ -173,7 +177,7 @@ async fn request_already_covered(
 async fn create_or_update_watch_pattern(
     pool: &PgPool,
     request: &WantServiceRequest,
-) -> Result<Uuid, String> {
+) -> Result<watch_repo::WatchPatternRow, String> {
     let input = watch_repo::WatchPatternSyncInput {
         source_system: request.source_system.clone(),
         source_id: request.source_id.clone(),
@@ -213,11 +217,8 @@ async fn create_or_update_watch_pattern(
             .map_err(|e| e.to_string())?;
     }
 
-    let pattern =
-        watch_repo::get_pattern_by_source(pool, &request.source_system, &request.source_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Pattern not found after creation".to_string())?;
-
-    Ok(pattern.id)
+    watch_repo::get_pattern_by_source(pool, &request.source_system, &request.source_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Pattern not found after creation".to_string())
 }

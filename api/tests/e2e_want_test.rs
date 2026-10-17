@@ -963,3 +963,68 @@ async fn test_want_sync_merges_exclusions_instead_of_overwriting_kobloads_own() 
 
     server.cleanup().await;
 }
+
+/// The exclusions are merged into the pattern, but the want's own search used
+/// to filter only by what the request carried. A release Kobload had already
+/// watched fail (a fake "South Park S29E03 ... -FLUX" full of .exe files) was
+/// grabbed again by the next kobbler want, which didn't know about it.
+#[tokio::test]
+async fn test_want_search_skips_releases_kobload_excluded() {
+    let (server, _mock_dl, mock_idx) = start_mock_server().await;
+    let pool = &server.pool;
+
+    seed_download_client(pool).await;
+    let source_id = seed_indexer_source(pool).await;
+
+    let want = |auto_download: bool| {
+        json!({
+            "source_system": "kobbler",
+            "source_id": "book-excluded",
+            "callback_url": "http://localhost:1234/callback",
+            "patterns": ["Mistborn The Final Empire"],
+            "match_targets": [{
+                "id": "book-excluded",
+                "target": "Brandon Sanderson Mistborn The Final Empire",
+            }],
+            "media_type": "ebooks",
+            "auto_download": auto_download,
+            "min_score": 0.5,
+            "excluded_releases": [{"release_title": "kobbler-rejected"}],
+        })
+    };
+
+    server
+        .admin_client()
+        .post_json("/api/v1/want", &want(false))
+        .await
+        .assert_ok();
+    let pattern = watch_repo::get_pattern_by_source(pool, "kobbler", "book-excluded")
+        .await
+        .expect("query")
+        .expect("pattern");
+
+    // A download of this release failed, so Kobload blocklisted it.
+    let failed = "Brandon Sanderson - Mistborn The Final Empire (epub)";
+    watch_repo::append_excluded_release(pool, pattern.id, &json!([{ "release_title": failed }]))
+        .await
+        .expect("append exclusion");
+
+    // Kobbler wants it again; the indexer still serves the failed release.
+    mock_idx.set_search_results(vec![make_release(failed, "guid-failed", Some(source_id))]);
+    let resp = server
+        .admin_client()
+        .post_json("/api/v1/want", &want(true))
+        .await;
+    resp.assert_ok();
+    let body: Value = resp.json();
+    assert_ne!(body["status"], "downloading", "re-grabbed an excluded release: {body}");
+
+    let grabbed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM downloads WHERE name = $1")
+        .bind(failed)
+        .fetch_one(pool)
+        .await
+        .expect("count downloads");
+    assert_eq!(grabbed, 0);
+
+    server.cleanup().await;
+}
