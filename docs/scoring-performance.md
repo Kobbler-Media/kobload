@@ -117,6 +117,29 @@ reference tests. It is read-only against the database and writes to
 - a 50k sample of DHT names, which carry the foreign, anime, obfuscated and
   scene junk that feeds actually serve
 
+### 2b. Supplementary sport corpus
+
+A week's capture only contains the sport events of that week, while most sport
+wants are for past rounds. `scripts/scoring-corpus/build-sport-supplement.py`
+builds a second capture directory from real 2026 motorsport releases Kobload
+has already seen:
+
+- releases grabbed for sport wants
+- releases matched to sport wants
+- F1, MotoGP, Moto2, Moto3 and SBK titles from the DHT hash index
+
+They are scored against the newest captured pattern set, grouped into one
+fetch per origin and week, and pinned to that week. The F1 titles have no
+matching wants, so they serve as negatives. Session decoys (practice,
+qualifying, sprint) exercise the session and round gates.
+
+The script is read-only against the database and strips API keys from stored
+URLs. Give it its own golden file by running the replay with
+`KOBLOAD_SCORING_CORPUS=data/scoring-capture-sport`.
+
+The main capture still holds indexer download URLs that include API keys, so
+copy it only to machines you trust.
+
 ### 3. Build the golden snapshot
 
 Copy the capture directory to the dev machine. The first run writes
