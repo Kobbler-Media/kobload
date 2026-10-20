@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO stream_release_outcomes\n            (provider_id, info_hash, file_id, failures, last_failure_at, last_failure_reason)\n        VALUES ($1, $2, $3, 1, NOW(), $4)\n        ON CONFLICT (provider_id, info_hash, file_id) DO UPDATE SET\n            failures = stream_release_outcomes.failures + 1,\n            last_failure_at = NOW(),\n            last_failure_reason = EXCLUDED.last_failure_reason,\n            updated_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "99938721e002bc3237a671adf5e16352ac222ac2dd60d64c54703f2ac9824694"
+}

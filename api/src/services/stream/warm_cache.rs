@@ -32,8 +32,12 @@ use crate::types::DownloadStreamEvent;
 use nats_jobs::types::StreamOption;
 use sqlx::PgPool;
 
-/// TTL for warm cache entries (5 minutes).
 const WARM_CACHE_TTL: Duration = Duration::from_secs(300);
+
+/// A Ready entry holds an unrestricted link to a torrent we left on the account, and both
+/// stay valid for hours. Keeping it that long is what lets a next-episode prewarm, fired
+/// when the current episode starts, still be instant when that episode ends.
+const READY_TTL: Duration = Duration::from_secs(3 * 3600);
 
 /// How often to poll the debrid provider for the #1 option.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -107,11 +111,11 @@ pub enum WarmCacheEntry {
 }
 
 impl WarmCacheEntry {
-    fn timestamp(&self) -> Instant {
+    fn is_expired(&self) -> bool {
         match self {
-            Self::InProgress { started_at, .. } => *started_at,
-            Self::Ready { resolved_at, .. } => *resolved_at,
-            Self::Failed { failed_at, .. } => *failed_at,
+            Self::InProgress { started_at, .. } => started_at.elapsed() >= WARM_CACHE_TTL,
+            Self::Ready { resolved_at, .. } => resolved_at.elapsed() >= READY_TTL,
+            Self::Failed { failed_at, .. } => failed_at.elapsed() >= WARM_CACHE_TTL,
         }
     }
 }
@@ -121,7 +125,7 @@ static WARM_CACHE: LazyLock<DashMap<WarmCacheKey, WarmCacheEntry>> = LazyLock::n
 /// Look up a warm cache entry, returning `None` if missing or expired.
 pub fn lookup(key: &WarmCacheKey) -> Option<WarmCacheEntry> {
     let entry = WARM_CACHE.get(key)?;
-    if entry.timestamp().elapsed() >= WARM_CACHE_TTL {
+    if entry.is_expired() {
         drop(entry);
         WARM_CACHE.remove(key);
         return None;
@@ -135,7 +139,7 @@ fn insert(key: WarmCacheKey, entry: WarmCacheEntry) {
 
     // Lazy eviction when cache grows large
     if WARM_CACHE.len() > MAX_CACHE_SIZE {
-        WARM_CACHE.retain(|_, v| v.timestamp().elapsed() < WARM_CACHE_TTL);
+        WARM_CACHE.retain(|_, v| !v.is_expired());
     }
 }
 
@@ -165,34 +169,49 @@ impl UnavailableReason {
 /// Pass `None` for a successful probe; `Some(reason)` for a failure. Callers
 /// must not record inconclusive failures (rate limits, auth errors, no free
 /// torrent slot) — see [`DebridError::is_inconclusive`].
+///
+/// Returns whether the verdict is news: no earlier row, a different verdict, or one
+/// older than [`VERDICT_FRESHNESS`]. Re-probing a hash every search must not count as
+/// fresh evidence each time.
 pub async fn record_availability(
     pool: &PgPool,
     info_hash: &str,
     provider_id: Uuid,
     unavailable: Option<UnavailableReason>,
-) {
+) -> bool {
     let available = unavailable.is_none();
     let reason = unavailable.map(|r| r.as_str());
     // Every reader lowercases before it looks up, and the primary key is
     // (info_hash, provider_id) — an unnormalised write is a row nothing ever
     // matches, plus a duplicate of the one that would have.
     let info_hash = info_hash.to_lowercase();
-    if let Err(e) = sqlx::query!(
+    match sqlx::query!(
         r#"INSERT INTO debrid_availability_cache (info_hash, provider_id, available, reason, checked_at)
            VALUES ($1, $2, $3, $4, NOW())
            ON CONFLICT (info_hash, provider_id) DO UPDATE
-           SET available = $3, reason = $4, checked_at = NOW()"#,
+           SET available = $3, reason = $4, checked_at = NOW()
+           RETURNING (old.checked_at IS NULL
+                      OR old.available IS DISTINCT FROM $3
+                      OR old.reason IS DISTINCT FROM $4
+                      OR old.checked_at < NOW() - make_interval(secs => $5)) AS "fresh!""#,
         info_hash,
         provider_id,
         available,
         reason,
+        VERDICT_FRESHNESS.as_secs_f64(),
     )
-    .execute(pool)
+    .fetch_one(pool)
     .await
     {
-        warn!(error = %e, "Failed to record debrid availability");
+        Ok(row) => row.fresh,
+        Err(e) => {
+            warn!(error = %e, "Failed to record debrid availability");
+            false
+        }
     }
 }
+
+const VERDICT_FRESHNESS: Duration = Duration::from_secs(6 * 3600);
 
 /// Remove a torrent we submitted purely to probe its cache status.
 ///
@@ -464,7 +483,14 @@ async fn warm_one(
             // Only record outcomes that actually tell us something about this
             // hash — a rate limit or a full slot pool must not poison the cache.
             if let Some(reason) = reason_for_error(&e) {
-                record_availability(&pool, &info_hash, key.debrid_provider_id, Some(reason)).await;
+                super::outcomes::record_probe(
+                    &pool,
+                    key.debrid_provider_id,
+                    &info_hash,
+                    Some(&option.release_title),
+                    Some(reason),
+                )
+                .await;
             }
             warn!(info_hash = %info_hash, error = %e, "Warm cache: add_magnet failed");
             insert(
@@ -513,7 +539,14 @@ async fn warm_one(
         Ok(t) => t,
         Err(e) => {
             if let Some(reason) = reason_for_error(&e) {
-                record_availability(&pool, &info_hash, key.debrid_provider_id, Some(reason)).await;
+                super::outcomes::record_probe(
+                    &pool,
+                    key.debrid_provider_id,
+                    &info_hash,
+                    Some(&option.release_title),
+                    Some(reason),
+                )
+                .await;
             }
             warn!(info_hash = %info_hash, error = %e, "Warm cache: get_torrent failed");
             cleanup_torrent(
@@ -540,10 +573,11 @@ async fn warm_one(
     // offered again, and drop the torrent.
     if matches!(torrent.status, DebridTorrentStatus::Blocked) {
         info!(info_hash = %info_hash, idx, "Warm cache: provider refused (filter-gate)");
-        record_availability(
+        super::outcomes::record_probe(
             &pool,
-            &info_hash,
             key.debrid_provider_id,
+            &info_hash,
+            Some(&option.release_title),
             Some(UnavailableReason::Blocked),
         )
         .await;
@@ -601,13 +635,26 @@ async fn warm_one(
                         resolved_at: Instant::now(),
                     },
                 );
-                record_availability(&pool, &info_hash, key.debrid_provider_id, None).await;
+                super::outcomes::record_probe(
+                    &pool,
+                    key.debrid_provider_id,
+                    &info_hash,
+                    Some(&option.release_title),
+                    None,
+                )
+                .await;
                 emit_warm_ready(&download_events, &key, &option.debrid_provider);
             }
             Err(e) => {
                 if let Some(reason) = reason_for_error(&e) {
-                    record_availability(&pool, &info_hash, key.debrid_provider_id, Some(reason))
-                        .await;
+                    super::outcomes::record_probe(
+                        &pool,
+                        key.debrid_provider_id,
+                        &info_hash,
+                        Some(&option.release_title),
+                        Some(reason),
+                    )
+                    .await;
                 }
                 warn!(info_hash = %info_hash, error = %e, "Warm cache: unrestrict failed");
                 insert(
@@ -649,16 +696,18 @@ async fn warm_one(
             debrid_providers,
             download_events,
             option.debrid_provider.clone(),
+            option.release_title.clone(),
             file_name,
         ));
     } else {
         // We only wanted to know whether it was cached. It isn't — record that
         // and hand the slot back rather than leaving it to download unwatched.
         debug!(info_hash = %info_hash, idx, "Warm cache: not cached, releasing slot");
-        record_availability(
+        super::outcomes::record_probe(
             &pool,
-            &info_hash,
             key.debrid_provider_id,
+            &info_hash,
+            Some(&option.release_title),
             Some(UnavailableReason::Dead),
         )
         .await;
@@ -685,6 +734,7 @@ async fn poll_warm_entry(
     debrid_providers: std::sync::Arc<dyn DebridProviderResolver>,
     download_events: broadcast::Sender<DownloadStreamEvent>,
     debrid_provider_name: String,
+    release_title: String,
     file_name: Option<String>,
 ) {
     let deadline = Instant::now() + POLL_TIMEOUT;
@@ -703,10 +753,11 @@ async fn poll_warm_entry(
 
         if Instant::now() > deadline {
             info!(info_hash = %key.info_hash, "Warm poll: timed out");
-            record_availability(
+            super::outcomes::record_probe(
                 &pool,
-                &key.info_hash,
                 key.debrid_provider_id,
+                &key.info_hash,
+                Some(&release_title),
                 Some(UnavailableReason::Dead),
             )
             .await;
@@ -756,10 +807,11 @@ async fn poll_warm_entry(
                                     },
                                 );
                                 emit_warm_ready(&download_events, &key, &debrid_provider_name);
-                                record_availability(
+                                super::outcomes::record_probe(
                                     &pool,
-                                    &key.info_hash,
                                     key.debrid_provider_id,
+                                    &key.info_hash,
+                                    Some(&release_title),
                                     None,
                                 )
                                 .await;
@@ -785,10 +837,11 @@ async fn poll_warm_entry(
                             info_hash = %key.info_hash,
                             "Warm poll: provider refused this file (filter-gate)"
                         );
-                        record_availability(
+                        super::outcomes::record_probe(
                             &pool,
-                            &key.info_hash,
                             key.debrid_provider_id,
+                            &key.info_hash,
+                            Some(&release_title),
                             Some(UnavailableReason::Blocked),
                         )
                         .await;
@@ -816,10 +869,11 @@ async fn poll_warm_entry(
                             error = %message,
                             "Warm poll: provider reported error"
                         );
-                        record_availability(
+                        super::outcomes::record_probe(
                             &pool,
-                            &key.info_hash,
                             key.debrid_provider_id,
+                            &key.info_hash,
+                            Some(&release_title),
                             Some(UnavailableReason::Dead),
                         )
                         .await;
@@ -895,4 +949,46 @@ fn emit_warm_ready(
         debrid_provider_id: key.debrid_provider_id,
         debrid_provider: debrid_provider.to_string(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ready_entries_outlive_a_prewarm_but_failures_do_not() {
+        let aged = Instant::now() - Duration::from_secs(45 * 60);
+        let key = |file_id| WarmCacheKey {
+            debrid_provider_id: Uuid::new_v4(),
+            info_hash: "ttlhash".to_string(),
+            file_id: Some(file_id),
+        };
+        let ready = key(1);
+        insert(
+            ready.clone(),
+            WarmCacheEntry::Ready {
+                stream_url: "https://example.invalid/e2.mkv".to_string(),
+                filename: "e2.mkv".to_string(),
+                filesize: 1,
+                mime_type: None,
+                expires_at: None,
+                torrent_id: "rd:1".to_string(),
+                provider_type: DebridProviderType::RealDebrid,
+                resolved_at: aged,
+            },
+        );
+        let failed = key(2);
+        insert(
+            failed.clone(),
+            WarmCacheEntry::Failed {
+                error: "x".to_string(),
+                failed_at: aged,
+            },
+        );
+        assert!(
+            lookup(&ready).is_some(),
+            "a next-episode prewarm must still be ready when the episode ends"
+        );
+        assert!(lookup(&failed).is_none());
+    }
 }

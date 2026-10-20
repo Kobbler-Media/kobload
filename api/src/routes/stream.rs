@@ -14,12 +14,13 @@ use crate::services::stream::{
     StreamResolveContext, StreamSearchContext, load_provider_config, stream_resolve, stream_search,
 };
 use crate::state::AppState;
-use nats_jobs::types::{StreamResolveRequest, StreamSearchRequest};
+use nats_jobs::types::{StreamOutcomeReport, StreamResolveRequest, StreamSearchRequest};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/stream/search", post(stream_search_handler))
         .route("/api/v1/stream/resolve", post(stream_resolve_handler))
+        .route("/api/v1/stream/outcome", post(stream_outcome_handler))
         .route(
             "/api/v1/stream/resolve/status",
             get(stream_resolve_status_handler),
@@ -83,6 +84,20 @@ async fn stream_resolve_handler(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(response))
+}
+
+async fn stream_outcome_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(report): Json<StreamOutcomeReport>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if require_auth(&state, &headers).await.is_err() {
+        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
+    }
+    crate::services::stream::outcomes::record_report(&state.pool, &report)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // =============================================================================

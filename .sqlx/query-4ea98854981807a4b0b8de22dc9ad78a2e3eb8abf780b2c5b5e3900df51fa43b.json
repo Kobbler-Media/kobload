@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT original_title FROM torrent_hash_index WHERE info_hash = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "original_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "original_title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4ea98854981807a4b0b8de22dc9ad78a2e3eb8abf780b2c5b5e3900df51fa43b"
+}

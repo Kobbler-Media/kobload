@@ -84,6 +84,8 @@ pub const TABLES_IN_ORDER: &[&str] = &[
     "debrid_providers",
     // Depends on debrid_providers
     "debrid_availability_cache",
+    "stream_release_outcomes",
+    "stream_trait_outcomes",
     // Torrent hash index (independent, large — may be slow to backup)
     "torrent_hash_index",
     // Per-file metadata for multi-file torrents (depends on torrent_hash_index)

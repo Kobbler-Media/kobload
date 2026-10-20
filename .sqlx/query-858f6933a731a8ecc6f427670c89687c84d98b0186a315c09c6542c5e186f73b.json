@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO stream_trait_outcomes (provider_id, trait, success_weight, failure_weight)\n        SELECT $1, t, LEAST($3::float8, $5::float8), LEAST($4::float8, $5::float8)\n        FROM UNNEST($2::text[]) AS t\n        ON CONFLICT (provider_id, trait) DO UPDATE SET\n            success_weight = LEAST($5, stream_trait_outcomes.success_weight\n                * POWER(0.5, EXTRACT(EPOCH FROM NOW() - stream_trait_outcomes.updated_at)::float8 / $6::float8)\n                + EXCLUDED.success_weight),\n            failure_weight = LEAST($5, stream_trait_outcomes.failure_weight\n                * POWER(0.5, EXTRACT(EPOCH FROM NOW() - stream_trait_outcomes.updated_at)::float8 / $6::float8)\n                + EXCLUDED.failure_weight),\n            updated_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "858f6933a731a8ecc6f427670c89687c84d98b0186a315c09c6542c5e186f73b"
+}

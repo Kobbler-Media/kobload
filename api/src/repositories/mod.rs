@@ -14,6 +14,7 @@ pub mod media_types;
 pub mod quality_profiles;
 pub mod scene_mappings;
 pub mod search_cache;
+pub mod stream_outcomes;
 pub mod trash_filters;
 pub mod watch;
 pub mod watch_directories;

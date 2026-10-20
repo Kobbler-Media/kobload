@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::ranking::{KnownAvailability, RankCandidate, RankProvider, rank_options};
 use crate::debrid::DebridProviderResolver;
 use crate::decision_log::types::{LogProviderCall, LogRelease};
 use crate::decision_log::{self, DecisionCollector};
@@ -332,6 +333,8 @@ pub async fn stream_search(
     // absent hashes mean "unknown", never "uncached".
     let mut torrentio_cached: std::collections::HashMap<String, bool> =
         std::collections::HashMap::new();
+    let mut binge_groups: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let mut torrentio_used = false;
     let mut zilean_used = false;
     let mut eztv_used = false;
@@ -355,6 +358,9 @@ pub async fn stream_search(
         for tr in results {
             if let Some(cached) = tr.debrid_cached {
                 torrentio_cached.insert(tr.entry.info_hash.to_lowercase(), cached);
+            }
+            if let Some(group) = tr.binge_group {
+                binge_groups.insert(tr.entry.info_hash.to_lowercase(), group);
             }
             torrentio_entries.push(tr.entry);
             if let Some(file) = tr.file {
@@ -749,53 +755,18 @@ pub async fn stream_search(
     }
 
     let options_build_start = Instant::now();
-    let mut options: Vec<StreamOption> = Vec::new();
+    let mut ranked: Vec<RankCandidate> = Vec::new();
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Build options from candidates only; rejects are only kept in `scored`
-    // for decision-log purposes above.
+    // for decision-log purposes above. Score order here is what rank_options
+    // falls back to, and it decides which duplicate of a hash+file survives.
     let mut candidates: Vec<&crate::watch::ProcessedRelease> =
         scored.iter().filter(|pr| pr.is_candidate()).collect();
-
-    // Rank by (availability tier, then score). Whether playback will actually
-    // start dominates quality here: a known-cached 1080p beats a theoretical
-    // 2160p that RD has never heard of, because the user is waiting.
-    //
-    // A pure additive bonus was rejected — score ranges shift per quality
-    // profile, so any constant is either too small to matter or swamps quality
-    // entirely. A hard tier keeps both signals intact.
-    let availability_rank = |pr: &crate::watch::ProcessedRelease| -> KnownAvailability {
-        let Some(hash) = find_info_hash_for_result(pr) else {
-            // Usenet / no hash — nothing to look up, rank as neutral.
-            return KnownAvailability::Unknown;
-        };
-        known
-            .get(&hash.to_lowercase())
-            .copied()
-            .unwrap_or(KnownAvailability::Unknown)
-    };
-
-    // Predicted filter-gate risk, used only to separate releases we know
-    // nothing else about. Real evidence (a successful or failed probe) always
-    // outranks a guess based on the filename.
-    let is_rd = default_provider.provider_type == "real_debrid";
-    let filter_risk = |pr: &crate::watch::ProcessedRelease| -> u8 {
-        if is_rd && matches_rd_filter_tags(&pr.release.title) {
-            1
-        } else {
-            0
-        }
-    };
-
     candidates.sort_by(|a, b| {
-        availability_rank(a)
-            .cmp(&availability_rank(b))
-            .then_with(|| filter_risk(a).cmp(&filter_risk(b)))
-            .then_with(|| {
-                b.total_score
-                    .partial_cmp(&a.total_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        b.total_score
+            .partial_cmp(&a.total_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     for result in &candidates {
@@ -860,7 +831,8 @@ pub async fn stream_search(
                     .as_ref()
                     .and_then(|pq| serde_json::to_value(pq).ok());
 
-                options.push(StreamOption {
+                let binge_group = binge_groups.get(&normalized).cloned();
+                let option = StreamOption {
                     id,
                     release_title: result.release.title.clone(),
                     size: result.release.size,
@@ -881,6 +853,12 @@ pub async fn stream_search(
                     source_type: StreamSourceType::Torrent,
                     files,
                     publish_date: Some(result.release.publish_date.clone()),
+                    binge_group,
+                    playback: None,
+                };
+                ranked.push(RankCandidate {
+                    option,
+                    availability,
                 });
             }
         } else if has_usenet_provider
@@ -897,7 +875,7 @@ pub async fn stream_search(
                 .as_ref()
                 .and_then(|pq| serde_json::to_value(pq).ok());
 
-            options.push(StreamOption {
+            let option = StreamOption {
                 id: format!("usenet_{}_{}", result.release.guid, provider.id),
                 release_title: result.release.title.clone(),
                 size: result.release.size,
@@ -915,10 +893,21 @@ pub async fn stream_search(
                 source_type: StreamSourceType::Usenet,
                 files: Vec::new(),
                 publish_date: Some(result.release.publish_date.clone()),
+                binge_group: None,
+                playback: None,
+            };
+            ranked.push(RankCandidate {
+                option,
+                availability: KnownAvailability::Unknown,
             });
         }
     }
 
+    let rank_provider = RankProvider {
+        id: default_provider.id,
+        provider_type: default_provider.provider_type.clone(),
+    };
+    let mut options = rank_options(ctx.pool, &rank_provider, ranked, request.prefer.as_ref()).await;
     options.truncate(limit as usize);
     timings.options_build_ms = options_build_start.elapsed().as_millis() as u64;
 
@@ -1218,56 +1207,6 @@ fn collect_torrent_hashes(releases: &[Release]) -> Vec<String> {
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect()
-}
-
-/// Release tags Real-Debrid's May-2026 filter-gate rejects.
-///
-/// RD began refusing cached content whose *filename* matches common release
-/// conventions, returning error_code 35 ("Infringing file"). It is a heuristic
-/// on the name, not a per-file takedown, so we can predict it before spending a
-/// round-trip: releases carrying these tags are far more likely to fail.
-///
-/// This is a ranking penalty, never a hard reject — the list is RD's and
-/// undocumented, it changes without notice, and on a thin result set a probably-
-/// blocked release still beats no release at all. Matched case-insensitively on
-/// separator-delimited tokens so "NF" doesn't match inside "NFL".
-const RD_FILTERED_TAGS: &[&str] = &[
-    "web-dl", "webdl", "webrip", "web-rip", "amzn", "nf", "cr", "yts", "yts.mx", "rarbg", "dsnp",
-    "hmax", "atvp", "pcok", "stan",
-];
-
-/// Whether a release title carries a tag Real-Debrid's filter-gate targets.
-fn matches_rd_filter_tags(title: &str) -> bool {
-    let lower = title.to_lowercase();
-    lower
-        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '.')
-        .any(|token| {
-            let token = token.trim_matches('.');
-            RD_FILTERED_TAGS.contains(&token)
-        })
-}
-
-/// Known availability of a hash on a debrid provider.
-///
-/// Ordered best-first; the discriminant is the ranking tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum KnownAvailability {
-    /// We resolved this ourselves, recently. The strongest signal there is.
-    Available,
-    /// Torrentio reports it cached. Weaker than our own probe: the status comes
-    /// from Torrentio's shared store (~5-day TTL, populated when *any* of its
-    /// users unrestricted the hash), not from a check against our account, so
-    /// it means "recently cached for someone" rather than "cached for us".
-    LikelyAvailable,
-    /// Nothing known either way.
-    Unknown,
-    /// Torrentio reports it not cached — it would have to download first.
-    LikelyDead,
-    /// Our own probe failed to cache it (no seeds / timed out). Deprioritise,
-    /// but still offer it if nothing better exists — it may have recovered.
-    Dead,
-    /// Provider refuses to serve it (RD filter-gate). Never offer it.
-    Blocked,
 }
 
 /// How long a successful probe stays trusted. Debrid caches are evicted over

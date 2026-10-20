@@ -731,6 +731,16 @@ pub async fn get_file_name(
     Ok(row)
 }
 
+pub async fn get_original_title(pool: &PgPool, info_hash: &str) -> Result<Option<String>> {
+    let title = sqlx::query_scalar!(
+        "SELECT original_title FROM torrent_hash_index WHERE info_hash = $1",
+        info_hash,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(title)
+}
+
 /// Recreate secondary indexes after bulk import.
 pub async fn recreate_secondary_indexes(pool: &PgPool) -> std::result::Result<(), sqlx::Error> {
     sqlx::raw_sql(

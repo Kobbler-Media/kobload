@@ -1,0 +1,31 @@
+{
+  "streams": [
+    {
+      "name": "Torrentio\n1080p",
+      "title": "Show.S01.1080p.BluRay.x264-PACK\nShow.S01E02.1080p.BluRay.x264-PACK.mkv\n👤 41 💾 1.4 GB ⚙️ ThePirateBay",
+      "infoHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fileIdx": 2,
+      "behaviorHints": {
+        "bingeGroup": "torrentio|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "filename": "Show.S01E02.1080p.BluRay.x264-PACK.mkv"
+      }
+    },
+    {
+      "name": "[RD+] Torrentio\n720p",
+      "title": "Show.S01E02.720p.HDTV.x264-GRP\n👤 9 💾 600 MB ⚙️ EZTV",
+      "url": "https://torrentio.strem.fun/resolve/realdebrid/KEY/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/null/0/Show.S01E02.720p.HDTV.x264-GRP.mkv",
+      "behaviorHints": {
+        "bingeGroup": "torrentio|720p|HDTV",
+        "filename": "Show.S01E02.720p.HDTV.x264-GRP.mkv"
+      }
+    },
+    {
+      "name": "Torrentio\n480p",
+      "title": "Show.S01E02.480p.x264-NOHINT\n👤 2 💾 200 MB ⚙️ 1337x",
+      "infoHash": "cccccccccccccccccccccccccccccccccccccccc",
+      "behaviorHints": {
+        "filename": "Show.S01E02.480p.x264-NOHINT.mkv"
+      }
+    }
+  ]
+}

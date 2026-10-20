@@ -46,9 +46,12 @@ struct TorrentioStream {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BehaviorHints {
     #[serde(default)]
     filename: Option<String>,
+    #[serde(default)]
+    binge_group: Option<String>,
 }
 
 /// Result from Torrentio: hash index entry + optional file entry.
@@ -59,6 +62,7 @@ pub struct TorrentioResult {
     /// debrid provider. `None` when no debrid key was configured, so the
     /// response carried no cache information either way.
     pub debrid_cached: Option<bool>,
+    pub binge_group: Option<String>,
 }
 
 pub struct TorrentioClient {
@@ -206,118 +210,141 @@ impl TorrentioClient {
             .await?
             .error_for_status()?;
 
-        let data: TorrentioResponse = resp.json().await?;
-
-        let results = data
-            .streams
-            .into_iter()
-            .filter_map(|s| {
-                // In debrid mode Torrentio omits `infoHash`/`fileIdx` entirely
-                // and returns a pre-authenticated resolve URL instead, so fall
-                // back to recovering both from that URL's path.
-                let resolve = s.url.as_deref().and_then(parse_resolve_url);
-                let info_hash = match s.info_hash.as_deref().filter(|h| !h.is_empty()) {
-                    Some(h) => h.to_lowercase(),
-                    None => resolve.as_ref()?.info_hash.clone(),
-                };
-                let file_idx = s
-                    .file_idx
-                    .or_else(|| resolve.as_ref().and_then(|r| r.file_idx));
-
-                // Cache status, present only on debrid-mode responses.
-                let debrid_cached = s.name.as_deref().and_then(parse_debrid_cached);
-
-                // Parse seeders + size from emoji metadata in title
-                let (meta_seeders, meta_size) = s
-                    .title
-                    .as_deref()
-                    .map(parse_title_metadata)
-                    .unwrap_or((None, None));
-
-                let filename = s
-                    .behavior_hints
-                    .as_ref()
-                    .and_then(|h| h.filename.as_deref())
-                    .filter(|f| !f.is_empty())
-                    .map(strip_file_extension);
-
-                let pack_name = s
-                    .title
-                    .as_deref()
-                    .and_then(|t| t.lines().next())
-                    .filter(|line| !line.is_empty())
-                    .map(String::from);
-
-                let title = resolve_title(
-                    filename.as_deref(),
-                    pack_name.as_deref(),
-                    media_kind,
-                    api_season,
-                    api_episode,
-                )?;
-
-                let parsed = parse_release(&title, media_kind);
-                let year = match &parsed.media {
-                    ParsedMedia::Movie(m) => m.year.and_then(|y| i16::try_from(y).ok()),
-                    _ => None,
-                };
-                let quality = serde_json::to_value(&parsed.quality).ok();
-                // Extract S/E. If the caller classified this as a movie the
-                // ParsedMedia isn't Tv, so re-parse as TV to catch S/E markers.
-                let (season, episodes) = match &parsed.media {
-                    ParsedMedia::Tv(_) => {
-                        crate::repositories::hash_index::derive_season_episodes_from_media(
-                            &parsed.media,
-                        )
-                    }
-                    _ => crate::repositories::hash_index::derive_season_episodes(&title),
-                };
-
-                // Build file entry if we have filename + file_idx
-                let file = if let Some(ref hints) = s.behavior_hints
-                    && let Some(ref raw_filename) = hints.filename
-                    && !raw_filename.is_empty()
-                    && let Some(file_idx) = file_idx
-                {
-                    let (season, episodes, file_media_type) =
-                        crate::repositories::hash_index::classify_hash_file(raw_filename);
-                    Some(HashFileEntry {
-                        info_hash: info_hash.clone(),
-                        file_idx,
-                        filename: raw_filename.clone(),
-                        size: meta_size,
-                        season,
-                        episodes,
-                        media_type: file_media_type,
-                    })
-                } else {
-                    None
-                };
-
-                Some(TorrentioResult {
-                    entry: HashIndexEntry {
-                        info_hash,
-                        imdb_id: Some(imdb_id.to_string()),
-                        tmdb_id: None,
-                        original_title: title,
-                        parsed_title: Some(parsed.title),
-                        year,
-                        quality,
-                        size: meta_size,
-                        magnet_url: None,
-                        source: "torrentio".to_string(),
-                        seeders: meta_seeders,
-                        season,
-                        episodes,
-                    },
-                    file,
-                    debrid_cached,
-                })
-            })
-            .collect();
-
-        Ok(results)
+        let body = resp.text().await?;
+        Ok(parse_streams(
+            &body,
+            imdb_id,
+            media_kind,
+            api_season,
+            api_episode,
+        )?)
     }
+}
+
+pub fn parse_streams(
+    body: &str,
+    imdb_id: &str,
+    media_kind: &str,
+    api_season: Option<u32>,
+    api_episode: Option<u32>,
+) -> Result<Vec<TorrentioResult>, serde_json::Error> {
+    let data: TorrentioResponse = serde_json::from_str(body)?;
+
+    let results = data
+        .streams
+        .into_iter()
+        .filter_map(|s| {
+            // In debrid mode Torrentio omits `infoHash`/`fileIdx` entirely
+            // and returns a pre-authenticated resolve URL instead, so fall
+            // back to recovering both from that URL's path.
+            let resolve = s.url.as_deref().and_then(parse_resolve_url);
+            let info_hash = match s.info_hash.as_deref().filter(|h| !h.is_empty()) {
+                Some(h) => h.to_lowercase(),
+                None => resolve.as_ref()?.info_hash.clone(),
+            };
+            let file_idx = s
+                .file_idx
+                .or_else(|| resolve.as_ref().and_then(|r| r.file_idx));
+
+            // Cache status, present only on debrid-mode responses.
+            let debrid_cached = s.name.as_deref().and_then(parse_debrid_cached);
+            let binge_group = s
+                .behavior_hints
+                .as_ref()
+                .and_then(|h| h.binge_group.clone())
+                .filter(|g| !g.is_empty());
+
+            // Parse seeders + size from emoji metadata in title
+            let (meta_seeders, meta_size) = s
+                .title
+                .as_deref()
+                .map(parse_title_metadata)
+                .unwrap_or((None, None));
+
+            let filename = s
+                .behavior_hints
+                .as_ref()
+                .and_then(|h| h.filename.as_deref())
+                .filter(|f| !f.is_empty())
+                .map(strip_file_extension);
+
+            let pack_name = s
+                .title
+                .as_deref()
+                .and_then(|t| t.lines().next())
+                .filter(|line| !line.is_empty())
+                .map(String::from);
+
+            let title = resolve_title(
+                filename.as_deref(),
+                pack_name.as_deref(),
+                media_kind,
+                api_season,
+                api_episode,
+            )?;
+
+            let parsed = parse_release(&title, media_kind);
+            let year = match &parsed.media {
+                ParsedMedia::Movie(m) => m.year.and_then(|y| i16::try_from(y).ok()),
+                _ => None,
+            };
+            let quality = serde_json::to_value(&parsed.quality).ok();
+            // Extract S/E. If the caller classified this as a movie the
+            // ParsedMedia isn't Tv, so re-parse as TV to catch S/E markers.
+            let (season, episodes) = match &parsed.media {
+                ParsedMedia::Tv(_) => {
+                    crate::repositories::hash_index::derive_season_episodes_from_media(
+                        &parsed.media,
+                    )
+                }
+                _ => crate::repositories::hash_index::derive_season_episodes(&title),
+            };
+
+            // Build file entry if we have filename + file_idx
+            let file = if let Some(ref hints) = s.behavior_hints
+                && let Some(ref raw_filename) = hints.filename
+                && !raw_filename.is_empty()
+                && let Some(file_idx) = file_idx
+            {
+                let (season, episodes, file_media_type) =
+                    crate::repositories::hash_index::classify_hash_file(raw_filename);
+                Some(HashFileEntry {
+                    info_hash: info_hash.clone(),
+                    file_idx,
+                    filename: raw_filename.clone(),
+                    size: meta_size,
+                    season,
+                    episodes,
+                    media_type: file_media_type,
+                })
+            } else {
+                None
+            };
+
+            Some(TorrentioResult {
+                entry: HashIndexEntry {
+                    info_hash,
+                    imdb_id: Some(imdb_id.to_string()),
+                    tmdb_id: None,
+                    original_title: title,
+                    parsed_title: Some(parsed.title),
+                    year,
+                    quality,
+                    size: meta_size,
+                    magnet_url: None,
+                    source: "torrentio".to_string(),
+                    seeders: meta_seeders,
+                    season,
+                    episodes,
+                },
+                file,
+                debrid_cached,
+                binge_group,
+            })
+        })
+        .collect();
+
+    Ok(results)
 }
 
 /// Resolve the best title for a Torrentio stream entry.

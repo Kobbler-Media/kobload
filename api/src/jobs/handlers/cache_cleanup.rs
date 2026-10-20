@@ -1,6 +1,6 @@
 //! Handler for cleaning up expired search cache entries.
 //!
-//! Runs periodically to prune expired entries from the search_cache table.
+//! Runs periodically to prune expired search cache, XEM and stream outcome rows.
 
 use crate::jobs::JobError;
 use crate::jobs::worker::JobHandler;
@@ -59,9 +59,22 @@ impl JobHandler for CacheCleanupHandler {
             info!(deleted = xem_deleted, "Pruned stale XEM cache entries");
         }
 
+        let (releases_deleted, traits_deleted) =
+            crate::services::stream::outcomes::prune(&self.pool)
+                .await
+                .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+        if releases_deleted + traits_deleted > 0 {
+            info!(
+                releases_deleted,
+                traits_deleted, "Pruned expired stream outcomes"
+            );
+        }
+
         Ok(serde_json::json!({
             "search_cache_deleted": deleted,
-            "xem_cache_deleted": xem_deleted
+            "xem_cache_deleted": xem_deleted,
+            "stream_release_outcomes_deleted": releases_deleted,
+            "stream_trait_outcomes_deleted": traits_deleted
         }))
     }
 }

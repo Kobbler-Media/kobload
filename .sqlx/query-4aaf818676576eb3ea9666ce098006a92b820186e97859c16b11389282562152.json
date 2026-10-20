@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM stream_trait_outcomes\n        WHERE (success_weight + failure_weight)\n              * POWER(0.5, EXTRACT(EPOCH FROM NOW() - updated_at)::float8 / $1) < $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4aaf818676576eb3ea9666ce098006a92b820186e97859c16b11389282562152"
+}

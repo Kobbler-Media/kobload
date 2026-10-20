@@ -273,13 +273,7 @@ async fn resolve_torrent(
             Ok(id) => id,
             Err(e) => {
                 if let Some(reason) = super::warm_cache::reason_for_error(&e) {
-                    super::warm_cache::record_availability(
-                        ctx.pool,
-                        info_hash,
-                        request.debrid_provider_id,
-                        Some(reason),
-                    )
-                    .await;
+                    record_probe(ctx, request, info_hash, Some(reason)).await;
                 }
                 return Err(StreamSearchError::DebridError(format!(
                     "Failed to add magnet: {e}"
@@ -330,10 +324,10 @@ async fn resolve_torrent(
     // A refused torrent will never become ready, so fail fast rather than
     // handing the client a torrent_id to poll until it times out.
     if matches!(torrent.status, DebridTorrentStatus::Blocked) {
-        super::warm_cache::record_availability(
-            ctx.pool,
+        record_probe(
+            ctx,
+            request,
             info_hash,
-            request.debrid_provider_id,
             Some(super::warm_cache::UnavailableReason::Blocked),
         )
         .await;
@@ -382,8 +376,7 @@ async fn resolve_torrent(
 
     // Record the successful resolve — this is first-hand evidence the hash is
     // cached for this account, the strongest availability signal we have.
-    super::warm_cache::record_availability(ctx.pool, info_hash, request.debrid_provider_id, None)
-        .await;
+    record_probe(ctx, request, info_hash, None).await;
 
     let expires_at = unrestricted.expires_at.map(|t| {
         t.format(&time::format_description::well_known::Rfc3339)
@@ -494,6 +487,29 @@ async fn resolve_usenet(
 ///
 /// Only `blocked` counts: a `dead` hash may have picked up seeders since, and
 /// the user explicitly asked for this one, so it is worth a retry.
+async fn record_probe(
+    ctx: &StreamResolveContext<'_>,
+    request: &StreamResolveRequest,
+    info_hash: &str,
+    unavailable: Option<super::warm_cache::UnavailableReason>,
+) {
+    let title =
+        crate::repositories::hash_index::get_original_title(ctx.pool, &info_hash.to_lowercase())
+            .await
+            .unwrap_or_else(|e| {
+                warn!(info_hash = %info_hash, error = %e, "Failed to look up release title");
+                None
+            });
+    super::outcomes::record_probe(
+        ctx.pool,
+        request.debrid_provider_id,
+        info_hash,
+        title.as_deref(),
+        unavailable,
+    )
+    .await;
+}
+
 async fn is_known_blocked(pool: &PgPool, info_hash: &str, provider_id: Uuid) -> bool {
     sqlx::query_scalar!(
         r#"SELECT true AS "blocked!" FROM debrid_availability_cache
