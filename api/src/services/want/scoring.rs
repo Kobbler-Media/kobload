@@ -727,9 +727,11 @@ fn release_has_hint_word_outside_session(title: &str, parsed_session: Option<&st
 /// Releases often include circuit name after country (e.g. "Portugal Algarve") while
 /// TheSportsDB may only have the country ("Portugal"), or vice versa.
 /// All words of the shorter string must appear as whole words in the longer string.
+/// Both sides are canonicalised first, so "Spanish"/"Spain", "UK"/"Great Britain"
+/// and "Czechia"/"Czech Republic" count as the same place.
 fn location_contains(parsed: &str, wanted: &str) -> bool {
-    let p = parsed.to_ascii_lowercase();
-    let w = wanted.to_ascii_lowercase();
+    let p = crate::parsing::canonical_sport_text(parsed);
+    let w = crate::parsing::canonical_sport_text(wanted);
     if p == w {
         return true;
     }

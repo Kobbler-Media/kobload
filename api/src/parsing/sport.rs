@@ -199,6 +199,153 @@ fn normalize_session(session: &str) -> String {
 }
 
 // =============================================================================
+// Canonical sport text
+// =============================================================================
+
+/// Rewrite the spellings that differ between a sport want and a scene release
+/// into one form, so the two compare token for token.
+///
+/// Wants are built from TheSportsDB ("SBK 2026 R12 Spanish ... Race 1") while
+/// releases follow scene habit ("WSBK.2026.Round12.Spain.Jerez.Race.One"), and
+/// without this the round, the session number and the place are all misses in
+/// the fuzzy match: a WSBK race scored ~0.62 against its own want and was never
+/// grabbed. Output is `kob_normalize::canonical` text with:
+///
+/// - rounds as `r12` ("Round12", "Round 12", "R12", "R012")
+/// - numbered sessions as `race 1`, `fp1`, `q1` ("Race One", "Free Practice 1",
+///   "Practice.One", "FP1", "Qualifying Two"), and "Warm Up" as `warmup`
+/// - nationalities and alternative country names as one country
+///   ("Spanish" → `spain`, "Great Britain"/"British"/"GB" → `uk`,
+///   "Czech Republic"/"Czechia" → `czech`)
+/// - league spellings as one name ("WSBK"/"WorldSBK" → `sbk`,
+///   "Formula1"/"Formula 1" → `f1`)
+pub fn canonical_sport_text(s: &str) -> String {
+    let canon = kob_normalize::canonical(s);
+    let words: Vec<&str> = canon.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        let next = words.get(i + 1).copied();
+        let next_num = next.and_then(session_ordinal);
+
+        if let Some(n) = next
+            && let Some(alias) = two_word_alias(w, n)
+        {
+            out.push(alias.to_string());
+            i += 2;
+            continue;
+        }
+        if matches!(w, "round" | "rd")
+            && let Some(n) = next.and_then(|n| n.parse::<u32>().ok())
+        {
+            out.push(format!("r{n}"));
+            i += 2;
+            continue;
+        }
+        if let Some(n) = glued_round(w) {
+            out.push(format!("r{n}"));
+            i += 1;
+            continue;
+        }
+        if w == "free"
+            && next == Some("practice")
+            && let Some(n) = words.get(i + 2).copied().and_then(session_ordinal)
+        {
+            out.push(format!("fp{n}"));
+            i += 3;
+            continue;
+        }
+        match (w, next_num) {
+            ("practice" | "fp", Some(n)) => {
+                out.push(format!("fp{n}"));
+                i += 2;
+            }
+            ("qualifying" | "q", Some(n @ (1 | 2))) => {
+                out.push(format!("q{n}"));
+                i += 2;
+            }
+            ("race", Some(n @ (1 | 2))) => {
+                out.push("race".to_string());
+                out.push(n.to_string());
+                i += 2;
+            }
+            ("warm", _) if next == Some("up") => {
+                out.push("warmup".to_string());
+                i += 2;
+            }
+            _ => {
+                out.push(one_word_alias(w).unwrap_or(w).to_string());
+                i += 1;
+            }
+        }
+    }
+    out.join(" ")
+}
+
+fn session_ordinal(w: &str) -> Option<u32> {
+    match w {
+        "1" | "one" => Some(1),
+        "2" | "two" => Some(2),
+        "3" | "three" => Some(3),
+        "4" | "four" => Some(4),
+        _ => None,
+    }
+}
+
+/// "round12" / "r12" → 12. Only all-digit suffixes, so words like "rd" or
+/// "r2d2" are left alone.
+fn glued_round(w: &str) -> Option<u32> {
+    let digits = w
+        .strip_prefix("round")
+        .or_else(|| w.strip_prefix('r'))
+        .filter(|d| !d.is_empty() && d.len() <= 3 && d.bytes().all(|b| b.is_ascii_digit()))?;
+    digits.parse().ok()
+}
+
+fn two_word_alias(a: &str, b: &str) -> Option<&'static str> {
+    match (a, b) {
+        ("great", "britain") | ("united", "kingdom") => Some("uk"),
+        ("czech", "republic") => Some("czech"),
+        ("formula", "1" | "one") => Some("f1"),
+        _ => None,
+    }
+}
+
+fn one_word_alias(w: &str) -> Option<&'static str> {
+    Some(match w {
+        // Not "superbike": British Superbikes is a different championship.
+        "wsbk" | "worldsbk" => "sbk",
+        "formula1" => "f1",
+        "british" | "britain" | "gb" => "uk",
+        "czechia" => "czech",
+        "spanish" => "spain",
+        "italian" => "italy",
+        "french" => "france",
+        "german" => "germany",
+        "dutch" => "netherlands",
+        "portuguese" => "portugal",
+        "hungarian" => "hungary",
+        "australian" => "australia",
+        "austrian" => "austria",
+        "japanese" => "japan",
+        "brazilian" => "brazil",
+        "belgian" => "belgium",
+        "canadian" => "canada",
+        "mexican" => "mexico",
+        "chinese" => "china",
+        "indonesian" => "indonesia",
+        "malaysian" => "malaysia",
+        "thai" => "thailand",
+        "qatari" => "qatar",
+        "argentine" | "argentinian" => "argentina",
+        "finnish" => "finland",
+        "turkish" => "turkey",
+        _ => return None,
+    })
+}
+
+// =============================================================================
 // Parsing
 // =============================================================================
 

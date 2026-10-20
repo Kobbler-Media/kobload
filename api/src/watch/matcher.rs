@@ -46,12 +46,23 @@ pub fn score_against_targets(
     default_min_score: f64,
 ) -> Option<TargetMatchResult> {
     let title_lower = release_title.to_lowercase();
+    let sport_title = std::cell::OnceCell::new();
 
     targets
         .iter()
         .filter_map(|target| {
             let target_lower = target.target.to_lowercase();
-            let score = fuzzy_score(&target_lower, &title_lower);
+            let mut score = fuzzy_score(&target_lower, &title_lower);
+            // Sport wants and releases spell rounds, session numbers and places
+            // differently ("R12 ... Race 1" vs "Round12 ... Race.One"); score the
+            // canonical forms too, and keep the better of the two.
+            if matches!(target.semantic_target, Some(nats_jobs::MatchedTarget::SportEvent)) {
+                let title =
+                    sport_title.get_or_init(|| crate::parsing::canonical_sport_text(release_title));
+                if let Some(canon_score) = sport_canonical_score(&target.target, title) {
+                    score = score.max(canon_score);
+                }
+            }
             let min_score = target.min_score.unwrap_or(default_min_score);
 
             if score >= min_score {
@@ -69,6 +80,27 @@ pub fn score_against_targets(
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
+}
+
+/// Fuzzy score of a sport target against an already-canonical release title,
+/// or `None` when the release is from another league.
+///
+/// Nothing downstream checks the league: once the round, place and session line
+/// up, only the league token keeps a Moto2 want off the MotoGP release of the
+/// same session, and an SBK want off World Supersport ("WSSP"). A token or two
+/// short of a perfect score would still clear the floor, so the league has to
+/// be present outright. It is everything before the season year in the target.
+fn sport_canonical_score(target: &str, title_canon: &str) -> Option<f64> {
+    let target_canon = crate::parsing::canonical_sport_text(target);
+    let league: Vec<&str> = target_canon
+        .split_whitespace()
+        .take_while(|t| !(t.len() == 4 && t.bytes().all(|b| b.is_ascii_digit())))
+        .collect();
+    let in_title = |t: &&str| title_canon.split_whitespace().any(|tt| tt == *t);
+    if league.is_empty() || !league.iter().all(in_title) {
+        return None;
+    }
+    Some(fuzzy_score(&target_canon, title_canon))
 }
 
 /// Match a release title against a watch pattern

@@ -59,6 +59,7 @@ pub use file::{
     extract_file_metadata, is_archive_nested,
 };
 pub use path::{FolderContext, PathParsed, parse_path};
+pub use sport::canonical_sport_text;
 pub use types::*;
 
 use crate::quality::parse_quality;
