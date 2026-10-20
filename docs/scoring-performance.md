@@ -140,6 +140,22 @@ URLs. Give it its own golden file by running the replay with
 The main capture still holds indexer download URLs that include API keys, so
 copy it only to machines you trust.
 
+### 2c. Production outcomes
+
+`scripts/scoring-corpus/export-labels.sh [capture_dir]` exports what
+production actually decided, read-only, into `data/scoring-labels/`:
+
+- `window-grabs.jsonl.gz`: every watch match inside the capture's window and
+  what became of it. Use it for the "agreement with production" check.
+- `labels.jsonl.gz`: release × want pairs labelled `match`/`no_match`, with how
+  the label is known: imported, matched but skipped, rejected, excluded by a
+  user, or refused at import. Use it to measure a matcher's precision and
+  recall.
+
+Patterns are deleted once they're fulfilled, so labels only cover wants that
+still exist. Sport and movies are thin; the sport supplement makes up for
+sport.
+
 ### 3. Build the golden snapshot
 
 Copy the capture directory to the dev machine. The first run writes
