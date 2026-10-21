@@ -12,6 +12,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use flate2::Compression;
@@ -19,6 +20,7 @@ use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use kobload_api::watch::capture::read_capture;
 use kobload_api::watch::replay_scoring;
+use rayon::prelude::*;
 use serde_json::Value;
 
 const FLOAT_TOLERANCE: f64 = 1e-9;
@@ -38,9 +40,11 @@ fn rss_scoring_matches_golden_snapshot() {
     assert!(!corpus.is_empty(), "capture has no fetches");
 
     let started = Instant::now();
-    let (mut releases, mut pairs, mut fully_scored) = (0, 0, 0);
-    let replays: Vec<Value> = corpus
-        .iter()
+    // Fetches are independent and the pinned clock is thread-local, so they can
+    // replay in parallel; the full corpus takes hours on one core.
+    let done = AtomicUsize::new(0);
+    let (replays, counts): (Vec<Value>, Vec<(usize, usize, usize)>) = corpus
+        .par_iter()
         .map(|f| {
             let replay = replay_scoring(
                 &f.prepared,
@@ -49,18 +53,27 @@ fn rss_scoring_matches_golden_snapshot() {
                 f.trash.as_deref(),
                 f.fetch.captured_at,
             );
-            releases += f.fetch.releases.len();
-            pairs += replay.stats.pairs;
-            fully_scored += replay.stats.fully_scored;
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n.is_multiple_of(100) {
+                eprintln!("  {n}/{} fetches, {:.0?}", corpus.len(), started.elapsed());
+            }
+            let counts = (
+                f.fetch.releases.len(),
+                replay.stats.pairs,
+                replay.stats.fully_scored,
+            );
             let mut value = serde_json::to_value(&replay).unwrap();
             value["fetch"] = format!(
                 "{} {} {}",
                 f.fetch.captured_at, f.fetch.source_name, f.fetch.source_id
             )
             .into();
-            value
+            (value, counts)
         })
-        .collect();
+        .unzip();
+    let (releases, pairs, fully_scored) = counts
+        .iter()
+        .fold((0, 0, 0), |(r, p, s), c| (r + c.0, p + c.1, s + c.2));
     eprintln!(
         "replayed {} fetches: {releases} releases, {pairs} pairs, {fully_scored} fully scored, \
          {:.1?} (includes the unoptimised reference pass)",

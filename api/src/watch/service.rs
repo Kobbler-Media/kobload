@@ -994,8 +994,9 @@ fn score_prepared(
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ScoringReplay {
     /// Every release × pattern pair that matched, fully scored, in loop order.
-    /// Scored without the match pre-check, so it is the reference the
-    /// optimised loop has to agree with. `release` is replaced by its guid.
+    /// Scored by `score_release` with only `release_matches` in front of it, so
+    /// it is the reference the optimised loop has to agree with. `release` is
+    /// replaced by its guid.
     pub matched: Vec<serde_json::Value>,
     /// What the RSS path selected: the best candidate per (pattern, episode).
     pub candidates: Vec<ReplayCandidate>,
@@ -1046,13 +1047,19 @@ pub fn replay_scoring(
     trash_filters: Option<&TrashFilterSet>,
     captured_at: time::OffsetDateTime,
 ) -> ScoringReplay {
-    use crate::services::want::scoring::score_release;
+    use crate::services::want::scoring::{release_matches, score_release};
 
     crate::clock::with_pinned_now(captured_at, || {
         let mut matched = Vec::new();
         for prep in prepared.iter().filter(|p| has_match_config(p)) {
             let config = build_scoring_config(prep, trash_filters);
-            for release in releases.iter().filter(|r| !pair_gated_out(prep, r)) {
+            // score_release takes match_score from the same gate, so skipping
+            // non-matches drops nothing from `matched`; full scoring of the
+            // 99.9% of pairs that don't match made a replay take core-hours.
+            for release in releases
+                .iter()
+                .filter(|r| !pair_gated_out(prep, r) && release_matches(r, &config))
+            {
                 let pr = score_release(release, &config);
                 if pr.match_score.is_none() {
                     continue;

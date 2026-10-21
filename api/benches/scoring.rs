@@ -20,7 +20,17 @@ fn scoring(c: &mut Criterion) {
         eprintln!("KOBLOAD_SCORING_CORPUS not set; skipping scoring benchmarks");
         return;
     };
-    let corpus = read_capture(&dir).expect("read capture directory");
+    // A pass over the whole corpus takes ~15 minutes on one core; every Nth
+    // fetch keeps the mix of sources and times at a fraction of the cost.
+    let step = std::env::var("KOBLOAD_SCORING_STEP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let corpus: Vec<_> = read_capture(&dir)
+        .expect("read capture directory")
+        .into_iter()
+        .step_by(step)
+        .collect();
     let titles: Vec<&str> = corpus
         .iter()
         .flat_map(|f| f.fetch.releases.iter().map(|r| r.title.as_str()))

@@ -53,12 +53,18 @@ The production loop captures those inputs. The tests then replay them with no
 database and compare the result to a golden snapshot. Each replay records:
 
 - **matched**: every release × pattern pair that matched, fully scored by
-  `score_release` *without* the match pre-check. This is the unoptimised
-  reference, and the optimised loop has to agree with it. It covers the
+  `score_release`. Only `release_matches` runs first, which is the same gate
+  `score_release` takes its match score from, so nothing is dropped. Scoring
+  every non-matching pair too made a full replay take core-hours. This is the
+  unoptimised reference, and the optimised loop has to agree with it. It covers the
   decision, every reject reason, every score component and the parsed quality.
 - **candidates**: what the real RSS path selected, one best candidate per
   (pattern, episode).
 - **review**: what would be queued for koblem if reviews were on.
+
+Fetches replay in parallel, with progress every 100 fetches under
+`--nocapture`; the October capture (3,620 fetches) takes about 11 minutes on
+16 cores.
 
 Floats are compared to 1e-9. Any difference fails the test and is reported
 with the fetch, the pattern, the release and the field that changed.
@@ -211,6 +217,11 @@ KOBLOAD_SCORING_CORPUS=… systemd-run --user --scope -p MemoryMax=256M \
 # allocations: stable across runs, unlike timings
 KOBLOAD_SCORING_CORPUS=… cargo test --release --test scoring_alloc_test -- --nocapture
 ```
+
+A pass over the whole October capture takes about 15 minutes on one core.
+`KOBLOAD_SCORING_STEP=10` makes the bench and the allocation test use every
+10th fetch, which keeps the mix of sources and times. Compare numbers taken
+with the same step only.
 
 Once a number is worth defending, set `KOBLOAD_SCORING_ALLOC_BUDGET` to make the
 allocation count a hard limit.
