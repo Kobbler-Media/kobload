@@ -72,7 +72,10 @@ fn score(title: &str, want: &MediaWant) -> ProcessedRelease {
 
 fn assert_candidate(title: &str, want: &MediaWant) {
     let scored = score(title, want);
-    assert!(scored.match_score.is_some(), "{title} should match its want {want:?}");
+    assert!(
+        scored.match_score.is_some(),
+        "{title} should match its want {want:?}"
+    );
     assert_eq!(scored.structural_reject_reason, None, "{title}");
     assert_eq!(scored.decision, ScoringDecision::Candidate, "{title}");
 }
@@ -91,7 +94,10 @@ fn canonical_sport_text_lines_want_and_release_up() {
         canonical_sport_text(RACE_ONE),
         "sbk 2026 r12 spain jerez race 1 web dl 1080p h264 english mwr"
     );
-    assert_eq!(canonical_sport_text("SBK 2026 R12 Spain Race 1"), "sbk 2026 r12 spain race 1");
+    assert_eq!(
+        canonical_sport_text("SBK 2026 R12 Spain Race 1"),
+        "sbk 2026 r12 spain race 1"
+    );
     assert_eq!(canonical_sport_text("Round 7 Race Two"), "r7 race 2");
     assert_eq!(canonical_sport_text("R07"), "r7");
     assert_eq!(canonical_sport_text("Free Practice 1"), "fp1");
@@ -179,7 +185,10 @@ fn other_classes_on_the_same_weekend_are_not_grabbed() {
         in_library: None,
         library_video_height: None,
     };
-    assert_not_candidate("MotoGP.2026.Round18.Australia.Race.1080p.WEB.h264-VERUM", &moto2);
+    assert_not_candidate(
+        "MotoGP.2026.Round18.Australia.Race.1080p.WEB.h264-VERUM",
+        &moto2,
+    );
 }
 
 /// What Kobbler sent before it learnt to strip the sponsor and the "Superpole"

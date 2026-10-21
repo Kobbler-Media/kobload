@@ -56,7 +56,10 @@ pub fn score_against_targets(
             // Sport wants and releases spell rounds, session numbers and places
             // differently ("R12 ... Race 1" vs "Round12 ... Race.One"); score the
             // canonical forms too, and keep the better of the two.
-            if matches!(target.semantic_target, Some(nats_jobs::MatchedTarget::SportEvent)) {
+            if matches!(
+                target.semantic_target,
+                Some(nats_jobs::MatchedTarget::SportEvent)
+            ) {
                 let title =
                     sport_title.get_or_init(|| crate::parsing::canonical_sport_text(release_title));
                 if let Some(canon_score) = sport_canonical_score(&target.target, title) {

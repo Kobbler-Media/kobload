@@ -1017,7 +1017,10 @@ async fn test_want_search_skips_releases_kobload_excluded() {
         .await;
     resp.assert_ok();
     let body: Value = resp.json();
-    assert_ne!(body["status"], "downloading", "re-grabbed an excluded release: {body}");
+    assert_ne!(
+        body["status"], "downloading",
+        "re-grabbed an excluded release: {body}"
+    );
 
     let grabbed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM downloads WHERE name = $1")
         .bind(failed)
