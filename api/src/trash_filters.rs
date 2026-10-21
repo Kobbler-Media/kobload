@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fancy_regex::Regex as FancyRegex;
+use regex::{RegexSet, SetMatches};
 use reqwest::Client;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -171,33 +172,63 @@ struct TrashSpecFields {
 pub struct TrashFilterSet {
     blocklist: Vec<CompiledCf>,
     tier_bonuses: HashMap<String, f64>,
+    title_set: RegexSet,
+    group_set: RegexSet,
 }
 
 struct CompiledCf {
     category: String,
     or_groups: HashSet<String>,
-    or_title_patterns: Vec<FancyRegex>,
+    or_title_patterns: Vec<Rule>,
     and_specs: Vec<CompiledSpec>,
 }
 
 struct CompiledSpec {
-    pattern: FancyRegex,
+    pattern: Rule,
     is_group_spec: bool,
     negate: bool,
 }
 
+/// A rule `regex` can compile lives in one of the set's two `RegexSet`s (title
+/// or release group), so one pass over a title answers all of them. Only the
+/// lookaround rules need `fancy_regex`, which is many times slower on the rest.
+enum Rule {
+    InSet(usize),
+    Fancy(FancyRegex),
+}
+
+impl Rule {
+    fn is_match(&self, input: &str, hits: &SetMatches) -> bool {
+        match self {
+            Rule::InSet(i) => hits.matched(*i),
+            Rule::Fancy(re) => re.is_match(input).unwrap_or(false),
+        }
+    }
+}
+
 impl CompiledCf {
-    fn matches(&self, title: &str, release_group: Option<&str>) -> bool {
-        // 1. Evaluate required (AND) specs — all must match.
+    #[cfg(test)]
+    fn matches_alone(&self, title: &str, release_group: Option<&str>) -> bool {
+        let none = RegexSet::empty().matches("");
+        self.matches(title, release_group, &none, &none)
+    }
+
+    fn matches(
+        &self,
+        title: &str,
+        release_group: Option<&str>,
+        title_hits: &SetMatches,
+        group_hits: &SetMatches,
+    ) -> bool {
         let has_required = !self.and_specs.is_empty();
         if has_required {
             for spec in &self.and_specs {
-                let input = if spec.is_group_spec {
-                    release_group.unwrap_or("")
+                let matched = if spec.is_group_spec {
+                    spec.pattern
+                        .is_match(release_group.unwrap_or(""), group_hits)
                 } else {
-                    title
+                    spec.pattern.is_match(title, title_hits)
                 };
-                let matched = spec.pattern.is_match(input).unwrap_or(false);
                 let result = if spec.negate { !matched } else { matched };
                 if !result {
                     return false;
@@ -205,7 +236,6 @@ impl CompiledCf {
             }
         }
 
-        // 2. Evaluate optional (OR) specs — any must match.
         let has_optional = !self.or_groups.is_empty() || !self.or_title_patterns.is_empty();
         if has_optional {
             let group_lower = release_group.map(|g| g.to_ascii_lowercase());
@@ -215,15 +245,13 @@ impl CompiledCf {
                 return true;
             }
             for pat in &self.or_title_patterns {
-                if pat.is_match(title).unwrap_or(false) {
+                if pat.is_match(title, title_hits) {
                     return true;
                 }
             }
-            // Optional specs exist but none matched.
             return false;
         }
 
-        // 3. No optional specs — result depends solely on required.
         has_required
     }
 }
@@ -231,12 +259,15 @@ impl CompiledCf {
 impl TrashFilterSet {
     /// Check blocklist. Returns `Some(category)` on first match.
     pub fn check_blocklist(&self, title: &str, release_group: Option<&str>) -> Option<&str> {
-        for cf in &self.blocklist {
-            if cf.matches(title, release_group) {
-                return Some(&cf.category);
-            }
+        if self.blocklist.is_empty() {
+            return None;
         }
-        None
+        let title_hits = self.title_set.matches(title);
+        let group_hits = self.group_set.matches(release_group.unwrap_or(""));
+        self.blocklist
+            .iter()
+            .find(|cf| cf.matches(title, release_group, &title_hits, &group_hits))
+            .map(|cf| cf.category.as_str())
     }
 
     /// Get tier bonus for release group. Returns `0.0` if unknown.
@@ -252,6 +283,8 @@ impl TrashFilterSet {
     pub fn from_tier_bonuses(bonuses: &[(&str, f64)]) -> Self {
         Self {
             blocklist: Vec::new(),
+            title_set: RegexSet::empty(),
+            group_set: RegexSet::empty(),
             tier_bonuses: bonuses
                 .iter()
                 .map(|(g, b)| (g.to_ascii_lowercase(), *b))
@@ -641,6 +674,39 @@ fn dedup_rows(rows: &mut Vec<TrashFilterRow>) {
 // ---------------------------------------------------------------------------
 
 fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
+    compile_with(rows, true).unwrap_or_else(|e| {
+        warn!(error = %e, "TRaSH rules don't fit in a regex set; matching them one by one");
+        compile_with(rows, false).expect("compiling without regex sets can't fail")
+    })
+}
+
+struct RuleBuilder {
+    use_sets: bool,
+    title: Vec<String>,
+    group: Vec<String>,
+}
+
+impl RuleBuilder {
+    fn compile(&mut self, pattern: &str, is_group: bool) -> Result<Rule, Box<fancy_regex::Error>> {
+        if self.use_sets && regex::Regex::new(pattern).is_ok() {
+            let set = if is_group {
+                &mut self.group
+            } else {
+                &mut self.title
+            };
+            set.push(pattern.to_owned());
+            return Ok(Rule::InSet(set.len() - 1));
+        }
+        compile_fancy(pattern).map(Rule::Fancy)
+    }
+}
+
+fn compile_with(rows: &[TrashFilterRow], use_sets: bool) -> Result<TrashFilterSet, regex::Error> {
+    let mut rules = RuleBuilder {
+        use_sets,
+        title: Vec::new(),
+        group: Vec::new(),
+    };
     // Partition rows by category. Ordered, because `check_blocklist` reports the
     // first matching category; with a HashMap that varied between restarts.
     let mut by_category: BTreeMap<&str, Vec<&TrashFilterRow>> = BTreeMap::new();
@@ -690,7 +756,7 @@ fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
 
                 if row.required {
                     // Required (AND) spec.
-                    match compile_fancy(&row.pattern) {
+                    match rules.compile(&row.pattern, is_group) {
                         Ok(re) => {
                             and_specs.push(CompiledSpec {
                                 pattern: re,
@@ -715,7 +781,7 @@ fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
                     } else {
                         // Fallback: compile as regex, but treat as an AND
                         // spec with negate=false so it runs against the group.
-                        match compile_fancy(&row.pattern) {
+                        match rules.compile(&row.pattern, true) {
                             Ok(re) => {
                                 and_specs.push(CompiledSpec {
                                     pattern: re,
@@ -734,7 +800,7 @@ fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
                     }
                 } else if !is_group && !row.negate {
                     // Optional title spec.
-                    match compile_fancy(&row.pattern) {
+                    match rules.compile(&row.pattern, false) {
                         Ok(re) => or_title_patterns.push(re),
                         Err(e) => {
                             warn!(
@@ -747,7 +813,7 @@ fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
                 } else {
                     // Optional negated spec — treat as required (AND) to
                     // preserve the negate semantics.
-                    match compile_fancy(&row.pattern) {
+                    match rules.compile(&row.pattern, is_group) {
                         Ok(re) => {
                             and_specs.push(CompiledSpec {
                                 pattern: re,
@@ -781,15 +847,20 @@ fn compile(rows: &[TrashFilterRow]) -> TrashFilterSet {
         "Compiled TRaSH filter set"
     );
 
-    TrashFilterSet {
+    Ok(TrashFilterSet {
         blocklist,
         tier_bonuses,
-    }
+        title_set: RegexSet::new(&rules.title)?,
+        group_set: RegexSet::new(&rules.group)?,
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod reference;
 
 #[cfg(test)]
 mod tests {
@@ -912,10 +983,10 @@ mod tests {
             and_specs: Vec::new(),
         };
 
-        assert!(cf.matches("Some.Movie.2024.1080p", Some("YIFY")));
-        assert!(cf.matches("Some.Movie.2024.1080p", Some("yts")));
-        assert!(!cf.matches("Some.Movie.2024.1080p", Some("NTb")));
-        assert!(!cf.matches("Some.Movie.2024.1080p", None));
+        assert!(cf.matches_alone("Some.Movie.2024.1080p", Some("YIFY")));
+        assert!(cf.matches_alone("Some.Movie.2024.1080p", Some("yts")));
+        assert!(!cf.matches_alone("Some.Movie.2024.1080p", Some("NTb")));
+        assert!(!cf.matches_alone("Some.Movie.2024.1080p", None));
     }
 
     #[test]
@@ -923,12 +994,12 @@ mod tests {
         let cf = CompiledCf {
             category: "lq_title".to_owned(),
             or_groups: HashSet::new(),
-            or_title_patterns: vec![FancyRegex::new(r"\b(CAMRip)\b").unwrap()],
+            or_title_patterns: vec![Rule::Fancy(FancyRegex::new(r"\b(CAMRip)\b").unwrap())],
             and_specs: Vec::new(),
         };
 
-        assert!(cf.matches("Movie.2024.CAMRip.x264", None));
-        assert!(!cf.matches("Movie.2024.BluRay.x264", None));
+        assert!(cf.matches_alone("Movie.2024.CAMRip.x264", None));
+        assert!(!cf.matches_alone("Movie.2024.BluRay.x264", None));
     }
 
     #[test]
@@ -939,13 +1010,13 @@ mod tests {
             or_title_patterns: Vec::new(),
             and_specs: vec![
                 CompiledSpec {
-                    pattern: FancyRegex::new(r"(?i)\bx265\b").unwrap(),
+                    pattern: Rule::Fancy(FancyRegex::new(r"(?i)\bx265\b").unwrap()),
                     is_group_spec: false,
                     negate: false,
                 },
                 CompiledSpec {
                     // Negate: must NOT be 2160p
-                    pattern: FancyRegex::new(r"(?i)\b2160p\b").unwrap(),
+                    pattern: Rule::Fancy(FancyRegex::new(r"(?i)\b2160p\b").unwrap()),
                     is_group_spec: false,
                     negate: true,
                 },
@@ -953,11 +1024,11 @@ mod tests {
         };
 
         // x265 and NOT 2160p → match
-        assert!(cf.matches("Movie.2024.1080p.x265", None));
+        assert!(cf.matches_alone("Movie.2024.1080p.x265", None));
         // x265 and 2160p → no match (negate fails)
-        assert!(!cf.matches("Movie.2024.2160p.x265", None));
+        assert!(!cf.matches_alone("Movie.2024.2160p.x265", None));
         // no x265 → no match
-        assert!(!cf.matches("Movie.2024.1080p.x264", None));
+        assert!(!cf.matches_alone("Movie.2024.1080p.x264", None));
     }
 
     #[test]
@@ -967,18 +1038,18 @@ mod tests {
             or_groups: HashSet::from(["badgrp".to_owned()]),
             or_title_patterns: Vec::new(),
             and_specs: vec![CompiledSpec {
-                pattern: FancyRegex::new(r"(?i)\b720p\b").unwrap(),
+                pattern: Rule::Fancy(FancyRegex::new(r"(?i)\b720p\b").unwrap()),
                 is_group_spec: false,
                 negate: false,
             }],
         };
 
         // Required passes AND optional matches → match
-        assert!(cf.matches("Movie.720p", Some("BadGrp")));
+        assert!(cf.matches_alone("Movie.720p", Some("BadGrp")));
         // Required passes but no optional match → no match
-        assert!(!cf.matches("Movie.720p", Some("GoodGrp")));
+        assert!(!cf.matches_alone("Movie.720p", Some("GoodGrp")));
         // Required fails → no match regardless
-        assert!(!cf.matches("Movie.1080p", Some("BadGrp")));
+        assert!(!cf.matches_alone("Movie.1080p", Some("BadGrp")));
     }
 
     #[test]
@@ -990,6 +1061,8 @@ mod tests {
                 or_title_patterns: Vec::new(),
                 and_specs: Vec::new(),
             }],
+            title_set: RegexSet::empty(),
+            group_set: RegexSet::empty(),
             tier_bonuses: HashMap::new(),
         };
 
@@ -1001,6 +1074,8 @@ mod tests {
     fn test_tier_bonus() {
         let fs = TrashFilterSet {
             blocklist: Vec::new(),
+            title_set: RegexSet::empty(),
+            group_set: RegexSet::empty(),
             tier_bonuses: HashMap::from([("ntb".to_owned(), 0.30), ("flux".to_owned(), 0.20)]),
         };
 
