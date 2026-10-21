@@ -169,7 +169,9 @@ def main():
         sys.exit(f"{args.out} already has a corpus; remove it first")
 
     usenet = latest_fetch_for(args.capture, {"newznab"})
-    torrent = latest_fetch_for(args.capture, {"torrentday", "mam"})
+    # Not MAM: its pattern set holds only book wants, so torrent and DHT
+    # releases replayed against it never meet a sport want.
+    torrent = latest_fetch_for(args.capture, {"torrentday"})
 
     grabbed = query(f"""
         SELECT json_build_object('created_at', created_at, 'payload', release_payload)
