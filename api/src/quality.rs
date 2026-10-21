@@ -18,6 +18,9 @@ use nats_jobs::QualityOverrides;
 use crate::repositories::quality_profiles::QualityProfileRow;
 use crate::trash_filters::TrashFilterSet;
 
+mod words;
+use words::TitleWords;
+
 #[derive(Debug, Clone)]
 pub struct QualityPreferences {
     pub min_resolution: Option<String>,
@@ -916,27 +919,33 @@ fn has_word(lower: &str, word: &str) -> bool {
     let mut from = 0;
     while let Some(offset) = lower[from..].find(anchor) {
         let start = from + offset;
-        let Some(end) = rest.map_or(Some(start + anchor.len()), |rest| {
-            match_separated(lower, start + anchor.len(), rest)
-        }) else {
-            from = start + first_len;
-            continue;
-        };
-        let before_ok = lower[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| c.is_whitespace() || matches!(c, '.' | '-' | '[' | '('));
-        let after_ok = lower[end..]
-            .chars()
-            .next()
-            .is_none_or(|c| c.is_whitespace() || matches!(c, '.' | '-' | ']' | ')'));
-        if before_ok && after_ok {
+        if word_at(lower, start, anchor.len(), rest) {
             return true;
         }
         // Step one char, not past the match, so overlapping occurrences are seen.
         from = start + first_len;
     }
     false
+}
+
+/// Whether the word whose anchor (the part before its first `.`) starts at
+/// `start` is really there: `rest` follows with `.` matching any separator,
+/// and both ends sit on a word boundary.
+fn word_at(lower: &str, start: usize, anchor_len: usize, rest: Option<&str>) -> bool {
+    let Some(end) = rest.map_or(Some(start + anchor_len), |rest| {
+        match_separated(lower, start + anchor_len, rest)
+    }) else {
+        return false;
+    };
+    let before_ok = lower[..start]
+        .chars()
+        .next_back()
+        .is_none_or(|c| c.is_whitespace() || matches!(c, '.' | '-' | '[' | '('));
+    let after_ok = lower[end..]
+        .chars()
+        .next()
+        .is_none_or(|c| c.is_whitespace() || matches!(c, '.' | '-' | ']' | ')'));
+    before_ok && after_ok
 }
 
 fn match_separated(lower: &str, mut pos: usize, pattern: &str) -> Option<usize> {
@@ -956,10 +965,10 @@ fn match_separated(lower: &str, mut pos: usize, pattern: &str) -> Option<usize> 
 }
 
 /// Find first matching item from a list of patterns.
-fn find_match<'a>(lower: &str, patterns: &[(&[&str], &'a str)]) -> Option<&'a str> {
+fn find_match<'a>(words: &TitleWords, patterns: &[(&[&str], &'a str)]) -> Option<&'a str> {
     for (aliases, canonical) in patterns {
         for alias in *aliases {
-            if has_word(lower, alias) {
+            if words.has(alias) {
                 return Some(canonical);
             }
         }
@@ -968,17 +977,18 @@ fn find_match<'a>(lower: &str, patterns: &[(&[&str], &'a str)]) -> Option<&'a st
 }
 
 /// Detect audio codec with special handling for patterns with special characters.
-fn detect_audio(lower: &str) -> Option<String> {
+fn detect_audio(words: &TitleWords) -> Option<String> {
+    let lower = words.lower();
     // Object-based / Immersive (check first - they combine with base codecs)
-    if has_word(lower, "atmos") || lower.contains("dolby.atmos") || lower.contains("truehd.atmos") {
+    if words.has("atmos") || lower.contains("dolby.atmos") || lower.contains("truehd.atmos") {
         return Some("atmos".to_string());
     }
-    if has_word(lower, "dts-x") || has_word(lower, "dtsx") || lower.contains("dts:x") {
+    if words.has("dts-x") || words.has("dtsx") || lower.contains("dts:x") {
         return Some("dts-x".to_string());
     }
 
     // Lossless
-    if has_word(lower, "truehd") || has_word(lower, "true-hd") || has_word(lower, "mlp") {
+    if words.has("truehd") || words.has("true-hd") || words.has("mlp") {
         return Some("truehd".to_string());
     }
     if lower.contains("dts-hd.ma")
@@ -995,22 +1005,22 @@ fn detect_audio(lower: &str) -> Option<String> {
     {
         return Some("dts-hd.hra".to_string());
     }
-    if has_word(lower, "pcm") || has_word(lower, "lpcm") {
+    if words.has("pcm") || words.has("lpcm") {
         return Some("pcm".to_string());
     }
-    if has_word(lower, "flac") {
+    if words.has("flac") {
         return Some("flac".to_string());
     }
 
     // DTS (basic, after DTS-X and DTS-HD checks)
-    if has_word(lower, "dts") {
+    if words.has("dts") {
         return Some("dts".to_string());
     }
 
     // DD+ / EAC3 (check for + character specially since it's a regex metachar)
-    if has_word(lower, "ddp")
-        || has_word(lower, "eac3")
-        || has_word(lower, "e-ac3")
+    if words.has("ddp")
+        || words.has("eac3")
+        || words.has("e-ac3")
         || lower.contains("dd+")
         || lower.contains("dd.plus")
         || lower.contains("ddplus")
@@ -1021,27 +1031,27 @@ fn detect_audio(lower: &str) -> Option<String> {
     // DD / AC3
     if lower.contains("dd5.1")
         || lower.contains("dd7.1")
-        || has_word(lower, "ac3")
-        || has_word(lower, "ac-3")
+        || words.has("ac3")
+        || words.has("ac-3")
         || lower.contains("dolby.digital")
     {
         return Some("dd".to_string());
     }
 
     // Standard lossy
-    if has_word(lower, "aac") {
+    if words.has("aac") {
         return Some("aac".to_string());
     }
-    if has_word(lower, "mp3") {
+    if words.has("mp3") {
         return Some("mp3".to_string());
     }
-    if has_word(lower, "opus") {
+    if words.has("opus") {
         return Some("opus".to_string());
     }
-    if has_word(lower, "vorbis") || has_word(lower, "ogg") {
+    if words.has("vorbis") || words.has("ogg") {
         return Some("vorbis".to_string());
     }
-    if has_word(lower, "wma") {
+    if words.has("wma") {
         return Some("wma".to_string());
     }
 
@@ -1055,72 +1065,72 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
     // this `Movie_2026_1080p_TeleSync` parses as no resolution and no source —
     // which slips past rejected_sources entirely.
     let lower = title.to_lowercase().replace('_', ".");
+    let words = TitleWords::new(&lower);
 
     // Resolution — also match framerate-suffixed variants like 1080p50, 720p60
-    let resolution = detect_resolution(&lower);
+    let resolution = detect_resolution(&words);
 
     // Source - use specialized detection for ambiguous patterns
-    let source = detect_source(&lower);
+    let source = detect_source(&words);
 
     // Streaming service
-    let streaming_service = find_match(&lower, STREAMING_SERVICES).map(String::from);
+    let streaming_service = find_match(&words, STREAMING_SERVICES).map(String::from);
 
     // Codec
-    let codec = find_match(&lower, VIDEO_CODECS).map(String::from);
+    let codec = find_match(&words, VIDEO_CODECS).map(String::from);
 
     // Audio (use specialized detection for patterns with special characters)
-    let audio = detect_audio(&lower);
+    let audio = detect_audio(&words);
 
     // HDR detection (with priority ordering)
-    let (is_hdr, is_hdr10, is_hdr10plus, is_dolby_vision, is_hlg) = detect_hdr(&lower);
+    let (is_hdr, is_hdr10, is_hdr10plus, is_dolby_vision, is_hlg) = detect_hdr(&words);
 
     // 3D detection
-    let (is_3d, format_3d) = detect_3d(&lower);
+    let (is_3d, format_3d) = detect_3d(&words);
 
     // Release version flags
-    let is_proper = has_word(&lower, "proper");
-    let is_repack = has_word(&lower, "repack") || has_word(&lower, "rerip");
-    let is_real = has_word(&lower, "real");
-    let is_remux = has_word(&lower, "remux");
+    let is_proper = words.has("proper");
+    let is_repack = words.has("repack") || words.has("rerip");
+    let is_real = words.has("real");
+    let is_remux = words.has("remux");
 
     // Release type flags
-    let is_internal = has_word(&lower, "internal");
-    let is_retail = has_word(&lower, "retail");
-    let is_limited = has_word(&lower, "limited");
+    let is_internal = words.has("internal");
+    let is_retail = words.has("retail");
+    let is_limited = words.has("limited");
 
     // Fix flags
-    let is_nfo_fix = has_word(&lower, "nfofix") || has_word(&lower, "nfo.fix");
-    let is_sample_fix = has_word(&lower, "samplefix") || has_word(&lower, "sample.fix");
-    let is_sync_fix = has_word(&lower, "syncfix")
-        || has_word(&lower, "sync.fix")
-        || has_word(&lower, "audiofix")
-        || has_word(&lower, "audio.fix");
-    let is_proof = has_word(&lower, "proof");
-    let is_dirfix = has_word(&lower, "dirfix") || has_word(&lower, "dir.fix");
+    let is_nfo_fix = words.has("nfofix") || words.has("nfo.fix");
+    let is_sample_fix = words.has("samplefix") || words.has("sample.fix");
+    let is_sync_fix = words.has("syncfix")
+        || words.has("sync.fix")
+        || words.has("audiofix")
+        || words.has("audio.fix");
+    let is_proof = words.has("proof");
+    let is_dirfix = words.has("dirfix") || words.has("dir.fix");
 
     // Subtitle/dub flags
-    let is_dubbed = has_word(&lower, "dubbed") || has_word(&lower, "dub");
-    let is_subbed = has_word(&lower, "subbed") || has_word(&lower, "subs");
-    let is_hardcoded_subs = has_word(&lower, "hc")
-        || has_word(&lower, "hardcoded")
-        || has_word(&lower, "hardsub")
-        || has_word(&lower, "hardsubs")
-        || has_word(&lower, "korsub") // Korean subs burned in
-        || has_word(&lower, "chtsub"); // Chinese traditional subs
+    let is_dubbed = words.has("dubbed") || words.has("dub");
+    let is_subbed = words.has("subbed") || words.has("subs");
+    let is_hardcoded_subs = words.has("hc")
+        || words.has("hardcoded")
+        || words.has("hardsub")
+        || words.has("hardsubs")
+        || words.has("korsub") // Korean subs burned in
+        || words.has("chtsub"); // Chinese traditional subs
 
     // Advanced audio flags
-    let is_atmos = has_word(&lower, "atmos") || has_word(&lower, "dolby.atmos");
-    let is_dtsx =
-        has_word(&lower, "dts-x") || has_word(&lower, "dtsx") || has_word(&lower, "dts:x");
+    let is_atmos = words.has("atmos") || words.has("dolby.atmos");
+    let is_dtsx = words.has("dts-x") || words.has("dtsx") || words.has("dts:x");
 
     // Nuked/obfuscated
-    let is_nuked = has_word(&lower, "nuked") || has_word(&lower, "nuke");
+    let is_nuked = words.has("nuked") || words.has("nuke");
     let is_obfuscated = OBFUSCATED_RE.is_match(&lower);
 
     // Language
     let language = LANGUAGES
         .iter()
-        .find(|(word, _)| has_word(&lower, word))
+        .find(|(word, _)| words.has(word))
         .map(|(_, normalized)| normalized.to_string());
 
     // Release group
@@ -1178,11 +1188,12 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
 /// Standard aliases (e.g., `1080p`, `fullhd`, `4k`) use normal word-boundary matching.
 /// For `p`/`i`-suffixed resolutions we also accept an optional framerate (`\d{2,3}`)
 /// immediately after the `p`/`i` — e.g., `1080p50` is recognised as `1080p`.
-fn detect_resolution(lower: &str) -> Option<String> {
+fn detect_resolution(words: &TitleWords) -> Option<String> {
+    let lower = words.lower();
     // First try exact word-boundary matches (handles aliases like "fullhd", "4k", "uhd", "ntsc")
     if let Some((_, canonical, _)) = RESOLUTIONS
         .iter()
-        .find(|(aliases, _, _)| aliases.iter().any(|a| has_word(lower, a)))
+        .find(|(aliases, _, _)| aliases.iter().any(|a| words.has(a)))
     {
         return Some(canonical.to_string());
     }
@@ -1204,19 +1215,20 @@ fn detect_resolution(lower: &str) -> Option<String> {
 }
 
 /// Detect video source with special handling for ambiguous patterns.
-fn detect_source(lower: &str) -> Option<String> {
+fn detect_source(words: &TitleWords) -> Option<String> {
+    let lower = words.lower();
     // Check remux first (highest quality indicator)
-    if has_word(lower, "remux") {
+    if words.has("remux") {
         return Some("remux".to_string());
     }
 
     // Check explicit bluray patterns
-    if has_word(lower, "bluray")
-        || has_word(lower, "blu-ray")
-        || has_word(lower, "bdrip")
-        || has_word(lower, "brrip")
-        || has_word(lower, "bd25")
-        || has_word(lower, "bd50")
+    if words.has("bluray")
+        || words.has("blu-ray")
+        || words.has("bdrip")
+        || words.has("brrip")
+        || words.has("bd25")
+        || words.has("bd50")
     {
         return Some("bluray".to_string());
     }
@@ -1242,72 +1254,64 @@ fn detect_source(lower: &str) -> Option<String> {
     }
 
     // WEB sources
-    if has_word(lower, "web-dl") || has_word(lower, "webdl") || has_word(lower, "web.dl") {
+    if words.has("web-dl") || words.has("webdl") || words.has("web.dl") {
         return Some("web-dl".to_string());
     }
-    if has_word(lower, "webrip") || has_word(lower, "web-rip") || has_word(lower, "web.rip") {
+    if words.has("webrip") || words.has("web-rip") || words.has("web.rip") {
         return Some("webrip".to_string());
     }
     // Generic "web" - only match as word boundary
-    if has_word(lower, "web") {
+    if words.has("web") {
         return Some("webrip".to_string());
     }
 
     // TV sources
-    if has_word(lower, "hdtv") || has_word(lower, "hd-tv") {
+    if words.has("hdtv") || words.has("hd-tv") {
         return Some("hdtv".to_string());
     }
-    if has_word(lower, "pdtv") {
+    if words.has("pdtv") {
         return Some("pdtv".to_string());
     }
-    if has_word(lower, "dsr") || has_word(lower, "dsrip") {
+    if words.has("dsr") || words.has("dsrip") {
         return Some("dsr".to_string());
     }
-    if has_word(lower, "sdtv")
-        || has_word(lower, "tvrip")
-        || has_word(lower, "tv-rip")
-        || has_word(lower, "sd-tv")
-    {
+    if words.has("sdtv") || words.has("tvrip") || words.has("tv-rip") || words.has("sd-tv") {
         return Some("sdtv".to_string());
     }
-    if has_word(lower, "satrip") || has_word(lower, "satellite") {
+    if words.has("satrip") || words.has("satellite") {
         return Some("satellite".to_string());
     }
 
     // DVD sources
-    if has_word(lower, "dvdrip") || has_word(lower, "dvd-rip") {
+    if words.has("dvdrip") || words.has("dvd-rip") {
         return Some("dvdrip".to_string());
     }
-    if has_word(lower, "dvdr")
-        || has_word(lower, "dvd-r")
-        || has_word(lower, "dvd5")
-        || has_word(lower, "dvd9")
-    {
+    if words.has("dvdr") || words.has("dvd-r") || words.has("dvd5") || words.has("dvd9") {
         return Some("dvdr".to_string());
     }
-    if has_word(lower, "dvdscr") || has_word(lower, "dvd-screener") {
+    if words.has("dvdscr") || words.has("dvd-screener") {
         return Some("dvdscr".to_string());
     }
     // Generic DVD
-    if has_word(lower, "dvd") {
+    if words.has("dvd") {
         return Some("dvd".to_string());
     }
 
     // Pre-release sources
-    if has_word(lower, "bdscr") || has_word(lower, "bluray-screener") {
+    if words.has("bdscr") || words.has("bluray-screener") {
         return Some("bdscr".to_string());
     }
-    if has_word(lower, "screener") || has_word(lower, "scr") {
+    if words.has("screener") || words.has("scr") {
         return Some("screener".to_string());
     }
-    if has_word(lower, "r5") {
+    if words.has("r5") {
         return Some("r5".to_string());
     }
-    if has_word(lower, "telecine") {
+    if words.has("telecine") {
         return Some("telecine".to_string());
     }
     // TC with word boundary (avoids false positives)
-    if has_word(lower, "tc") && !lower.contains("etc") {
+    if words.has("tc") && !lower.contains("etc") {
         return Some("telecine".to_string());
     }
     // TS/Telesync - use special regex to avoid false positives
@@ -1315,21 +1319,21 @@ fn detect_source(lower: &str) -> Option<String> {
         return Some("telesync".to_string());
     }
     // CAM with word boundary
-    if has_word(lower, "cam") || has_word(lower, "camrip") || has_word(lower, "hdcam") {
+    if words.has("cam") || words.has("camrip") || words.has("hdcam") {
         return Some("cam".to_string());
     }
-    if has_word(lower, "workprint") || has_word(lower, "wp") {
+    if words.has("workprint") || words.has("wp") {
         return Some("workprint".to_string());
     }
-    if has_word(lower, "ppvrip") || has_word(lower, "ppv") {
+    if words.has("ppvrip") || words.has("ppv") {
         return Some("ppv".to_string());
     }
-    if has_word(lower, "vod") || has_word(lower, "vodrip") {
+    if words.has("vod") || words.has("vodrip") {
         return Some("vod".to_string());
     }
 
     // HD-DVD
-    if has_word(lower, "hddvd") || has_word(lower, "hd-dvd") {
+    if words.has("hddvd") || words.has("hd-dvd") {
         return Some("hddvd".to_string());
     }
 
@@ -1337,31 +1341,32 @@ fn detect_source(lower: &str) -> Option<String> {
 }
 
 /// Detect HDR format with priority ordering.
-fn detect_hdr(lower: &str) -> (bool, bool, bool, bool, bool) {
-    let is_dolby_vision = has_word(lower, "dv")
-        || has_word(lower, "dovi")
-        || has_word(lower, "dolby.vision")
-        || has_word(lower, "dolbyvision");
+fn detect_hdr(words: &TitleWords) -> (bool, bool, bool, bool, bool) {
+    let lower = words.lower();
+    let is_dolby_vision = words.has("dv")
+        || words.has("dovi")
+        || words.has("dolby.vision")
+        || words.has("dolbyvision");
 
-    let is_hdr10plus = has_word(lower, "hdr10plus")
-        || has_word(lower, "hdr10+")
+    let is_hdr10plus = words.has("hdr10plus")
+        || words.has("hdr10+")
         || lower.contains("hdr10.plus")
         || lower.contains("hdr.10.plus");
 
-    let is_hdr10 = (has_word(lower, "hdr10") || lower.contains("hdr.10")) && !is_hdr10plus; // Don't double-count HDR10+
+    let is_hdr10 = (words.has("hdr10") || lower.contains("hdr.10")) && !is_hdr10plus; // Don't double-count HDR10+
 
-    let is_hlg = has_word(lower, "hlg") || lower.contains("hybrid.log.gamma");
+    let is_hlg = words.has("hlg") || lower.contains("hybrid.log.gamma");
 
-    let is_hdr = has_word(lower, "hdr") || is_hdr10 || is_hdr10plus || is_dolby_vision || is_hlg;
+    let is_hdr = words.has("hdr") || is_hdr10 || is_hdr10plus || is_dolby_vision || is_hlg;
 
     (is_hdr, is_hdr10, is_hdr10plus, is_dolby_vision, is_hlg)
 }
 
 /// Detect 3D format.
-fn detect_3d(lower: &str) -> (bool, Option<String>) {
+fn detect_3d(words: &TitleWords) -> (bool, Option<String>) {
     for (aliases, canonical) in FORMATS_3D {
         for alias in *aliases {
-            if has_word(lower, alias) {
+            if words.has(alias) {
                 return (true, Some(canonical.to_string()));
             }
         }
@@ -1467,6 +1472,9 @@ pub fn parse_resolution(value: &str) -> Option<i32> {
 // =============================================================================
 // Tests
 // =============================================================================
+
+#[cfg(test)]
+mod reference;
 
 #[cfg(test)]
 mod tests {

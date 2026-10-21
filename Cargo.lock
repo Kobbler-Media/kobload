@@ -2053,6 +2053,7 @@ dependencies = [
 name = "kobload-api"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "argon2",
  "async-nats",
  "async-trait",

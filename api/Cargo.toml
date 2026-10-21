@@ -90,6 +90,7 @@ lz-str = "0.2.1"
 
 # Cardigann YAML indexer engine
 cardigann = { path = "../cardigann" }
+aho-corasick = "1.1.5"
 
 [dev-dependencies]
 regex = "1.13.1"
