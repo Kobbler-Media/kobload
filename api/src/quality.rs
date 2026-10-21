@@ -257,6 +257,12 @@ static TS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:^|[\s.\-\[\(])(?:HDTS|TELESYNC|TS)(?:[\s.\-\]\)]|$)").unwrap()
 });
 
+// Start of the tag region: the first year, SxxEyy or resolution token.
+static TAG_REGION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[\s.\-\[\(])(?:(?:19|20)\d{2}|s\d{1,2}e\d{1,3}|\d{3,4}[pi])(?:[\s.\-\]\)]|$)")
+        .unwrap()
+});
+
 /// Release group pattern: -GroupName at end of title (before extension if any).
 static RELEASE_GROUP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-([A-Za-z0-9]+)(?:\.[a-z]{2,4})?$").unwrap());
@@ -1192,6 +1198,26 @@ fn detect_source(lower: &str) -> Option<String> {
         || has_word(lower, "bd50")
     {
         return Some("bluray".to_string());
+    }
+
+    // Unambiguous pre-release markers win over WEB/TV/DVD tags: mislabelled
+    // uploads like `Movie.2026.1080p.TS.WEB.DL` or `movie.2026.web.CAM` are
+    // still a TS/CAM, and first-match-wins on WEB let them past rejected_sources.
+    // Only the tag region after the year/episode/resolution is checked, so a
+    // title word (`Cam.2018.1080p.WEB-DL`) can't trip it. A trailing `.ts` is a
+    // transport-stream file extension, not a source tag.
+    let body = lower.strip_suffix(".ts").unwrap_or(lower);
+    if let Some(m) = TAG_REGION_RE.find(body) {
+        let tags = &body[m.start()..];
+        if TS_RE.is_match(tags) {
+            return Some("telesync".to_string());
+        }
+        if has_word(tags, "cam") || has_word(tags, "camrip") || has_word(tags, "hdcam") {
+            return Some("cam".to_string());
+        }
+        if has_word(tags, "telecine") {
+            return Some("telecine".to_string());
+        }
     }
 
     // WEB sources
