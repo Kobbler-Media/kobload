@@ -5,10 +5,14 @@ use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::language::{self, LanguageFit};
 use super::binge;
-use super::outcomes::{self, TraitRisk};
+use super::continuity::{self, Continuity};
+use super::outcomes;
+use super::release_fit;
+use super::trait_risk::{self, TraitRisk};
 use crate::repositories::stream_outcomes as repo;
-use nats_jobs::types::{StreamOption, StreamPlayback, StreamPreference};
+use nats_jobs::types::{StreamAvailability, StreamOption, StreamPlayback, StreamPreference};
 
 /// Known availability of a hash on a debrid provider.
 ///
@@ -35,7 +39,6 @@ pub enum KnownAvailability {
 
 pub struct RankProvider {
     pub id: Uuid,
-    pub provider_type: String,
 }
 
 pub struct RankCandidate {
@@ -53,49 +56,82 @@ fn release_key(option: &StreamOption) -> Option<ReleaseKey> {
     ))
 }
 
-struct Continuity {
-    info_hash: String,
-    binge_group: Option<String>,
-    release_group: Option<String>,
+/// A release whose default audio track is likely another language than the preferred
+/// one still wins against one this much higher in score.
+const LANGUAGE_ORDER_MARGIN: f64 = 0.1;
+
+#[derive(Default)]
+pub struct RankPreferences<'a> {
+    pub prefer: Option<&'a StreamPreference>,
+    pub audio_languages: &'a [String],
 }
 
-impl Continuity {
-    fn rank(&self, option: &StreamOption, release_group: Option<&str>) -> u8 {
-        if option
-            .info_hash
-            .as_deref()
-            .is_some_and(|h| h.eq_ignore_ascii_case(&self.info_hash))
-        {
-            0
-        } else if self.binge_group.is_some() && option.binge_group == self.binge_group {
-            1
-        } else if self.release_group.is_some() && release_group == self.release_group.as_deref() {
-            2
-        } else {
-            3
-        }
+/// (failed playback, tier, wrong language, suspect fake, continuity, risk bucket)
+type RankKey = (bool, Tier, bool, bool, continuity::Rank, u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Tier {
+    Played,
+    Ready,
+    Likely,
+    Unknown,
+    RefusalExpected,
+    Uncached,
+    Dead,
+}
+
+/// A release that played starts again; its availability only matters once a probe says
+/// it is gone. Our own availability verdict outranks name-based refusal risk, which only
+/// demotes what nobody has checked.
+fn tier(availability: KnownAvailability, played: bool, refusal_expected: bool) -> Tier {
+    use KnownAvailability as A;
+    match availability {
+        A::Available if played => Tier::Played,
+        A::LikelyAvailable | A::Unknown if played => Tier::Played,
+        A::Available => Tier::Ready,
+        A::LikelyAvailable | A::Unknown if refusal_expected => Tier::RefusalExpected,
+        A::LikelyAvailable => Tier::Likely,
+        A::Unknown => Tier::Unknown,
+        A::LikelyDead => Tier::Uncached,
+        A::Dead | A::Blocked => Tier::Dead,
     }
 }
 
-fn release_group(title: &str) -> Option<String> {
-    crate::quality::parse_quality(title)
-        .release_group
-        .map(|g| g.to_lowercase())
+fn exposed(availability: KnownAvailability, played: bool) -> StreamAvailability {
+    use KnownAvailability as A;
+    match availability {
+        A::Available => StreamAvailability::Ready,
+        A::LikelyAvailable => StreamAvailability::Likely,
+        A::Unknown if played => StreamAvailability::Likely,
+        A::Unknown => StreamAvailability::Unknown,
+        A::LikelyDead | A::Dead | A::Blocked => StreamAvailability::Uncached,
+    }
 }
 
-/// Order is: a release that just failed for a client sinks below everything; then
-/// availability tier; then continuity with what the caller played before; then learned
-/// name risk; then the incoming (score) order, which the stable sort preserves.
+/// Order is: a release that just failed for a client sinks below everything; then the
+/// availability tier; then releases without a preferred audio language sink; then fakes
+/// sink; then continuity with what the caller played before; then learned name risk; then
+/// score, discounted for releases many devices cannot play, whose default audio track is
+/// not the preferred language, or that look different from the previous episode.
+/// The pack the previous episode played from ranks as played: the next episode in it was
+/// selected along with that one.
 /// Availability is a hard tier rather than a score bonus: score ranges shift per quality
 /// profile, so any constant would be either too small to matter or swamp quality.
+/// Blocked releases are dropped.
 ///
 /// Warming walks this order, so it must be final — callers must not reorder it.
 pub async fn rank_options(
     pool: &PgPool,
     provider: &RankProvider,
     candidates: Vec<RankCandidate>,
-    prefer: Option<&StreamPreference>,
+    preferences: &RankPreferences<'_>,
 ) -> Vec<StreamOption> {
+    let prefer = preferences.prefer;
+    let audio_languages = language::normalise(preferences.audio_languages);
+    let candidates: Vec<RankCandidate> = candidates
+        .into_iter()
+        .filter(|c| c.availability != KnownAvailability::Blocked)
+        .collect();
     for c in &candidates {
         if let (Some(hash), Some(group)) = (&c.option.info_hash, &c.option.binge_group) {
             binge::remember(hash, group);
@@ -128,44 +164,80 @@ pub async fn rank_options(
 
     let continuity = prefer.map(|p| {
         let hash = p.info_hash.to_lowercase();
-        Continuity {
-            binge_group: rows
-                .iter()
-                .find(|r| r.info_hash == hash && r.binge_group.is_some())
-                .and_then(|r| r.binge_group.clone())
-                .or_else(|| binge::lookup(&hash)),
-            release_group: p.release_title.as_deref().and_then(release_group),
-            info_hash: hash,
-        }
+        let binge_group = rows
+            .iter()
+            .find(|r| r.info_hash == hash && r.binge_group.is_some())
+            .and_then(|r| r.binge_group.clone())
+            .or_else(|| binge::lookup(&hash));
+        Continuity::new(hash, binge_group, p.release_title.as_deref())
+    });
+    let previous_failed = prefer.is_some_and(|p| {
+        verdicts.get(&(p.info_hash.to_lowercase(), p.file_id)) == Some(&StreamPlayback::Failed)
     });
 
     let traits: Vec<Vec<String>> = candidates
         .iter()
-        .map(|c| outcomes::release_traits(&c.option.release_title))
+        .map(|c| trait_risk::release_traits(&c.option.release_title))
         .collect();
     let mut all_traits: Vec<String> = traits.iter().flatten().cloned().collect();
     all_traits.sort();
     all_traits.dedup();
-    let risk = TraitRisk::load(pool, provider.id, &provider.provider_type, &all_traits).await;
+    let risk = TraitRisk::load(pool, provider.id, &all_traits).await;
 
-    let mut keyed: Vec<((bool, KnownAvailability, u8, u8), StreamOption)> = candidates
+    let mut keyed: Vec<(RankKey, f64, StreamOption)> = candidates
         .into_iter()
         .zip(traits)
         .map(|(c, traits)| {
             let mut option = c.option;
             option.playback = release_key(&option).and_then(|k| verdicts.get(&k).copied());
-            let continuity_rank = continuity.as_ref().map_or(3, |cont| {
-                cont.rank(&option, release_group(&option.release_title).as_deref())
-            });
+            let quality = crate::quality::parse_quality(&option.release_title);
+            let continuity_rank = continuity
+                .as_ref()
+                .map_or(continuity::Rank::None, |cont| cont.rank(&option, &quality));
+            let same_pack = continuity_rank == continuity::Rank::SamePack
+                && !previous_failed
+                && !matches!(
+                    c.availability,
+                    KnownAvailability::Dead | KnownAvailability::Blocked
+                );
+            let played = option.playback == Some(StreamPlayback::Worked) || same_pack;
+            let availability = if same_pack {
+                KnownAvailability::Available
+            } else {
+                c.availability
+            };
+            let languages = language::parse_audio(&option.release_title);
+            let language_fit = language::fit(&languages, &audio_languages);
+            option.audio_languages = languages.listed.iter().map(|l| l.to_string()).collect();
+            let size = option
+                .files
+                .first()
+                .map(|f| f.size)
+                .filter(|s| *s > 0)
+                .unwrap_or(option.size);
+            let fit =
+                release_fit::assess(&option.release_title, &quality, size, option.total_score);
+            let risk = risk.risk(&traits);
+            let exposed = exposed(availability, played);
+            option.cached = exposed == StreamAvailability::Ready;
+            option.availability = Some(exposed);
+            let mut penalty = continuity
+                .as_ref()
+                .map_or(0.0, |cont| cont.style_penalty(&option, &quality));
+            if language_fit == LanguageFit::Secondary {
+                penalty += LANGUAGE_ORDER_MARGIN;
+            }
             let key = (
                 option.playback == Some(StreamPlayback::Failed),
-                c.availability,
+                tier(availability, played, risk.refusal_expected()),
+                language_fit == LanguageFit::Missing,
+                fit.suspect,
                 continuity_rank,
-                risk.bucket(&traits),
+                risk.bucket(),
             );
-            (key, option)
+            (key, fit.sort_score - penalty * fit.sort_score.abs(), option)
         })
         .collect();
-    keyed.sort_by_key(|(key, _)| *key);
-    keyed.into_iter().map(|(_, o)| o).collect()
+    keyed.sort_by(|(ka, sa, _), (kb, sb, _)| ka.cmp(kb).then(sb.total_cmp(sa)));
+    keyed.into_iter().map(|(_, _, o)| o).collect()
 }

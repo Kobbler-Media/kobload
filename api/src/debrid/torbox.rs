@@ -235,6 +235,7 @@ impl DebridProvider for TorBoxProvider {
                         id: i as i32,
                         path: f.name.clone().unwrap_or_default(),
                         size: f.size.unwrap_or(0),
+                        selected: false,
                     })
                     .collect();
 
@@ -329,6 +330,7 @@ impl DebridProvider for TorBoxProvider {
                 id: f.id.unwrap_or(0) as i32,
                 path: f.short_name.unwrap_or_default(),
                 size: f.size.unwrap_or(0),
+                selected: true,
             })
             .collect();
 

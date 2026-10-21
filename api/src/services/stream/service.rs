@@ -8,8 +8,11 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::ranking::{KnownAvailability, RankCandidate, RankProvider, rank_options};
-use crate::debrid::DebridProviderResolver;
+use super::availability::known_availability;
+use super::ranking::{
+    KnownAvailability, RankCandidate, RankPreferences, RankProvider, rank_options,
+};
+use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::decision_log::types::{LogProviderCall, LogRelease};
 use crate::decision_log::{self, DecisionCollector};
 use crate::hash_sources::{EztvClient, TorrentioClient, ZileanClient};
@@ -217,6 +220,17 @@ pub async fn stream_search(
         });
     }
 
+    // A resolve has to list the account before adding (RD does not dedup), and the
+    // listing takes about a second; starting it now hides it behind the search.
+    if let Some(provider_type) = DebridProviderType::parse(&providers[0].provider_type) {
+        super::account_index::prefetch(
+            providers[0].id,
+            ctx.debrid_providers.get(&provider_type),
+            ctx.http_client.clone(),
+            providers[0].api_key.clone(),
+        );
+    }
+
     // Check if any provider supports usenet (TorBox)
     let has_usenet_provider = providers.iter().any(|p| p.provider_type == "torbox");
 
@@ -384,9 +398,7 @@ pub async fn stream_search(
     let dead_hashes_handle = {
         let pool = ctx.pool.clone();
         let hashes = initial_dead_hash_inputs.clone();
-        tokio::spawn(
-            async move { query_known_availability(&pool, default_provider_id, &hashes).await },
-        )
+        tokio::spawn(async move { known_availability(&pool, default_provider_id, &hashes).await })
     };
 
     // Check if Tier 1 is good enough.
@@ -706,7 +718,7 @@ pub async fn stream_search(
     let delta: Vec<String> = final_hashes.difference(&initial_inputs).cloned().collect();
     timings.dead_hashes_supplementary_count = delta.len();
     if !delta.is_empty() {
-        known.extend(query_known_availability(ctx.pool, default_provider.id, &delta).await);
+        known.extend(known_availability(ctx.pool, default_provider.id, &delta).await);
     }
     timings.dead_hashes_ms = dead_hashes_await_start.elapsed().as_millis() as u64;
 
@@ -788,16 +800,10 @@ pub async fn stream_search(
                     continue;
                 }
 
-                // Drop only what the provider actively refuses. Merely-dead
-                // hashes stay in the list, ranked last — if they are all we
-                // have, offering one beats showing an empty modal.
                 let availability = known
                     .get(&normalized)
                     .copied()
                     .unwrap_or(KnownAvailability::Unknown);
-                if availability == KnownAvailability::Blocked {
-                    continue;
-                }
 
                 let match_score = result.match_score.unwrap_or(0.0);
                 let quality_score = result.quality_score.unwrap_or(0.0);
@@ -846,15 +852,14 @@ pub async fn stream_search(
                     quality_score,
                     debrid_provider: default_provider.provider_type.clone(),
                     debrid_provider_id: default_provider.id,
-                    // Only claim "cached" for a first-hand verified resolve.
-                    // Torrentio's LikelyAvailable is an aggregate hint and would
-                    // make the UI's "Instant" badge lie when it is wrong.
-                    cached: availability == KnownAvailability::Available,
+                    cached: false,
                     source_type: StreamSourceType::Torrent,
                     files,
                     publish_date: Some(result.release.publish_date.clone()),
                     binge_group,
                     playback: None,
+                    availability: None,
+                    audio_languages: Vec::new(),
                 };
                 ranked.push(RankCandidate {
                     option,
@@ -895,6 +900,8 @@ pub async fn stream_search(
                 publish_date: Some(result.release.publish_date.clone()),
                 binge_group: None,
                 playback: None,
+                availability: None,
+                audio_languages: Vec::new(),
             };
             ranked.push(RankCandidate {
                 option,
@@ -905,9 +912,12 @@ pub async fn stream_search(
 
     let rank_provider = RankProvider {
         id: default_provider.id,
-        provider_type: default_provider.provider_type.clone(),
     };
-    let mut options = rank_options(ctx.pool, &rank_provider, ranked, request.prefer.as_ref()).await;
+    let preferences = RankPreferences {
+        prefer: request.prefer.as_ref(),
+        audio_languages: &request.audio_languages,
+    };
+    let mut options = rank_options(ctx.pool, &rank_provider, ranked, &preferences).await;
     options.truncate(limit as usize);
     timings.options_build_ms = options_build_start.elapsed().as_millis() as u64;
 
@@ -1206,58 +1216,6 @@ fn collect_torrent_hashes(releases: &[Release]) -> Vec<String> {
         .map(|h| h.to_lowercase())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
-        .collect()
-}
-
-/// How long a successful probe stays trusted. Debrid caches are evicted over
-/// time, so this is deliberately short — it is a ranking hint, not a promise.
-const AVAILABLE_TTL: &str = "6 hours";
-/// Dead torrents can pick up seeders again, so re-probe them daily.
-const DEAD_TTL: &str = "24 hours";
-/// The RD filter-gate verdict is filename-derived and effectively permanent.
-const BLOCKED_TTL: &str = "30 days";
-
-/// Look up what we already know about these hashes on the given provider.
-///
-/// Applies a different freshness window per outcome so a blocked hash stays
-/// suppressed for weeks while a merely-dead one gets retried the next day.
-async fn query_known_availability(
-    pool: &PgPool,
-    provider_id: Uuid,
-    hashes: &[String],
-) -> std::collections::HashMap<String, KnownAvailability> {
-    if hashes.is_empty() {
-        return std::collections::HashMap::new();
-    }
-    // TTLs are interpolated from the consts above — they are compile-time
-    // literals, never user input, so this cannot carry untrusted SQL.
-    let rows = sqlx::query_as::<_, (String, bool, Option<String>)>(sqlx::AssertSqlSafe(format!(
-        r#"SELECT info_hash, available, reason FROM debrid_availability_cache
-           WHERE provider_id = $1
-             AND info_hash = ANY($2)
-             AND checked_at > NOW() - CASE
-                 WHEN available THEN INTERVAL '{AVAILABLE_TTL}'
-                 WHEN reason = 'blocked' THEN INTERVAL '{BLOCKED_TTL}'
-                 ELSE INTERVAL '{DEAD_TTL}'
-             END"#
-    )))
-    .bind(provider_id)
-    .bind(hashes)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    rows.into_iter()
-        .map(|(hash, available, reason)| {
-            let state = if available {
-                KnownAvailability::Available
-            } else if reason.as_deref() == Some("blocked") {
-                KnownAvailability::Blocked
-            } else {
-                KnownAvailability::Dead
-            };
-            (hash, state)
-        })
         .collect()
 }
 

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM stream_trait_outcomes\n        WHERE updated_at < NOW() - make_interval(days => $3)\n           OR (success_weight + failure_weight)\n              * POWER(0.5, EXTRACT(EPOCH FROM NOW() - updated_at)::float8 / $1) < $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "00ffffb1d98ffb70f1b491a21de2f5d7287146b91d56fab91c49c62fc0c88785"
+}

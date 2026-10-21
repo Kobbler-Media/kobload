@@ -22,7 +22,8 @@ koblibs must be checked out as a sibling directory; `Cargo.toml` patches its cra
 
 ## Patterns
 
-- Tests in `api/tests/`. Bug fixes are test-first — reproduce, then fix.
+- Tests in `api/tests/integration/`, one test binary: add a module and its `mod` line in `main.rs`, never a new top-level `api/tests/*.rs`. Filter with `cargo test --test integration <module>::`. Anything needing the process to itself (a custom global allocator) is a bench in `api/benches/`.
+- Bug fixes are test-first — reproduce, then fix.
 - INSERT/UPDATE/DELETE via `api/src/repositories/`.
 - Background work via `api/src/jobs/handlers/`, not `tokio::spawn`. Exceptions: `polling.rs` and `watch/service.rs` are continuous pollers.
 - HTTP via `crate::http::new_client()`.

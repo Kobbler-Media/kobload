@@ -47,7 +47,7 @@ All Rust targets run with `SQLX_OFFLINE=true`, so you can build without a databa
 
 If you are fixing a bug or changing behaviour, **write a failing test first**:
 
-1. Add an integration test in `api/tests/` that reproduces the bug. Run it and watch it fail.
+1. Add an integration test in `api/tests/integration/` (a module plus its `mod` line in `main.rs`) that reproduces the bug. Run it and watch it fail.
 2. Fix the bug.
 3. Run it again and watch it pass.
 

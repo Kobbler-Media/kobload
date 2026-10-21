@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -10,8 +10,11 @@ use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::debrid::{DebridFile, DebridProviderResolver, DebridTorrentStatus};
+use crate::debrid::{
+    DebridFile, DebridProvider, DebridProviderResolver, DebridTorrentStatus, Lane, Throttled,
+};
 use crate::download_clients::{DownloadClientError, PollResult, ScannedFile, get_extension};
+use crate::services::stream::flight::{self, Acquired, FlightContext, Job};
 use crate::types::{DownloadClientConfig, TestConnectionResult};
 
 use super::registry::{DownloadClientCapabilities, DownloadClientHandler};
@@ -64,21 +67,20 @@ impl DebridHandler {
         }
     }
 
-    /// Look up the debrid provider and API key from the DB using the provider ID
-    /// stored in the download client's `api_key` field.
-    async fn resolve_provider(
-        &self,
-        client: &DownloadClientConfig,
-    ) -> Result<(std::sync::Arc<dyn crate::debrid::DebridProvider>, String), DownloadClientError>
-    {
-        let provider_id_str = client
+    fn provider_id(client: &DownloadClientConfig) -> Result<Uuid, DownloadClientError> {
+        let raw = client
             .api_key
             .as_deref()
             .ok_or(DownloadClientError::MissingApiKey)?;
-        let provider_id = Uuid::parse_str(provider_id_str).map_err(|_| {
-            DownloadClientError::Message(format!("invalid debrid_provider_id: {provider_id_str}"))
-        })?;
+        Uuid::parse_str(raw)
+            .map_err(|_| DownloadClientError::Message(format!("invalid debrid_provider_id: {raw}")))
+    }
 
+    /// The provider as stored, before throttling: the shared flight applies its own lane.
+    async fn raw_provider(
+        &self,
+        provider_id: Uuid,
+    ) -> Result<(Arc<dyn DebridProvider>, String), DownloadClientError> {
         let row = sqlx::query!(
             "SELECT provider_type, api_key FROM debrid_providers WHERE id = $1",
             provider_id
@@ -103,34 +105,15 @@ impl DebridHandler {
         Ok((handler, row.api_key))
     }
 
-    /// Look up debrid provider from a provider_id UUID directly.
+    /// Every call on the account goes through its shared rate gate, in the download lane.
     async fn resolve_provider_by_id(
         &self,
         provider_id: Uuid,
-    ) -> Result<(std::sync::Arc<dyn crate::debrid::DebridProvider>, String), DownloadClientError>
-    {
-        let row = sqlx::query!(
-            "SELECT provider_type, api_key FROM debrid_providers WHERE id = $1",
-            provider_id
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DownloadClientError::Message(format!("database error: {e}")))?
-        .ok_or_else(|| {
-            DownloadClientError::Message(format!("debrid provider {provider_id} not found"))
-        })?;
-
-        let handler = self
-            .debrid_providers
-            .get_by_str(&row.provider_type)
-            .ok_or_else(|| {
-                DownloadClientError::Message(format!(
-                    "unknown debrid provider type: {}",
-                    row.provider_type
-                ))
-            })?;
-
-        Ok((handler, row.api_key))
+    ) -> Result<(Arc<dyn DebridProvider>, String), DownloadClientError> {
+        let (raw, api_key) = self.raw_provider(provider_id).await?;
+        let throttled: Arc<dyn DebridProvider> =
+            Arc::new(Throttled::new(raw, &api_key, Lane::download()));
+        Ok((throttled, api_key))
     }
 
     /// Extract info_hash from a magnet URL.
@@ -186,61 +169,38 @@ impl DownloadClientHandler for DebridHandler {
         client: &DownloadClientConfig,
         url: &str,
     ) -> Result<String, DownloadClientError> {
-        let (provider, api_key) = self.resolve_provider(client).await?;
+        let provider_id = Self::provider_id(client)?;
+        let (provider, api_key) = self.raw_provider(provider_id).await?;
         let info_hash = Self::extract_info_hash(url)?;
-
-        // Reuse a torrent the provider already holds. Real-Debrid does not
-        // dedup — re-adding a hash it has creates a second entry — so a re-grab
-        // of a release that is already on the account (a retry, or a duplicate
-        // want) would otherwise add another copy and consume another slot.
-        let existing = provider
-            .find_existing_torrent(&self.http_client, &api_key, &info_hash)
-            .await
-            .unwrap_or_else(|e| {
-                warn!(info_hash = %info_hash, error = %e, "failed to check for existing torrent");
-                None
-            });
-
-        let torrent_id = if let Some(found) = existing {
-            info!(
-                info_hash = %info_hash,
-                torrent_id = %found.id,
-                provider = %provider.display_name(),
-                "reusing existing torrent on debrid instead of re-adding"
-            );
-            found.id
-        } else {
-            info!(info_hash = %info_hash, provider = %provider.display_name(), "adding magnet to debrid");
-            provider
-                .add_magnet(&self.http_client, &api_key, url)
-                .await
-                .map_err(|e| DownloadClientError::Message(format!("add_magnet failed: {e}")))?
+        let ctx = FlightContext {
+            pool: self.pool.clone(),
+            http_client: self.http_client.clone(),
+            provider_type: provider.provider_type(),
+            provider,
+            api_key,
         };
-
-        // One initial check — if WaitingFileSelection, select files immediately
-        let torrent = provider
-            .get_torrent(&self.http_client, &api_key, &torrent_id)
-            .await
-            .map_err(|e| DownloadClientError::Message(format!("get_torrent failed: {e}")))?;
-
-        if matches!(torrent.status, DebridTorrentStatus::WaitingFileSelection) {
-            let select_ids = DebridFile::resolve_select_ids(&torrent.files, None);
-            info!(
-                info_hash = %info_hash,
-                select_ids = ?select_ids,
-                "Debrid download: selecting files"
-            );
-            if let Err(e) = provider
-                .select_files(&self.http_client, &api_key, &torrent_id, &select_ids)
-                .await
-            {
-                warn!(info_hash = %info_hash, error = %e, "select_files failed (will retry in poll)");
+        let job = Job {
+            provider_id,
+            info_hash: info_hash.clone(),
+            file_id: None,
+            file_name: None,
+            magnet: url.to_string(),
+            release_title: None,
+            want_link: false,
+        };
+        // Shares the account listing, the rate gate and any in-flight add of the same hash
+        // with streaming, and keeps warming from deleting the torrent this grab now owns.
+        flight::claim(provider_id, &info_hash);
+        info!(info_hash = %info_hash, "adding magnet to debrid");
+        let torrent_id = match flight::acquire(&ctx, job, Lane::download()).await {
+            Acquired::Pending { torrent_id, .. } | Acquired::Ready { torrent_id, .. } => torrent_id,
+            Acquired::Refused => {
+                return Err(DownloadClientError::Message(
+                    "provider refused this file (infringing/filtered)".to_string(),
+                ));
             }
-        }
-
-        // Parse provider_id from client config
-        let provider_id = Uuid::parse_str(client.api_key.as_deref().unwrap_or(""))
-            .map_err(|_| DownloadClientError::MissingApiKey)?;
+            Acquired::Failed { message } => return Err(DownloadClientError::Message(message)),
+        };
 
         let external = DebridExternalId {
             provider_id,
@@ -468,7 +428,11 @@ impl DownloadClientHandler for DebridHandler {
         _http_client: &reqwest::Client,
         client: &DownloadClientConfig,
     ) -> TestConnectionResult {
-        let (provider, api_key) = match self.resolve_provider(client).await {
+        let provider = match Self::provider_id(client) {
+            Ok(id) => self.resolve_provider_by_id(id).await,
+            Err(e) => Err(e),
+        };
+        let (provider, api_key) = match provider {
             Ok(pair) => pair,
             Err(e) => {
                 return TestConnectionResult {

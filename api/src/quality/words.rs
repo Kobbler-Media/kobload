@@ -8,9 +8,7 @@ use std::sync::LazyLock;
 
 use aho_corasick::AhoCorasick;
 
-use super::{
-    FORMATS_3D, LANGUAGES, RESOLUTIONS, STREAMING_SERVICES, VIDEO_CODECS, has_word, word_at,
-};
+use super::{FORMATS_3D, RESOLUTIONS, STREAMING_SERVICES, VIDEO_CODECS, has_word, word_at};
 
 /// The literal words passed to `has` in this module. Kept in step with the
 /// source by `registry_covers_every_literal_word`; a word missing here still
@@ -149,11 +147,12 @@ static REGISTRY: LazyLock<Registry> = LazyLock::new(|| {
                 .iter()
                 .flat_map(|(aliases, _, _)| aliases.iter()),
         )
-        .chain(LANGUAGES.iter().map(|(word, _)| word));
+        .copied()
+        .chain(crate::language::title_words());
     let mut anchor_ids: HashMap<&'static str, u32> = HashMap::new();
     let mut anchors = Vec::new();
     let mut words = HashMap::new();
-    for &word in WORDS.iter().chain(tables) {
+    for word in WORDS.iter().copied().chain(tables) {
         let (anchor, rest) = word
             .split_once('.')
             .map_or((word, None), |(a, _)| (a, Some(&word[a.len()..])));

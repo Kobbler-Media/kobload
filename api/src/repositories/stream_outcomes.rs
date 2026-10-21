@@ -152,6 +152,7 @@ pub async fn traits_for<'e, E>(
     provider_id: Uuid,
     traits: &[String],
     half_life_secs: f64,
+    ttl_days: i32,
 ) -> Result<Vec<TraitRow>>
 where
     E: Executor<'e, Database = Postgres>,
@@ -166,10 +167,12 @@ where
                    AS "failure_weight!"
         FROM stream_trait_outcomes
         WHERE provider_id = $1 AND trait = ANY($2)
+          AND updated_at > NOW() - make_interval(days => $4)
         "#,
         provider_id,
         traits,
         half_life_secs,
+        ttl_days,
     )
     .fetch_all(exec)
     .await?;
@@ -200,18 +203,25 @@ where
     Ok(result.rows_affected())
 }
 
-pub async fn prune_traits<'e, E>(exec: E, half_life_secs: f64, min_weight: f64) -> Result<u64>
+pub async fn prune_traits<'e, E>(
+    exec: E,
+    half_life_secs: f64,
+    min_weight: f64,
+    ttl_days: i32,
+) -> Result<u64>
 where
     E: Executor<'e, Database = Postgres>,
 {
     let result = sqlx::query!(
         r#"
         DELETE FROM stream_trait_outcomes
-        WHERE (success_weight + failure_weight)
+        WHERE updated_at < NOW() - make_interval(days => $3)
+           OR (success_weight + failure_weight)
               * POWER(0.5, EXTRACT(EPOCH FROM NOW() - updated_at)::float8 / $1) < $2
         "#,
         half_life_secs,
         min_weight,
+        ttl_days,
     )
     .execute(exec)
     .await?;
@@ -228,4 +238,43 @@ where
     .fetch_optional(exec)
     .await?;
     Ok(id)
+}
+
+pub struct PastProbe {
+    pub available: bool,
+    pub title: String,
+    pub age_secs: f64,
+}
+
+pub async fn past_probes<'e, E>(exec: E, provider_id: Uuid, ttl_days: i32) -> Result<Vec<PastProbe>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let rows = sqlx::query_as!(
+        PastProbe,
+        r#"
+        SELECT c.available, t.original_title AS title,
+               EXTRACT(EPOCH FROM NOW() - c.checked_at)::float8 AS "age_secs!"
+        FROM debrid_availability_cache c
+        JOIN torrent_hash_index t USING (info_hash)
+        WHERE c.provider_id = $1
+          AND (c.available OR c.reason = 'blocked')
+          AND c.checked_at > NOW() - make_interval(days => $2)
+        "#,
+        provider_id,
+        ttl_days,
+    )
+    .fetch_all(exec)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn provider_ids<'e, E>(exec: E) -> Result<Vec<Uuid>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let ids = sqlx::query_scalar!("SELECT id FROM debrid_providers")
+        .fetch_all(exec)
+        .await?;
+    Ok(ids)
 }

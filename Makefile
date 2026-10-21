@@ -90,6 +90,7 @@ test-db-down:
 
 test-api: test-db-up
 	@DATABASE_URL=$(TEST_DATABASE_URL) \
+	CARGO_INCREMENTAL=0 \
 	cargo test --manifest-path api/Cargo.toml -- --test-threads=4; \
 	EXIT_CODE=$$?; \
 	$(MAKE) test-db-down; \

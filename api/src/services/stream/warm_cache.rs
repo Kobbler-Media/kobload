@@ -13,7 +13,8 @@
 //! removed; it now returns error_code 37 "Disabled endpoint").
 //!
 //! On resolve, the warm cache is checked first — a `Ready` entry returns the
-//! stream URL with zero API calls, and an `InProgress` entry skips `add_magnet`.
+//! stream URL with zero API calls. Probes and resolves share their provider work
+//! through [`super::flight`].
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -23,9 +24,10 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use super::flight::{self, Acquired, FlightContext, Job, ReadyLink};
 use crate::debrid::{
-    DebridError, DebridFile, DebridProviderResolver, DebridProviderType, DebridTorrentStatus,
-    ExistingTorrent,
+    DebridFile, DebridProvider, DebridProviderResolver, DebridProviderType, DebridTorrentStatus,
+    Lane, Throttled,
 };
 use crate::services::stream::load_provider_config;
 use crate::types::DownloadStreamEvent;
@@ -53,19 +55,9 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(300);
 /// the fallbacks land on unprobed, cold options.
 const WARM_TOP_N: usize = 8;
 
-/// Concurrent warm probes.
-///
-/// Each probe is 3-4 provider calls, so 4 in flight is a ~16-call burst. Against
-/// Real-Debrid's 250 requests/minute (~4/sec sustained) that reliably tripped
-/// the limiter within 250ms, and a rate-limited probe learns nothing. Two in
-/// flight plus [`WARM_STAGGER`] keeps the burst inside the budget.
+/// Concurrent warm probes. The account's gate sets the call rate; this keeps probes
+/// finishing in ranked order rather than all at once.
 const WARM_CONCURRENCY: usize = 2;
-
-/// Delay between starting successive probes, to spread the call burst.
-const WARM_STAGGER: Duration = Duration::from_millis(300);
-
-/// How long to wait before retrying a probe that was rate limited.
-const WARM_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(2);
 
 /// Active torrent slots to leave free for the download client's real grabs.
 ///
@@ -213,35 +205,6 @@ pub async fn record_availability(
 
 const VERDICT_FRESHNESS: Duration = Duration::from_secs(6 * 3600);
 
-/// Remove a torrent we submitted purely to probe its cache status.
-///
-/// Warming adds magnets to find out whether the provider already has them.
-/// Anything we aren't going to stream has to be removed again, or it occupies
-/// an active-torrent slot until it finishes downloading — a handful of searches
-/// is enough to fill the pool and make every subsequent add fail.
-async fn cleanup_torrent(
-    http_client: &reqwest::Client,
-    handler: &dyn crate::debrid::DebridProvider,
-    api_key: &str,
-    torrent_id: &str,
-    info_hash: &str,
-    was_reused: bool,
-) {
-    // Only remove what this probe created. A reused entry predates the search —
-    // it may be a completed download the user still wants, and deleting it would
-    // turn a duplicate-avoidance win into data loss.
-    if was_reused {
-        debug!(info_hash = %info_hash, "Warm cache: leaving pre-existing torrent in place");
-        return;
-    }
-    if let Err(e) = handler
-        .delete_torrent(http_client, api_key, torrent_id)
-        .await
-    {
-        debug!(info_hash = %info_hash, error = %e, "Warm cache: cleanup delete failed");
-    }
-}
-
 /// Map a [`DebridError`] to the availability outcome that should be recorded.
 ///
 /// Returns `None` when the error says nothing about the hash itself, in which
@@ -256,22 +219,41 @@ pub fn reason_for_error(err: &crate::debrid::DebridError) -> Option<UnavailableR
     Some(UnavailableReason::Dead)
 }
 
-/// Warm the top N stream options by submitting magnets to the debrid provider.
-///
-/// Called as a background task after `stream_search()` returns. Probes run
-/// concurrently (bounded by [`WARM_CONCURRENCY`]) because each is dominated by
-/// provider round-trip latency, and the client's auto-fallback will walk
-/// several options deep — warming only the first would leave the rest cold.
-///
-/// For each option:
-/// 1. Skip if already in the warm cache
-/// 2. `add_magnet` + `select_files` + `get_torrent`
-/// 3. If cached on provider: `unrestrict_link`, store as Ready, emit SSE
-/// 4. If not cached: record it, remove the torrent again, and — for #1 only —
-///    keep it and poll until ready so "play anyway" has something to wait on.
-///
-/// Every conclusive outcome is written to `debrid_availability_cache`, which is
-/// what lets later searches rank by real availability instead of guessing.
+pub fn store_ready(
+    key: WarmCacheKey,
+    link: &ReadyLink,
+    torrent_id: &str,
+    provider_type: DebridProviderType,
+) {
+    insert(
+        key,
+        WarmCacheEntry::Ready {
+            stream_url: link.stream_url.clone(),
+            filename: link.filename.clone(),
+            filesize: link.filesize,
+            mime_type: link.mime_type.clone(),
+            expires_at: link.expires_at.clone(),
+            torrent_id: torrent_id.to_string(),
+            provider_type,
+            resolved_at: Instant::now(),
+        },
+    );
+}
+
+fn failed(key: WarmCacheKey, error: String) {
+    insert(
+        key,
+        WarmCacheEntry::Failed {
+            error,
+            failed_at: Instant::now(),
+        },
+    );
+}
+
+/// Probes the top options in ranked order, so the releases a client will fall back to are
+/// verified before it reaches them. Every call waits behind any user resolve on the same
+/// account (see [`crate::debrid::throttle`]), and a probe of a hash a user is resolving
+/// joins that resolve instead of adding the magnet twice.
 pub async fn warm_top_results(
     pool: PgPool,
     http_client: reqwest::Client,
@@ -279,18 +261,24 @@ pub async fn warm_top_results(
     download_events: broadcast::Sender<DownloadStreamEvent>,
     options: Vec<StreamOption>,
 ) {
+    // A season pack appears once per episode file; its cache status is the torrent's, so
+    // one probe answers for all of them.
+    let mut seen_hashes = std::collections::HashSet::new();
     let candidates: Vec<_> = options
         .into_iter()
-        .filter(|opt| opt.info_hash.is_some()) // torrents only
+        .filter(|opt| {
+            opt.info_hash
+                .as_ref()
+                .is_some_and(|h| seen_hashes.insert(h.to_lowercase()))
+        })
         .take(WARM_TOP_N)
+        .filter(|opt| warm_key(opt).is_some_and(|k| lookup(&k).is_none()))
         .collect();
-
-    if candidates.is_empty() {
+    let Some(first) = candidates.first() else {
         return;
-    }
+    };
 
-    // All options from one search share a provider, so resolve config once.
-    let provider_id = candidates[0].debrid_provider_id;
+    let provider_id = first.debrid_provider_id;
     let provider_config = match load_provider_config(&pool, provider_id).await {
         Ok(c) => c,
         Err(e) => {
@@ -302,29 +290,18 @@ pub async fn warm_top_results(
         warn!(provider = %provider_config.provider_type, "Warm cache: unknown provider type");
         return;
     };
-    let handler = debrid_providers.get(&provider_type);
-    let api_key = provider_config.api_key.clone();
+    let ctx = FlightContext {
+        pool,
+        http_client,
+        provider: debrid_providers.get(&provider_type),
+        provider_type,
+        api_key: provider_config.api_key,
+    };
 
-    // One probe per info hash. Options are deduped by (hash, file_idx), so a
-    // season pack can appear several times over — same torrent, different
-    // episode file. Warming each would fire concurrent add_magnet calls for one
-    // hash, and since Real-Debrid does not dedup, every one of them lands as a
-    // separate entry. Probing the hash once answers the question for all of
-    // them: cache status is a property of the torrent, not the file.
-    let mut seen_hashes = std::collections::HashSet::new();
-    let candidates: Vec<_> = candidates
-        .into_iter()
-        .filter(|opt| match opt.info_hash {
-            Some(ref h) => seen_hashes.insert(h.to_lowercase()),
-            None => true,
-        })
-        .collect();
-
-    // Respect the account's active-torrent budget. Probing costs a slot until
-    // we delete the torrent again, so warming into a nearly-full pool just
-    // produces a wave of "torrent already active" errors and starves the
-    // download client of slots it needs for real grabs.
-    let budget = match handler.active_slots(&http_client, &api_key).await {
+    // Probing costs a slot until the delete lands; warming into a nearly-full pool starves
+    // the download client of slots for real grabs.
+    let handler = Throttled::new(ctx.provider.clone(), &ctx.api_key, Lane::background());
+    let budget = match handler.active_slots(&ctx.http_client, &ctx.api_key).await {
         Ok(Some(slots)) => {
             let free = slots.available().saturating_sub(SLOT_HEADROOM) as usize;
             if free == 0 {
@@ -337,415 +314,135 @@ pub async fn warm_top_results(
             }
             free.min(candidates.len())
         }
-        // Provider doesn't report slots (or the call failed) — proceed with the
-        // full set rather than blocking warming on a diagnostic endpoint.
         _ => candidates.len(),
     };
 
-    let to_warm: Vec<_> = candidates.into_iter().take(budget).collect();
+    info!(count = budget, provider = %provider_type, "Starting debrid cache warming");
 
-    // One listing up front, shared by every probe. Real-Debrid does not dedup:
-    // re-adding a hash it already holds creates a second entry rather than
-    // returning the first, so without this a repeated search silently doubles
-    // the account's torrent list and burns a slot each time. Measured on a live
-    // account, 21 of 100 entries were redundant copies of an existing hash.
-    let existing = handler
-        .find_existing_torrents(&http_client, &api_key)
-        .await
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "Warm cache: could not list existing torrents, may create duplicates");
-            std::collections::HashMap::new()
-        });
-
-    info!(
-        count = to_warm.len(),
-        existing = existing.len(),
-        provider = %provider_type,
-        "Starting debrid cache warming"
-    );
-
-    let existing = std::sync::Arc::new(existing);
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(WARM_CONCURRENCY));
-    let mut tasks = Vec::with_capacity(to_warm.len());
-
-    for (idx, option) in to_warm.into_iter().enumerate() {
+    let mut tasks = Vec::with_capacity(budget);
+    for (idx, option) in candidates.into_iter().take(budget).enumerate() {
         let semaphore = semaphore.clone();
-        let pool = pool.clone();
-        let http_client = http_client.clone();
-        let debrid_providers = debrid_providers.clone();
+        let ctx = ctx.clone();
         let download_events = download_events.clone();
-        let api_key = api_key.clone();
-        let existing = existing.clone();
-
         tasks.push(tokio::spawn(async move {
             let Ok(_permit) = semaphore.acquire().await else {
                 return;
             };
-            // Spread the burst: probes are cheap to delay and expensive to
-            // retry, and the provider counts refused requests toward the limit.
-            if idx > 0 {
-                tokio::time::sleep(WARM_STAGGER).await;
-            }
-            warm_one(
-                idx,
-                option,
-                provider_type,
-                api_key,
-                existing,
-                pool,
-                http_client,
-                debrid_providers,
-                download_events,
-            )
-            .await;
+            warm_one(idx, option, ctx, download_events).await;
         }));
     }
-
     for task in tasks {
         let _ = task.await;
     }
 }
 
-/// Probe a single option: is it already cached on the provider?
-#[allow(clippy::too_many_arguments)]
+fn warm_key(option: &StreamOption) -> Option<WarmCacheKey> {
+    Some(WarmCacheKey {
+        debrid_provider_id: option.debrid_provider_id,
+        info_hash: option.info_hash.as_deref()?.to_lowercase(),
+        file_id: option.files.first().map(|f| f.id),
+    })
+}
+
 async fn warm_one(
     idx: usize,
     option: StreamOption,
-    provider_type: DebridProviderType,
-    api_key: String,
-    existing: std::sync::Arc<std::collections::HashMap<String, ExistingTorrent>>,
-    pool: PgPool,
-    http_client: reqwest::Client,
-    debrid_providers: std::sync::Arc<dyn DebridProviderResolver>,
+    ctx: FlightContext,
     download_events: broadcast::Sender<DownloadStreamEvent>,
 ) {
-    let Some(ref raw_hash) = option.info_hash else {
+    let Some(key) = warm_key(&option) else {
         return;
     };
-    let info_hash = raw_hash.to_lowercase();
-    let is_primary = idx == 0;
-
-    let file_id = option.files.first().map(|f| f.id);
-    let file_name = option
-        .files
-        .first()
-        .map(|f| f.path.clone())
-        .filter(|p| !p.is_empty());
-    let key = WarmCacheKey {
-        debrid_provider_id: option.debrid_provider_id,
-        info_hash: info_hash.clone(),
-        file_id,
-    };
-
-    // Skip if already warming or ready
+    let info_hash = key.info_hash.clone();
+    let file = option.files.first();
     if lookup(&key).is_some() {
         debug!(info_hash = %info_hash, "Warm cache: already has entry, skipping");
         return;
     }
 
-    let handler = debrid_providers.get(&provider_type);
-
-    let magnet = option
-        .magnet_url
-        .clone()
-        .unwrap_or_else(|| format!("magnet:?xt=urn:btih:{info_hash}"));
-
-    // Reuse an entry the provider already holds for this hash rather than
-    // adding a second copy. Besides avoiding duplicates, this is free: the
-    // listing was fetched once for the whole batch, so a hit costs no call at
-    // all where add_magnet would cost one plus a slot.
-    let reused = existing.get(&info_hash);
-    let was_reused = reused.is_some();
-    if let Some(found) = reused {
-        debug!(
-            info_hash = %info_hash,
-            torrent_id = %found.id,
-            "Warm cache: reusing existing torrent instead of re-adding"
-        );
-    }
-
-    let mut add_result = match reused {
-        Some(found) => Ok(found.id.clone()),
-        None => handler.add_magnet(&http_client, &api_key, &magnet).await,
+    let job = Job {
+        provider_id: option.debrid_provider_id,
+        info_hash: info_hash.clone(),
+        file_id: key.file_id,
+        file_name: file.map(|f| f.path.clone()).filter(|p| !p.is_empty()),
+        magnet: option
+            .magnet_url
+            .clone()
+            .unwrap_or_else(|| format!("magnet:?xt=urn:btih:{info_hash}")),
+        release_title: Some(option.release_title.clone()),
+        want_link: true,
     };
 
-    // A rate-limited probe tells us nothing about the hash and would otherwise
-    // leave a gap in the ranking, so back off once and try again.
-    if matches!(add_result, Err(DebridError::RateLimited { .. })) {
-        debug!(info_hash = %info_hash, "Warm cache: rate limited, backing off");
-        tokio::time::sleep(WARM_RATE_LIMIT_BACKOFF).await;
-        add_result = handler.add_magnet(&http_client, &api_key, &magnet).await;
-    }
-
-    let torrent_id = match add_result {
-        Ok(id) => id,
-        Err(e) => {
-            // Only record outcomes that actually tell us something about this
-            // hash — a rate limit or a full slot pool must not poison the cache.
-            if let Some(reason) = reason_for_error(&e) {
-                super::outcomes::record_probe(
-                    &pool,
-                    key.debrid_provider_id,
-                    &info_hash,
-                    Some(&option.release_title),
-                    Some(reason),
-                )
-                .await;
-            }
-            warn!(info_hash = %info_hash, error = %e, "Warm cache: add_magnet failed");
+    match flight::acquire(&ctx, job.clone(), Lane::background()).await {
+        Acquired::Ready { link, torrent_id } => {
+            info!(info_hash = %info_hash, idx, "Warm cache: ready (cached on provider)");
+            store_ready(key.clone(), &link, &torrent_id, ctx.provider_type);
+            emit_warm_ready(&download_events, &key, &option.debrid_provider);
+        }
+        Acquired::Pending { torrent_id, .. } if idx == 0 => {
+            // #1 keeps downloading so "play anyway" has something to wait on.
             insert(
-                key,
-                WarmCacheEntry::Failed {
-                    error: e.to_string(),
-                    failed_at: Instant::now(),
+                key.clone(),
+                WarmCacheEntry::InProgress {
+                    torrent_id: ctx.provider_type.prefixed_id(&torrent_id),
+                    provider_type: ctx.provider_type,
+                    started_at: Instant::now(),
                 },
             );
-            return;
+            info!(info_hash = %info_hash, "Warm cache: #1 not cached, starting background poll");
+            tokio::spawn(poll_warm_entry(
+                key,
+                torrent_id,
+                ctx,
+                download_events,
+                option.debrid_provider.clone(),
+                job,
+            ));
         }
-    };
-
-    // Check torrent status — we need the file list to resolve correct provider file IDs.
-    let torrent_result = handler
-        .get_torrent(&http_client, &api_key, &torrent_id)
-        .await;
-
-    // If waiting for file selection, select files using filename matching against
-    // the provider's file list (file_idx from Torrentio/hash index doesn't match
-    // provider-assigned IDs — e.g. RD uses 1-based IDs).
-    let torrent_result = match torrent_result {
-        Ok(t) if matches!(t.status, DebridTorrentStatus::WaitingFileSelection) => {
-            let select_ids = DebridFile::resolve_select_ids(&t.files, file_name.as_deref());
-            info!(
-                info_hash = %info_hash,
-                select_ids = ?select_ids,
-                "Warm cache: selecting files (WaitingFileSelection)"
-            );
-            if let Err(e) = handler
-                .select_files(&http_client, &api_key, &torrent_id, &select_ids)
-                .await
-            {
-                warn!(info_hash = %info_hash, error = %e, "Warm cache: select_files failed");
-            }
-            // Brief pause for provider to process the selection
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            handler
-                .get_torrent(&http_client, &api_key, &torrent_id)
-                .await
-        }
-        other => other,
-    };
-
-    let torrent = match torrent_result {
-        Ok(t) => t,
-        Err(e) => {
-            if let Some(reason) = reason_for_error(&e) {
-                super::outcomes::record_probe(
-                    &pool,
-                    key.debrid_provider_id,
-                    &info_hash,
-                    Some(&option.release_title),
-                    Some(reason),
-                )
-                .await;
-            }
-            warn!(info_hash = %info_hash, error = %e, "Warm cache: get_torrent failed");
-            cleanup_torrent(
-                &http_client,
-                handler.as_ref(),
-                &api_key,
-                &torrent_id,
+        Acquired::Pending { torrent_id, reused } => {
+            debug!(info_hash = %info_hash, idx, "Warm cache: not cached, releasing slot");
+            super::outcomes::record_probe(
+                &ctx.pool,
+                job.provider_id,
                 &info_hash,
-                was_reused,
+                job.release_title.as_deref(),
+                Some(UnavailableReason::Dead),
             )
             .await;
-            insert(
-                key,
-                WarmCacheEntry::Failed {
-                    error: e.to_string(),
-                    failed_at: Instant::now(),
-                },
-            );
-            return;
-        }
-    };
-
-    // The provider refuses this file outright — record it so it never gets
-    // offered again, and drop the torrent.
-    if matches!(torrent.status, DebridTorrentStatus::Blocked) {
-        info!(info_hash = %info_hash, idx, "Warm cache: provider refused (filter-gate)");
-        super::outcomes::record_probe(
-            &pool,
-            key.debrid_provider_id,
-            &info_hash,
-            Some(&option.release_title),
-            Some(UnavailableReason::Blocked),
-        )
-        .await;
-        cleanup_torrent(
-            &http_client,
-            handler.as_ref(),
-            &api_key,
-            &torrent_id,
-            &info_hash,
-            was_reused,
-        )
-        .await;
-        insert(
-            key,
-            WarmCacheEntry::Failed {
-                error: "Provider refused this file".to_string(),
-                failed_at: Instant::now(),
-            },
-        );
-        return;
-    }
-
-    let is_ready = matches!(
-        torrent.status,
-        DebridTorrentStatus::Cached | DebridTorrentStatus::Ready
-    ) && !torrent.links.is_empty();
-
-    if is_ready {
-        // Already cached — unrestrict and store
-        let Some(link) = torrent.links.first() else {
-            return;
-        };
-        match handler.unrestrict_link(&http_client, &api_key, link).await {
-            Ok(unrestricted) => {
-                let expires_at = unrestricted.expires_at.map(|t| {
-                    t.format(&time::format_description::well_known::Rfc3339)
-                        .unwrap_or_default()
-                });
-                let prefixed = provider_type.prefixed_id(&torrent_id);
-                info!(
-                    info_hash = %info_hash,
-                    idx,
-                    "Warm cache: immediately ready (cached on provider)"
-                );
-                insert(
-                    key.clone(),
-                    WarmCacheEntry::Ready {
-                        stream_url: unrestricted.url,
-                        filename: unrestricted.filename,
-                        filesize: unrestricted.filesize,
-                        mime_type: unrestricted.mime_type,
-                        expires_at,
-                        torrent_id: prefixed,
-                        provider_type,
-                        resolved_at: Instant::now(),
-                    },
-                );
-                super::outcomes::record_probe(
-                    &pool,
-                    key.debrid_provider_id,
-                    &info_hash,
-                    Some(&option.release_title),
-                    None,
-                )
-                .await;
-                emit_warm_ready(&download_events, &key, &option.debrid_provider);
-            }
-            Err(e) => {
-                if let Some(reason) = reason_for_error(&e) {
-                    super::outcomes::record_probe(
-                        &pool,
-                        key.debrid_provider_id,
-                        &info_hash,
-                        Some(&option.release_title),
-                        Some(reason),
-                    )
-                    .await;
-                }
-                warn!(info_hash = %info_hash, error = %e, "Warm cache: unrestrict failed");
-                insert(
-                    key,
-                    WarmCacheEntry::Failed {
-                        error: e.to_string(),
-                        failed_at: Instant::now(),
-                    },
-                );
+            if !reused {
+                flight::release_probe(&ctx, &job, &torrent_id).await;
             }
         }
-        return;
-    }
-
-    // Not cached on the provider.
-    if is_primary {
-        // Keep #1 downloading and poll it — the user may choose to wait.
-        let prefixed = provider_type.prefixed_id(&torrent_id);
-        insert(
-            key.clone(),
-            WarmCacheEntry::InProgress {
-                torrent_id: prefixed,
-                provider_type,
-                started_at: Instant::now(),
-            },
-        );
-        info!(
-            info_hash = %info_hash,
-            "Warm cache: #1 not cached, starting background poll"
-        );
-        // Detached: the poll runs for minutes, and it must not hold the
-        // caller's concurrency permit (or delay the other probes) while it does.
-        tokio::spawn(poll_warm_entry(
-            key,
-            torrent_id,
-            provider_type,
-            pool,
-            http_client,
-            debrid_providers,
-            download_events,
-            option.debrid_provider.clone(),
-            option.release_title.clone(),
-            file_name,
-        ));
-    } else {
-        // We only wanted to know whether it was cached. It isn't — record that
-        // and hand the slot back rather than leaving it to download unwatched.
-        debug!(info_hash = %info_hash, idx, "Warm cache: not cached, releasing slot");
-        super::outcomes::record_probe(
-            &pool,
-            key.debrid_provider_id,
-            &info_hash,
-            Some(&option.release_title),
-            Some(UnavailableReason::Dead),
-        )
-        .await;
-        cleanup_torrent(
-            &http_client,
-            handler.as_ref(),
-            &api_key,
-            &torrent_id,
-            &info_hash,
-            was_reused,
-        )
-        .await;
+        Acquired::Refused => {
+            info!(info_hash = %info_hash, idx, "Warm cache: provider refused (filter-gate)");
+            failed(key, "Provider refused this file".to_string());
+        }
+        Acquired::Failed { message } => {
+            warn!(info_hash = %info_hash, error = %message, "Warm cache: probe failed");
+            failed(key, message);
+        }
     }
 }
 
-/// Poll the debrid provider for option #1 until it becomes ready.
-#[allow(clippy::too_many_arguments)]
 async fn poll_warm_entry(
     key: WarmCacheKey,
     torrent_id: String,
-    provider_type: DebridProviderType,
-    pool: PgPool,
-    http_client: reqwest::Client,
-    debrid_providers: std::sync::Arc<dyn DebridProviderResolver>,
+    ctx: FlightContext,
     download_events: broadcast::Sender<DownloadStreamEvent>,
     debrid_provider_name: String,
-    release_title: String,
-    file_name: Option<String>,
+    job: Job,
 ) {
     let deadline = Instant::now() + POLL_TIMEOUT;
-    let handler = debrid_providers.get(&provider_type);
-
-    let api_key = match load_provider_config(&pool, key.debrid_provider_id).await {
-        Ok(c) => c.api_key,
-        Err(e) => {
-            warn!(error = %e, "Warm poll: failed to load provider config");
-            return;
-        }
+    let handler = Throttled::new(ctx.provider.clone(), &ctx.api_key, Lane::background());
+    let record = |reason| {
+        super::outcomes::record_probe(
+            &ctx.pool,
+            key.debrid_provider_id,
+            &key.info_hash,
+            job.release_title.as_deref(),
+            reason,
+        )
     };
 
     loop {
@@ -753,186 +450,92 @@ async fn poll_warm_entry(
 
         if Instant::now() > deadline {
             info!(info_hash = %key.info_hash, "Warm poll: timed out");
-            super::outcomes::record_probe(
-                &pool,
-                key.debrid_provider_id,
-                &key.info_hash,
-                Some(&release_title),
-                Some(UnavailableReason::Dead),
-            )
-            .await;
+            record(Some(UnavailableReason::Dead)).await;
             break;
         }
-
-        // Check if entry was evicted or superseded
         if lookup(&key).is_none() {
             debug!(info_hash = %key.info_hash, "Warm poll: entry expired, stopping");
             break;
         }
 
-        match handler
-            .get_torrent(&http_client, &api_key, &torrent_id)
+        let torrent = match handler
+            .get_torrent(&ctx.http_client, &ctx.api_key, &torrent_id)
             .await
         {
-            Ok(torrent) => {
-                let is_ready = matches!(
-                    torrent.status,
-                    DebridTorrentStatus::Cached | DebridTorrentStatus::Ready
-                ) && !torrent.links.is_empty();
-
-                if is_ready {
-                    if let Some(link) = torrent.links.first() {
-                        match handler.unrestrict_link(&http_client, &api_key, link).await {
-                            Ok(unrestricted) => {
-                                let expires_at = unrestricted.expires_at.map(|t| {
-                                    t.format(&time::format_description::well_known::Rfc3339)
-                                        .unwrap_or_default()
-                                });
-                                let prefixed = provider_type.prefixed_id(&torrent_id);
-                                info!(
-                                    info_hash = %key.info_hash,
-                                    "Warm poll: ready, unrestricted"
-                                );
-                                insert(
-                                    key.clone(),
-                                    WarmCacheEntry::Ready {
-                                        stream_url: unrestricted.url,
-                                        filename: unrestricted.filename,
-                                        filesize: unrestricted.filesize,
-                                        mime_type: unrestricted.mime_type,
-                                        expires_at,
-                                        torrent_id: prefixed,
-                                        provider_type,
-                                        resolved_at: Instant::now(),
-                                    },
-                                );
-                                emit_warm_ready(&download_events, &key, &debrid_provider_name);
-                                super::outcomes::record_probe(
-                                    &pool,
-                                    key.debrid_provider_id,
-                                    &key.info_hash,
-                                    Some(&release_title),
-                                    None,
-                                )
-                                .await;
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "Warm poll: unrestrict failed");
-                                insert(
-                                    key,
-                                    WarmCacheEntry::Failed {
-                                        error: e.to_string(),
-                                        failed_at: Instant::now(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                match torrent.status {
-                    DebridTorrentStatus::Blocked => {
-                        warn!(
-                            info_hash = %key.info_hash,
-                            "Warm poll: provider refused this file (filter-gate)"
-                        );
-                        super::outcomes::record_probe(
-                            &pool,
-                            key.debrid_provider_id,
-                            &key.info_hash,
-                            Some(&release_title),
-                            Some(UnavailableReason::Blocked),
-                        )
-                        .await;
-                        cleanup_torrent(
-                            &http_client,
-                            handler.as_ref(),
-                            &api_key,
-                            &torrent_id,
-                            &key.info_hash,
-                            false,
-                        )
-                        .await;
-                        insert(
-                            key,
-                            WarmCacheEntry::Failed {
-                                error: "Provider refused this file".to_string(),
-                                failed_at: Instant::now(),
-                            },
-                        );
-                        return;
-                    }
-                    DebridTorrentStatus::Error { ref message } => {
-                        warn!(
-                            info_hash = %key.info_hash,
-                            error = %message,
-                            "Warm poll: provider reported error"
-                        );
-                        super::outcomes::record_probe(
-                            &pool,
-                            key.debrid_provider_id,
-                            &key.info_hash,
-                            Some(&release_title),
-                            Some(UnavailableReason::Dead),
-                        )
-                        .await;
-                        cleanup_torrent(
-                            &http_client,
-                            handler.as_ref(),
-                            &api_key,
-                            &torrent_id,
-                            &key.info_hash,
-                            false,
-                        )
-                        .await;
-                        insert(
-                            key,
-                            WarmCacheEntry::Failed {
-                                error: message.clone(),
-                                failed_at: Instant::now(),
-                            },
-                        );
-                        return;
-                    }
-                    DebridTorrentStatus::WaitingFileSelection => {
-                        let select_ids =
-                            DebridFile::resolve_select_ids(&torrent.files, file_name.as_deref());
-                        info!(
-                            info_hash = %key.info_hash,
-                            select_ids = ?select_ids,
-                            "Warm poll: selecting files (WaitingFileSelection)"
-                        );
-                        if let Err(e) = handler
-                            .select_files(&http_client, &api_key, &torrent_id, &select_ids)
-                            .await
-                        {
-                            warn!(
-                                info_hash = %key.info_hash,
-                                error = %e,
-                                "Warm poll: select_files failed"
-                            );
-                        }
-                        // Continue polling — provider needs a moment to process the selection
-                    }
-                    DebridTorrentStatus::Downloading { progress } => {
-                        debug!(
-                            info_hash = %key.info_hash,
-                            progress = %progress,
-                            "Warm poll: still downloading"
-                        );
-                    }
-                    _ => {}
-                }
-            }
+            Ok(t) => t,
             Err(e) => {
-                warn!(
-                    info_hash = %key.info_hash,
-                    error = %e,
-                    "Warm poll: get_torrent failed"
-                );
-                // Don't fail on transient errors — keep polling
+                warn!(info_hash = %key.info_hash, error = %e, "Warm poll: get_torrent failed");
+                continue;
             }
+        };
+
+        match torrent.status {
+            DebridTorrentStatus::Cached | DebridTorrentStatus::Ready
+                if !torrent.links.is_empty() =>
+            {
+                let link = torrent
+                    .wanted_link(
+                        job.file_name.as_deref(),
+                        job.provider_file_id(ctx.provider_type),
+                    )
+                    .unwrap_or(&torrent.links[0]);
+                match handler
+                    .unrestrict_link(&ctx.http_client, &ctx.api_key, link)
+                    .await
+                {
+                    Ok(u) => {
+                        info!(info_hash = %key.info_hash, "Warm poll: ready, unrestricted");
+                        let link = ReadyLink {
+                            stream_url: u.url,
+                            filename: u.filename,
+                            filesize: u.filesize,
+                            mime_type: u.mime_type,
+                            expires_at: u.expires_at.map(|t| {
+                                t.format(&time::format_description::well_known::Rfc3339)
+                                    .unwrap_or_default()
+                            }),
+                        };
+                        store_ready(
+                            key.clone(),
+                            &link,
+                            &ctx.provider_type.prefixed_id(&torrent_id),
+                            ctx.provider_type,
+                        );
+                        emit_warm_ready(&download_events, &key, &debrid_provider_name);
+                        record(None).await;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Warm poll: unrestrict failed");
+                        failed(key, e.to_string());
+                    }
+                }
+                return;
+            }
+            DebridTorrentStatus::Blocked | DebridTorrentStatus::Error { .. } => {
+                let (reason, error) = match torrent.status {
+                    DebridTorrentStatus::Error { message } => (UnavailableReason::Dead, message),
+                    _ => (
+                        UnavailableReason::Blocked,
+                        "Provider refused this file".to_string(),
+                    ),
+                };
+                warn!(info_hash = %key.info_hash, error = %error, "Warm poll: provider gave up on torrent");
+                record(Some(reason)).await;
+                flight::release_probe(&ctx, &job, &torrent_id).await;
+                failed(key, error);
+                return;
+            }
+            DebridTorrentStatus::WaitingFileSelection => {
+                let select_ids =
+                    DebridFile::resolve_select_ids(&torrent.files, job.file_name.as_deref());
+                if let Err(e) = handler
+                    .select_files(&ctx.http_client, &ctx.api_key, &torrent_id, &select_ids)
+                    .await
+                {
+                    warn!(info_hash = %key.info_hash, error = %e, "Warm poll: select_files failed");
+                }
+            }
+            _ => {}
         }
     }
 }

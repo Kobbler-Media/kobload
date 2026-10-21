@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::require_auth;
-use crate::debrid::{DebridProviderType, DebridTorrentStatus};
+use crate::debrid::{DebridProvider, DebridProviderType, DebridTorrentStatus, Lane, Throttled};
 use crate::services::stream::{
     StreamResolveContext, StreamSearchContext, load_provider_config, stream_resolve, stream_search,
 };
@@ -168,8 +168,12 @@ async fn stream_resolve_status_handler(
         ));
     }
 
-    let handler = state.debrid_providers.get(&db_provider_type);
     let api_key = &provider_config.api_key;
+    let handler = Throttled::new(
+        state.debrid_providers.get(&db_provider_type),
+        api_key,
+        Lane::user(),
+    );
 
     // Get current torrent status
     let torrent = handler

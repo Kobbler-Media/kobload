@@ -196,6 +196,7 @@ fn flatten_files(
                 id: *id,
                 path,
                 size: file.size.unwrap_or(0),
+                selected: false,
             });
         } else {
             // Directory — recurse
@@ -340,6 +341,7 @@ impl DebridProvider for AllDebridProvider {
                 id: (i + 1) as i32,
                 path: link.filename.clone(),
                 size: link.size,
+                selected: true,
             })
             .collect();
 

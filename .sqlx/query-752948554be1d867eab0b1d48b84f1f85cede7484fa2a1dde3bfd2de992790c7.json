@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.available, t.original_title AS title,\n               EXTRACT(EPOCH FROM NOW() - c.checked_at)::float8 AS \"age_secs!\"\n        FROM debrid_availability_cache c\n        JOIN torrent_hash_index t USING (info_hash)\n        WHERE c.provider_id = $1\n          AND (c.available OR c.reason = 'blocked')\n          AND c.checked_at > NOW() - make_interval(days => $2)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "available",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "debrid_availability_cache",
+            "name": "available"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "original_title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "age_secs!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "752948554be1d867eab0b1d48b84f1f85cede7484fa2a1dde3bfd2de992790c7"
+}

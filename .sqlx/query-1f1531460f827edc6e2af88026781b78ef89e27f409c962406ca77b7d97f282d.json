@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT trait AS trait_name,\n               (success_weight * POWER(0.5, EXTRACT(EPOCH FROM NOW() - updated_at)::float8 / $3))\n                   AS \"success_weight!\",\n               (failure_weight * POWER(0.5, EXTRACT(EPOCH FROM NOW() - updated_at)::float8 / $3))\n                   AS \"failure_weight!\"\n        FROM stream_trait_outcomes\n        WHERE provider_id = $1 AND trait = ANY($2)\n          AND updated_at > NOW() - make_interval(days => $4)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "trait_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "stream_trait_outcomes",
+            "name": "trait"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "success_weight!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "failure_weight!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "Float8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "1f1531460f827edc6e2af88026781b78ef89e27f409c962406ca77b7d97f282d"
+}

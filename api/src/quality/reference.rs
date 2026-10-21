@@ -226,10 +226,7 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
     let is_obfuscated = OBFUSCATED_RE.is_match(&lower);
 
     // Language
-    let language = LANGUAGES
-        .iter()
-        .find(|(word, _)| has_word(&lower, word))
-        .map(|(_, normalized)| normalized.to_string());
+    let language = crate::language::title_language(|w| has_word(&lower, w)).map(String::from);
 
     // Release group
     let release_group = RELEASE_GROUP_RE

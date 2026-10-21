@@ -1,52 +1,24 @@
-use std::collections::HashMap;
-
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime};
 use tracing::warn;
 use uuid::Uuid;
 
 use super::binge;
+use super::trait_risk::{BASELINE, HALF_LIFE_SECS, release_traits};
 use super::warm_cache::{UnavailableReason, record_availability};
-use crate::repositories::RepositoryError;
 use crate::repositories::stream_outcomes::{self as repo, TraitDecay};
+use crate::repositories::{RepositoryError, app_settings};
 use nats_jobs::types::{StreamOutcomeReport, StreamPlayback};
 
 pub const FAILURE_MEMORY_HOURS: i32 = 72;
 pub const SUCCESS_MEMORY_DAYS: i32 = 30;
-const HALF_LIFE_SECS: f64 = 7.0 * 86_400.0;
+pub use super::trait_risk::TRAIT_TTL_DAYS;
 const DECAY: TraitDecay = TraitDecay {
     half_life_secs: HALF_LIFE_SECS,
-    cap: 20.0,
+    cap: 50.0,
 };
 const PRUNE_BELOW_WEIGHT: f64 = 0.05;
-
-/// Pseudo-counts (failures, successes) a trait starts from. The default sits at a 1-in-7
-/// failure rate so a single bad report cannot move a release group on its own.
-const DEFAULT_PRIOR: (f64, f64) = (0.5, 3.0);
-/// Real-Debrid's filter-gate (error_code 35) refuses releases by filename, and these tags
-/// are what it was seen targeting. Starting them at 2-in-3 keeps cold-start ranking where
-/// the old static penalty had it, while letting real successes argue them back down.
-const RD_TAG_PRIOR: (f64, f64) = (3.0, 1.5);
-
-const MEDIUM_RISK: f64 = 0.4;
-const HIGH_RISK: f64 = 0.6;
-
-/// Canonical tag, then the spellings that mean it. Matched on whole tokens (and on
-/// adjacent token pairs joined by '-') so "NF" never matches inside "NFL".
-const RD_FILTER_TAGS: &[(&str, &[&str])] = &[
-    ("web-dl", &["web-dl", "webdl"]),
-    ("webrip", &["webrip", "web-rip"]),
-    ("amzn", &["amzn"]),
-    ("nf", &["nf"]),
-    ("cr", &["cr"]),
-    ("yts", &["yts"]),
-    ("rarbg", &["rarbg"]),
-    ("dsnp", &["dsnp"]),
-    ("hmax", &["hmax"]),
-    ("atvp", &["atvp"]),
-    ("pcok", &["pcok"]),
-    ("stan", &["stan"]),
-];
+const INGESTED_KEY: &str = "stream_trait_ingested_providers";
 
 const TRANSIENT_REASONS: &[&str] = &[
     "rate_limited",
@@ -64,52 +36,22 @@ const TRANSIENT_REASONS: &[&str] = &[
     "no free slot",
 ];
 
+/// Refusal risk is about whether the provider accepts a release, so only acceptance and
+/// refusal count. A playback failure is usually the device, and a dead torrent says
+/// nothing about its name.
 #[derive(Debug, Clone, Copy)]
 enum Evidence {
-    Played,
-    PlaybackFailed,
-    ProbeAvailable,
-    ProbeBlocked,
+    Accepted,
+    Refused,
 }
 
 impl Evidence {
-    /// (success, failure). A client's playback failure is weighted down because it may
-    /// be that device's decoder rather than the release; a provider refusal is not.
+    /// (success, failure)
     fn weights(self) -> (f64, f64) {
         match self {
-            Self::Played => (1.0, 0.0),
-            Self::PlaybackFailed => (0.0, 0.25),
-            Self::ProbeAvailable => (0.5, 0.0),
-            Self::ProbeBlocked => (0.0, 1.0),
+            Self::Accepted => (1.0, 0.0),
+            Self::Refused => (0.0, 1.0),
         }
-    }
-}
-
-pub fn release_traits(title: &str) -> Vec<String> {
-    let lower = title.to_lowercase();
-    let tokens: Vec<&str> = lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .collect();
-    let pairs = tokens.windows(2).map(|w| format!("{}-{}", w[0], w[1]));
-    let candidates: Vec<String> = tokens.iter().map(|t| t.to_string()).chain(pairs).collect();
-
-    let mut traits: Vec<String> = RD_FILTER_TAGS
-        .iter()
-        .filter(|(_, spellings)| candidates.iter().any(|c| spellings.contains(&c.as_str())))
-        .map(|(tag, _)| format!("tag:{tag}"))
-        .collect();
-    if let Some(group) = crate::quality::parse_quality(title).release_group {
-        traits.push(format!("group:{}", group.to_lowercase()));
-    }
-    traits
-}
-
-fn prior(trait_name: &str, provider_type: &str) -> (f64, f64) {
-    if provider_type == "real_debrid" && trait_name.starts_with("tag:") {
-        RD_TAG_PRIOR
-    } else {
-        DEFAULT_PRIOR
     }
 }
 
@@ -133,73 +75,17 @@ pub fn verdict(
     }
 }
 
-pub struct TraitRisk {
-    rates: HashMap<String, f64>,
-    provider_type: String,
-}
-
-impl TraitRisk {
-    pub async fn load(
-        pool: &PgPool,
-        provider_id: Uuid,
-        provider_type: &str,
-        traits: &[String],
-    ) -> Self {
-        let rows = repo::traits_for(pool, provider_id, traits, HALF_LIFE_SECS)
-            .await
-            .unwrap_or_else(|e| {
-                warn!(error = %e, "trait outcome lookup failed; ranking on priors");
-                Vec::new()
-            });
-        let rates = rows
-            .into_iter()
-            .map(|r| {
-                let rate = smoothed_rate(
-                    prior(&r.trait_name, provider_type),
-                    r.failure_weight,
-                    r.success_weight,
-                );
-                (r.trait_name, rate)
-            })
-            .collect();
-        Self {
-            rates,
-            provider_type: provider_type.to_string(),
-        }
-    }
-
-    /// 0 = low, 1 = medium, 2 = high. Buckets rather than the raw rate, so learned risk
-    /// separates releases without reshuffling the quality order of near-equal ones.
-    pub fn bucket(&self, traits: &[String]) -> u8 {
-        let risk = traits
-            .iter()
-            .map(|t| {
-                self.rates
-                    .get(t)
-                    .copied()
-                    .unwrap_or_else(|| smoothed_rate(prior(t, &self.provider_type), 0.0, 0.0))
-            })
-            .fold(smoothed_rate(DEFAULT_PRIOR, 0.0, 0.0), f64::max);
-        if risk >= HIGH_RISK {
-            2
-        } else if risk >= MEDIUM_RISK {
-            1
-        } else {
-            0
-        }
-    }
-}
-
-fn smoothed_rate((prior_fail, prior_ok): (f64, f64), failures: f64, successes: f64) -> f64 {
-    (failures + prior_fail) / (failures + successes + prior_fail + prior_ok)
-}
-
-async fn add_evidence(pool: &PgPool, provider_id: Uuid, title: &str, evidence: Evidence) {
-    let traits = release_traits(title);
-    if traits.is_empty() {
-        return;
-    }
+async fn add_evidence(
+    pool: &PgPool,
+    provider_id: Uuid,
+    title: &str,
+    evidence: Evidence,
+    weight: f64,
+) {
+    let mut traits = release_traits(title);
+    traits.push(BASELINE.to_string());
     let (success, failure) = evidence.weights();
+    let (success, failure) = (success * weight, failure * weight);
     if let Err(e) =
         repo::add_trait_evidence(pool, provider_id, &traits, success, failure, &DECAY).await
     {
@@ -236,7 +122,7 @@ pub async fn record_report(
         )
         .await?;
         if let Some(title) = title {
-            add_evidence(pool, provider_id, title, Evidence::Played).await;
+            add_evidence(pool, provider_id, title, Evidence::Accepted, 1.0).await;
         }
         return Ok(());
     }
@@ -252,9 +138,6 @@ pub async fn record_report(
     }
     let reason: String = reason.chars().take(200).collect();
     repo::record_failure(pool, provider_id, &info_hash, report.file_id, &reason).await?;
-    if let Some(title) = title {
-        add_evidence(pool, provider_id, title, Evidence::PlaybackFailed).await;
-    }
     Ok(())
 }
 
@@ -269,44 +152,57 @@ pub async fn record_probe(
 ) {
     let fresh = record_availability(pool, info_hash, provider_id, unavailable).await;
     let evidence = match unavailable {
-        None => Evidence::ProbeAvailable,
-        Some(UnavailableReason::Blocked) => Evidence::ProbeBlocked,
+        None => Evidence::Accepted,
+        Some(UnavailableReason::Blocked) => Evidence::Refused,
         Some(UnavailableReason::Dead) => return,
     };
     if fresh && let Some(title) = release_title {
-        add_evidence(pool, provider_id, title, evidence).await;
+        add_evidence(pool, provider_id, title, evidence, 1.0).await;
     }
 }
 
 pub async fn prune(pool: &PgPool) -> Result<(u64, u64), RepositoryError> {
     let releases = repo::prune_releases(pool, FAILURE_MEMORY_HOURS, SUCCESS_MEMORY_DAYS).await?;
-    let traits = repo::prune_traits(pool, HALF_LIFE_SECS, PRUNE_BELOW_WEIGHT).await?;
+    let traits =
+        repo::prune_traits(pool, HALF_LIFE_SECS, PRUNE_BELOW_WEIGHT, TRAIT_TTL_DAYS).await?;
     Ok((releases, traits))
+}
+
+/// Learns from availability probes recorded before trait learning existed (or before a
+/// provider was added), once per provider. Each verdict is weighted down by its age as if it
+/// had been learned live, and anything past the TTL is skipped.
+pub async fn ingest_past_probes(pool: &PgPool) -> Result<usize, RepositoryError> {
+    let done: Vec<Uuid> = app_settings::get(pool, INGESTED_KEY)
+        .await?
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let mut ingested = 0;
+    let mut now_done = done.clone();
+    for provider_id in repo::provider_ids(pool).await? {
+        if done.contains(&provider_id) {
+            continue;
+        }
+        for probe in repo::past_probes(pool, provider_id, TRAIT_TTL_DAYS).await? {
+            let evidence = if probe.available {
+                Evidence::Accepted
+            } else {
+                Evidence::Refused
+            };
+            let weight = 0.5_f64.powf(probe.age_secs / HALF_LIFE_SECS);
+            add_evidence(pool, provider_id, &probe.title, evidence, weight).await;
+            ingested += 1;
+        }
+        now_done.push(provider_id);
+    }
+    if now_done.len() != done.len() {
+        app_settings::set(pool, INGESTED_KEY, &serde_json::json!(now_done)).await?;
+    }
+    Ok(ingested)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn extracts_filter_tags_and_group() {
-        let cases: &[(&str, &[&str])] = &[
-            (
-                "Movie.2024.1080p.WEB-DL.x264-SPARKS",
-                &["tag:web-dl", "group:sparks"],
-            ),
-            (
-                "Movie 2024 AMZN WEBRip-GRP",
-                &["tag:webrip", "tag:amzn", "group:grp"],
-            ),
-            ("Movie.2024.Web.Rip.YTS.MX", &["tag:webrip", "tag:yts"]),
-            ("NFL.2024.Week.1.720p", &[]),
-            ("Movie.2024.BluRay.x264", &[]),
-        ];
-        for (title, want) in cases {
-            assert_eq!(release_traits(title), *want, "{title}");
-        }
-    }
 
     #[test]
     fn verdict_follows_the_latest_unexpired_outcome() {

@@ -26,6 +26,10 @@ path = "src/bin/seed_processor.rs"
 name = "backfill-hash-index-se"
 path = "src/bin/backfill_hash_index_se.rs"
 
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+
 [dependencies]
 axum = { version = "0.8.9", features = ["json", "multipart"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -109,6 +113,10 @@ proptest = "1.12.0"
 
 [[bench]]
 name = "scoring"
+harness = false
+
+[[bench]]
+name = "scoring_alloc"
 harness = false
 
 [lints.clippy]

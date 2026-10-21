@@ -190,6 +190,7 @@ impl DebridProvider for PremiumizeProvider {
                     id: 0,
                     path: filename,
                     size: filesize,
+                    selected: false,
                 };
 
                 results.push(CachedAvailability {

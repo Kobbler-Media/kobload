@@ -46,7 +46,6 @@ struct RdTorrentFile {
     id: i32,
     path: String,
     bytes: i64,
-    #[allow(dead_code)]
     selected: Option<i32>,
 }
 
@@ -402,6 +401,7 @@ impl DebridProvider for RealDebridProvider {
                 id: f.id,
                 path: f.path,
                 size: f.bytes,
+                selected: f.selected == Some(1),
             })
             .collect();
 

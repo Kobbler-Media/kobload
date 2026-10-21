@@ -15,6 +15,7 @@ pub mod helpers;
 pub mod http;
 pub mod indexers;
 pub mod jobs;
+pub mod language;
 pub mod media;
 pub mod nats;
 pub mod newznab;

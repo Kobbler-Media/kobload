@@ -169,7 +169,7 @@ Copy the capture directory to the dev machine. The first run writes
 
 ```sh
 KOBLOAD_SCORING_CORPUS=/path/to/scoring-capture \
-  cargo test --release --test scoring_replay_test -- --nocapture
+  cargo test --release --test integration scoring_replay_test:: -- --nocapture
 ```
 
 ### Is the capture ready?
@@ -215,11 +215,11 @@ KOBLOAD_SCORING_CORPUS=… cargo bench --bench scoring
 KOBLOAD_SCORING_CORPUS=… systemd-run --user --scope -p MemoryMax=256M \
   -p AllowedCPUs=0 cargo bench --bench scoring
 # allocations: stable across runs, unlike timings
-KOBLOAD_SCORING_CORPUS=… cargo test --release --test scoring_alloc_test -- --nocapture
+KOBLOAD_SCORING_CORPUS=… cargo bench --bench scoring_alloc
 ```
 
 A pass over the whole October capture takes about 15 minutes on one core.
-`KOBLOAD_SCORING_STEP=10` makes the bench and the allocation test use every
+`KOBLOAD_SCORING_STEP=10` makes both benches use every
 10th fetch, which keeps the mix of sources and times. Compare numbers taken
 with the same step only.
 

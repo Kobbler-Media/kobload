@@ -85,6 +85,10 @@ pub struct DebridFile {
     pub path: String,
     /// File size in bytes.
     pub size: i64,
+    /// Whether the torrent serves this file. Only Real-Debrid selects; elsewhere every
+    /// file of a torrent is served.
+    #[serde(default)]
+    pub selected: bool,
 }
 
 impl DebridFile {
@@ -95,39 +99,38 @@ impl DebridFile {
         VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str())
     }
 
-    /// Given a list of files from the debrid provider (e.g. from `get_torrent`),
-    /// find the correct file ID(s) to pass to `select_files`.
-    ///
-    /// Only considers files with recognized video extensions.
-    /// Matches by basename (case-insensitive) against the wanted filename.
-    /// Falls back to the single largest video file if no name match is found.
-    /// Returns an empty vec if no video files are found.
-    pub fn resolve_select_ids(rd_files: &[Self], wanted_name: Option<&str>) -> Vec<i32> {
-        let video_files: Vec<&Self> = rd_files.iter().filter(|f| f.is_video()).collect();
+    fn is_sample(&self) -> bool {
+        self.path
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|t| t == "sample")
+    }
 
-        if video_files.is_empty() {
-            return Vec::<i32>::new();
-        }
+    /// The video file a request stands for: a basename match, else the provider file
+    /// `id`, else the largest video.
+    pub fn wanted<'a>(files: &'a [Self], name: Option<&str>, id: Option<i32>) -> Option<&'a Self> {
+        let videos = || files.iter().filter(|f| f.is_video());
+        let basename = |f: &Self| f.path.rsplit('/').next().unwrap_or(&f.path).to_lowercase();
+        name.filter(|n| !n.is_empty())
+            .map(|n| n.rsplit('/').next().unwrap_or(n).to_lowercase())
+            .and_then(|n| videos().find(|f| basename(f) == n))
+            .or_else(|| id.and_then(|id| videos().find(|f| f.id == id)))
+            .or_else(|| videos().max_by_key(|f| f.size))
+    }
 
-        // Match by filename basename (case-insensitive) — only among video files
-        if let Some(name) = wanted_name
-            && !name.is_empty()
-        {
-            let wanted_lower = name.to_lowercase();
-            for f in &video_files {
-                let basename = f.path.rsplit('/').next().unwrap_or(&f.path);
-                if basename.to_lowercase() == wanted_lower {
-                    return vec![f.id];
-                }
-            }
-        }
+    pub fn resolve_select_ids(files: &[Self], wanted_name: Option<&str>) -> Vec<i32> {
+        Self::wanted(files, wanted_name, None)
+            .map(|f| vec![f.id])
+            .unwrap_or_default()
+    }
 
-        // Fallback: select the single largest video file
-        if let Some(f) = video_files.iter().max_by_key(|f| f.size) {
-            return vec![f.id];
-        }
-
-        Vec::<i32>::new()
+    /// Every episode of a pack, so the next ones play from the same torrent.
+    pub fn pack_select_ids(files: &[Self]) -> Vec<i32> {
+        files
+            .iter()
+            .filter(|f| f.is_video() && !f.is_sample())
+            .map(|f| f.id)
+            .collect()
     }
 }
 
@@ -176,6 +179,41 @@ pub struct DebridTorrent {
     pub files: Vec<DebridFile>,
     /// Download links (available when status is Ready).
     pub links: Vec<String>,
+}
+
+impl DebridTorrent {
+    pub fn wanted_link(&self, name: Option<&str>, id: Option<i32>) -> Option<&str> {
+        match DebridFile::wanted(&self.files, name, id) {
+            Some(f) => self.link_for(f.id),
+            None => self.links.first().map(String::as_str),
+        }
+    }
+
+    /// Whether the file a request stands for is served without selecting again, which
+    /// Real-Debrid allows only once per torrent.
+    pub fn serves(&self, name: Option<&str>, id: Option<i32>) -> bool {
+        matches!(self.status, DebridTorrentStatus::WaitingFileSelection)
+            || DebridFile::wanted(&self.files, name, id).is_none_or(|f| f.selected)
+    }
+
+    /// Real-Debrid lists one link per selected file, in file order. A provider whose links
+    /// do not line up with its files gets its first link.
+    fn link_for(&self, file_id: i32) -> Option<&str> {
+        let mut selected: Vec<i32> = self
+            .files
+            .iter()
+            .filter(|f| f.selected)
+            .map(|f| f.id)
+            .collect();
+        selected.sort_unstable();
+        let aligned = selected.len() == self.links.len();
+        selected
+            .iter()
+            .position(|id| *id == file_id)
+            .filter(|_| aligned)
+            .map_or(self.links.first(), |i| self.links.get(i))
+            .map(String::as_str)
+    }
 }
 
 /// A direct, unrestricted download/stream URL from a debrid provider.
@@ -358,6 +396,7 @@ mod tests {
             id,
             path: path.to_string(),
             size,
+            selected: false,
         }
     }
 

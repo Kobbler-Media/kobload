@@ -70,11 +70,22 @@ impl JobHandler for CacheCleanupHandler {
             );
         }
 
+        let probes_ingested = crate::services::stream::outcomes::ingest_past_probes(&self.pool)
+            .await
+            .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+        if probes_ingested > 0 {
+            info!(
+                probes_ingested,
+                "Learned release traits from past availability probes"
+            );
+        }
+
         Ok(serde_json::json!({
             "search_cache_deleted": deleted,
             "xem_cache_deleted": xem_deleted,
             "stream_release_outcomes_deleted": releases_deleted,
-            "stream_trait_outcomes_deleted": traits_deleted
+            "stream_trait_outcomes_deleted": traits_deleted,
+            "stream_probes_ingested": probes_ingested
         }))
     }
 }

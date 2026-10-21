@@ -163,95 +163,6 @@ const FORMATS_3D: &[(&[&str], &str)] = &[
 ];
 
 // =============================================================================
-// Languages
-// =============================================================================
-
-const LANGUAGES: &[(&str, &str)] = &[
-    // Multi-language
-    ("multi", "multi"),
-    ("dual", "multi"),
-    // Full names
-    ("english", "english"),
-    ("french", "french"),
-    ("german", "german"),
-    ("spanish", "spanish"),
-    ("italian", "italian"),
-    ("russian", "russian"),
-    ("korean", "korean"),
-    ("japanese", "japanese"),
-    ("chinese", "chinese"),
-    ("mandarin", "chinese"),
-    ("cantonese", "cantonese"),
-    ("hindi", "hindi"),
-    ("arabic", "arabic"),
-    ("portuguese", "portuguese"),
-    ("dutch", "dutch"),
-    ("swedish", "swedish"),
-    ("danish", "danish"),
-    ("norwegian", "norwegian"),
-    ("finnish", "finnish"),
-    ("polish", "polish"),
-    ("czech", "czech"),
-    ("hungarian", "hungarian"),
-    ("turkish", "turkish"),
-    ("thai", "thai"),
-    ("vietnamese", "vietnamese"),
-    ("indonesian", "indonesian"),
-    ("malay", "malay"),
-    ("tagalog", "tagalog"),
-    ("hebrew", "hebrew"),
-    ("greek", "greek"),
-    ("romanian", "romanian"),
-    ("bulgarian", "bulgarian"),
-    ("ukrainian", "ukrainian"),
-    // Alternate full names
-    ("latino", "spanish"),
-    ("castellano", "spanish"),
-    ("flemish", "dutch"),
-    // ISO 639-2/B abbreviations
-    ("eng", "english"),
-    ("ita", "italian"),
-    ("fre", "french"),
-    ("fra", "french"),
-    ("ger", "german"),
-    ("deu", "german"),
-    ("spa", "spanish"),
-    ("rus", "russian"),
-    ("kor", "korean"),
-    ("jpn", "japanese"),
-    ("chn", "chinese"),
-    ("chi", "chinese"),
-    ("hin", "hindi"),
-    ("ara", "arabic"),
-    ("por", "portuguese"),
-    ("nld", "dutch"),
-    ("swe", "swedish"),
-    ("dan", "danish"),
-    ("nor", "norwegian"),
-    ("fin", "finnish"),
-    ("pol", "polish"),
-    ("ces", "czech"),
-    ("cze", "czech"),
-    ("hun", "hungarian"),
-    ("tur", "turkish"),
-    ("tha", "thai"),
-    ("vie", "vietnamese"),
-    ("ind", "indonesian"),
-    ("msa", "malay"),
-    ("tgl", "tagalog"),
-    ("heb", "hebrew"),
-    ("ell", "greek"),
-    ("ron", "romanian"),
-    ("bul", "bulgarian"),
-    ("ukr", "ukrainian"),
-    // Scene-specific tags
-    ("truefrench", "french"),
-    ("vostfr", "french"),
-    ("subfrench", "french"),
-    ("fastsub", "french"),
-];
-
-// =============================================================================
 // Regexes
 // =============================================================================
 
@@ -382,26 +293,10 @@ const AUDIO_ALIASES: &[(&[&str], &str)] = &[
     (&["dts-hd.hra"], "dts-hd.hra"),
 ];
 
-/// Check if a profile language matches a parsed language.
-/// Normalizes both sides through the LANGUAGES table so "eng" matches "english",
-/// "ita" matches "italian", etc.
 fn language_matches(profile_lang: &str, parsed_lang: &str) -> bool {
-    if profile_lang.eq_ignore_ascii_case(parsed_lang) {
-        return true;
-    }
-    // Normalize profile value through LANGUAGES table
-    let profile_canonical = LANGUAGES
-        .iter()
-        .find(|(word, _)| word.eq_ignore_ascii_case(profile_lang))
-        .map(|(_, canonical)| *canonical);
-    let parsed_canonical = LANGUAGES
-        .iter()
-        .find(|(word, _)| word.eq_ignore_ascii_case(parsed_lang))
-        .map(|(_, canonical)| *canonical);
-    match (profile_canonical, parsed_canonical) {
-        (Some(pc), Some(rc)) => pc.eq_ignore_ascii_case(rc),
-        _ => false,
-    }
+    profile_lang.eq_ignore_ascii_case(parsed_lang)
+        || crate::language::profile_name(profile_lang)
+            .is_some_and(|name| crate::language::profile_name(parsed_lang) == Some(name))
 }
 
 pub fn score_quality(
@@ -1128,10 +1023,7 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
     let is_obfuscated = OBFUSCATED_RE.is_match(&lower);
 
     // Language
-    let language = LANGUAGES
-        .iter()
-        .find(|(word, _)| words.has(word))
-        .map(|(_, normalized)| normalized.to_string());
+    let language = crate::language::title_language(|w| words.has(w)).map(String::from);
 
     // Release group
     let release_group = RELEASE_GROUP_RE
@@ -1924,6 +1816,42 @@ mod tests {
             english.score,
             multi.score,
         );
+    }
+
+    #[test]
+    fn quality_and_stream_resolve_the_same_aliases() {
+        let cases = [
+            ("English", "en", "english"),
+            ("eng", "en", "english"),
+            ("fr", "fr", "french"),
+            ("fre", "fr", "french"),
+            ("vostfr", "fr", "french"),
+            ("vff", "fr", "french"),
+            ("deutsch", "de", "german"),
+            ("latino", "es", "spanish"),
+            ("esp", "es", "spanish"),
+            ("jap", "ja", "japanese"),
+            ("mandarin", "zh", "chinese"),
+            ("chi", "zh", "chinese"),
+            ("cantonese", "zh", "cantonese"),
+            ("flemish", "nl", "dutch"),
+            ("dut", "nl", "dutch"),
+            ("ell", "el", "greek"),
+            ("gre", "el", "greek"),
+            ("msa", "ms", "malay"),
+            ("farsi", "fa", "persian"),
+        ];
+        for (alias, code, name) in cases {
+            assert_eq!(
+                crate::language::normalise(&[alias.to_string()]),
+                vec![code],
+                "stream: {alias}"
+            );
+            assert!(language_matches(alias, name), "quality: {alias}");
+            assert!(!language_matches(alias, "multi"), "quality: {alias}");
+        }
+        assert!(!language_matches("chinese", "cantonese"));
+        assert!(language_matches("dual", "multi"));
     }
 
     #[test]
