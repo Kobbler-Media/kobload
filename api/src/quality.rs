@@ -407,7 +407,27 @@ pub fn score_quality(
     overrides: Option<&QualityOverrides>,
     trash_filters: Option<&TrashFilterSet>,
 ) -> QualityScore {
-    let parsed = parse_quality(title);
+    score_quality_parsed(
+        title,
+        parse_quality(title),
+        profile,
+        overrides,
+        trash_filters,
+        |filters, group| filters.check_blocklist(title, group).map(String::from),
+    )
+}
+
+/// [`score_quality`] with the title's quality already parsed and the TRaSH
+/// blocklist lookup supplied by the caller, so both can be done once per
+/// release and shared across patterns.
+pub fn score_quality_parsed(
+    title: &str,
+    parsed: ParsedQuality,
+    profile: Option<&QualityProfileRow>,
+    overrides: Option<&QualityOverrides>,
+    trash_filters: Option<&TrashFilterSet>,
+    blocklist: impl FnOnce(&TrashFilterSet, Option<&str>) -> Option<String>,
+) -> QualityScore {
     let prefs = merge_preferences(profile, overrides);
 
     use nats_jobs::QualityRejectReason;
@@ -689,8 +709,9 @@ pub fn score_quality(
     if use_trash
         && !rejected
         && let Some(filters) = trash_filters
-        && let Some(category) = filters.check_blocklist(title, parsed.release_group.as_deref())
+        && let Some(category) = blocklist(filters, parsed.release_group.as_deref())
     {
+        let category = category.as_str();
         let soft_penalty = matches!(category, "no_group" | "x265_hd");
         if soft_penalty {
             let v = -0.3;

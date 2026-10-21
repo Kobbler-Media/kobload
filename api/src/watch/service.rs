@@ -700,7 +700,7 @@ async fn prepare_patterns(
 }
 
 /// Build a `ScoringConfig` from a `PreparedPattern` for the unified scoring pipeline.
-fn build_scoring_config<'a>(
+pub(crate) fn build_scoring_config<'a>(
     prep: &'a PreparedPattern,
     trash_filters: Option<&'a TrashFilterSet>,
 ) -> crate::services::want::scoring::ScoringConfig<'a> {
@@ -870,7 +870,7 @@ pub struct ScoringPassStats {
     pub fully_scored: usize,
 }
 
-fn has_match_config(prep: &PreparedPattern) -> bool {
+pub(crate) fn has_match_config(prep: &PreparedPattern) -> bool {
     !prep.match_config.match_targets.is_empty() || !prep.match_config.patterns.is_empty()
 }
 
@@ -904,13 +904,11 @@ fn score_prepared(
     candidates: &mut HashMap<CandidateKey, CandidateEntry>,
 ) -> ScoringPassStats {
     use crate::services::want::koblem_review;
-    use crate::services::want::scoring::{release_matches_prepared, score_release};
+    use crate::services::want::release_facts::ReleaseFacts;
+    use crate::services::want::scoring::{release_matches_prepared, score_release_facts};
 
     let mut stats = ScoringPassStats::default();
-    let titles: Vec<_> = releases
-        .iter()
-        .map(|r| crate::watch::matcher::PreparedTitle::new(&r.title))
-        .collect();
+    let facts: Vec<_> = releases.iter().map(ReleaseFacts::new).collect();
 
     for prep in prepared {
         // Skip patterns with no match config (no targets and no patterns)
@@ -924,7 +922,7 @@ fn score_prepared(
             .is_some()
             .then(|| koblem_review::review_wanted_title(prep.parsed_media_want.as_ref()));
 
-        for (release, title) in releases.iter().zip(&titles) {
+        for (release, facts) in releases.iter().zip(&facts) {
             if pair_gated_out(prep, release) {
                 continue;
             }
@@ -936,7 +934,7 @@ fn score_prepared(
             // review of a related title; otherwise it's dropped, so don't
             // compute it.
             if collector.is_none()
-                && !release_matches_prepared(release, title, &config)
+                && !release_matches_prepared(release, facts.title(), &config)
                 && review_title
                     .as_deref()
                     .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
@@ -945,7 +943,7 @@ fn score_prepared(
             }
 
             stats.fully_scored += 1;
-            let pr = score_release(release, &config);
+            let pr = score_release_facts(facts, &config);
 
             // Record evaluation in decision collector if enabled
             if let Some((coll, call_id)) = collector {

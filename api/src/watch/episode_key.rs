@@ -9,7 +9,7 @@
 //! - `"S01E05-E07"` — multi-episode range
 //! - `"SEASON_PACK"` — full season pack
 
-use crate::parsing::{ParsedMedia, parse_release};
+use crate::parsing::{ParsedMedia, ParsedRelease, parse_release};
 
 /// Sentinel key for season pack releases.
 pub const SEASON_PACK_KEY: &str = "SEASON_PACK";
@@ -25,8 +25,13 @@ pub fn extract_episode_key(release_title: &str, media_want: &serde_json::Value) 
         return None;
     }
 
-    let parsed = parse_release(release_title, "tv");
-    let tv = match parsed.media {
+    episode_key_from_parsed(&parse_release(release_title, "tv"))
+}
+
+/// The episode key from a release already parsed as `"tv"`, for a want that
+/// [`is_tv_season`].
+pub fn episode_key_from_parsed(parsed: &ParsedRelease) -> Option<String> {
+    let tv = match &parsed.media {
         ParsedMedia::Tv(tv) => tv,
         _ => return None,
     };

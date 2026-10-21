@@ -1,6 +1,7 @@
 mod downloads;
 mod episode_fallback;
 pub mod koblem_review;
+pub mod release_facts;
 pub(crate) mod scoring;
 mod search;
 mod service;
@@ -8,8 +9,8 @@ mod types;
 
 pub use scoring::{
     ScoringConfig, SearchContext, freshness_tiebreaker, group_by_target_id, release_matches,
-    score_batch, score_release, structural_bonus, structural_reject, structural_reject_from_want,
-    votes_reject,
+    score_batch, score_release, score_release_facts, structural_bonus, structural_reject,
+    structural_reject_from_want, votes_reject,
 };
 pub use service::handle_want;
 pub use types::{WantServiceContext, WantServiceError, WantServiceRequest, WantServiceResult};

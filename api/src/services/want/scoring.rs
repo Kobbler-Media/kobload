@@ -4,8 +4,9 @@ use kob_normalize::titles_similar;
 use nats_jobs::{MediaWant, QualityOverrides};
 
 use crate::parsing::{ParsedMedia, ParsedRelease, parse_release};
-use crate::quality::{parse_quality, score_quality};
+use crate::quality::score_quality_parsed;
 use crate::repositories::quality_profiles::QualityProfileRow;
+use crate::services::want::release_facts::ReleaseFacts;
 use crate::trash_filters::TrashFilterSet;
 use crate::watch::matcher::{
     PreparedTarget, PreparedTitle, prepare_targets, score_prepared_targets,
@@ -931,6 +932,13 @@ fn match_gate(
 ///
 /// Returns a fully-populated ProcessedRelease regardless of decision.
 pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRelease {
+    score_release_facts(&ReleaseFacts::new(release), config)
+}
+
+/// [`score_release`] for a release whose pattern-independent work is shared
+/// across the patterns of a fetch.
+pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> ProcessedRelease {
+    let release = facts.release();
     use nats_jobs::{RejectReason, ScoringDecision};
 
     // ── Gate 1: Exclusion (hard early return) ──
@@ -944,7 +952,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
             match_score: None,
             matched_pattern: None,
             matched_target: None,
-            parsed_quality: Some(parse_quality(&release.title)),
+            parsed_quality: Some(facts.quality().clone()),
             quality_score: None,
             quality_rejected: false,
             quality_reject_reasons: vec![],
@@ -971,7 +979,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
             match_score: None,
             matched_pattern: None,
             matched_target: None,
-            parsed_quality: Some(parse_quality(&release.title)),
+            parsed_quality: Some(facts.quality().clone()),
             quality_score: None,
             quality_rejected: false,
             quality_reject_reasons: vec![],
@@ -990,22 +998,17 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     // ── All remaining gates run unconditionally ──
     let mut reject_reasons: Vec<RejectReason> = Vec::new();
 
-    // Parse-once optimization: structural_reject and structural_bonus both call
-    // parse_release internally. For everything except sports wants, both sides
-    // use the same media_kind — parse once here and reuse. Sports falls back to
-    // the non-parsed variants (reject uses "sports", bonus uses "tv").
-    let prep: Option<ParsedRelease> = config.media_want.and_then(|mw| {
-        let (r, b) = structural_media_kinds(mw);
-        (r == b).then(|| parse_release(&release.title, r))
-    });
+    let kinds = config.media_want.map(structural_media_kinds);
 
     // Gate 3: Structural rejection
-    let structural_result = match &prep {
-        Some(parsed) => {
-            structural_reject_with_parsed(release, parsed, config.media_want, config.search_context)
-        }
-        None => structural_reject(release, config.media_want, config.search_context),
-    };
+    let structural_result = kinds.and_then(|(reject_kind, _)| {
+        structural_reject_with_parsed(
+            release,
+            &facts.parsed(reject_kind),
+            config.media_want,
+            config.search_context,
+        )
+    });
     let structural_rejected = structural_result.is_some();
     if let Some(reason) = structural_result {
         reject_reasons.push(RejectReason::Structural(reason));
@@ -1018,7 +1021,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
 
     // Gate 5: Pattern/target matching (always run)
     let (match_score, matched_pattern, matched_target) =
-        match match_gate(release, &PreparedTitle::new(&release.title), config) {
+        match match_gate(release, facts.title(), config) {
             Some((score, pattern, target)) => (Some(score), Some(pattern), target),
             None => (None, None, None),
         };
@@ -1026,11 +1029,13 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     let is_no_match = match_score.is_none();
 
     // Gate 6: Quality scoring (always run)
-    let quality = score_quality(
+    let quality = score_quality_parsed(
         &release.title,
+        facts.quality().clone(),
         config.quality_profile,
         config.quality_overrides,
         config.trash_filters,
+        |filters, group| facts.blocklist(filters, group),
     );
     let quality_rejected = quality.rejected;
     let quality_reject_reasons = quality.reject_reasons.clone();
@@ -1044,7 +1049,9 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     let episode_key = if let Some(episodes_needed) = config.episodes_needed
         && let Some(mw_json) = config.media_want_json
     {
-        let key = crate::watch::episode_key::extract_episode_key(&release.title, mw_json);
+        let key = crate::watch::episode_key::is_tv_season(mw_json)
+            .then(|| crate::watch::episode_key::episode_key_from_parsed(&facts.parsed("tv")))
+            .flatten();
         if let Some(ref k) = key
             && !crate::watch::episode_key::is_episode_needed(k, episodes_needed)
         {
@@ -1057,12 +1064,14 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
 
     // ── Bonuses ──
     let seeder_bonus = seeder_tiebreaker(release);
-    let struct_bonus = match &prep {
-        Some(parsed) => {
-            structural_bonus_with_parsed(release, parsed, config.media_want, config.xem_show_map)
-        }
-        None => structural_bonus(release, config.media_want, config.xem_show_map),
-    };
+    let struct_bonus = kinds.map_or(0.0, |(_, bonus_kind)| {
+        structural_bonus_with_parsed(
+            release,
+            &facts.parsed(bonus_kind),
+            config.media_want,
+            config.xem_show_map,
+        )
+    });
     let fresh_bonus = freshness_tiebreaker(release);
 
     let total_score =
@@ -1881,6 +1890,9 @@ pub fn group_by_target_id(
 
     by_target
 }
+
+#[cfg(test)]
+mod reference;
 
 #[cfg(test)]
 mod tests {
