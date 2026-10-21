@@ -7,7 +7,10 @@ use crate::parsing::{ParsedMedia, ParsedRelease, parse_release};
 use crate::quality::{parse_quality, score_quality};
 use crate::repositories::quality_profiles::QualityProfileRow;
 use crate::trash_filters::TrashFilterSet;
-use crate::watch::{MatchTarget, ProcessedRelease, Release, match_patterns, score_against_targets};
+use crate::watch::matcher::{
+    PreparedTarget, PreparedTitle, prepare_targets, score_prepared_targets,
+};
+use crate::watch::{MatchTarget, ProcessedRelease, Release, match_patterns};
 use crate::xem::XemShowMap;
 
 /// Context about how the release was found — affects disambiguation strictness.
@@ -790,6 +793,8 @@ pub struct ScoringConfig<'a> {
     // Bonus config
     pub xem_show_map: Option<&'a XemShowMap>,
     pub preferred_protocol: Option<&'a str>,
+
+    prepared_targets: std::sync::OnceLock<Vec<PreparedTarget<'a>>>,
 }
 
 impl<'a> ScoringConfig<'a> {
@@ -817,6 +822,7 @@ impl<'a> ScoringConfig<'a> {
             media_want_json: None,
             xem_show_map: None,
             preferred_protocol: None,
+            prepared_targets: std::sync::OnceLock::new(),
         }
     }
 
@@ -876,15 +882,29 @@ impl<'a> ScoringConfig<'a> {
 /// The same check `score_release` uses for its match gate. Callers that only act
 /// on matches (the RSS loop) run it first and skip the full scoring otherwise.
 pub fn release_matches(release: &Release, config: &ScoringConfig) -> bool {
-    match_gate(release, config).is_some()
+    release_matches_prepared(release, &PreparedTitle::new(&release.title), config)
+}
+
+/// [`release_matches`] with the title already prepared, for loops that check
+/// one release against many patterns.
+pub fn release_matches_prepared(
+    release: &Release,
+    title: &PreparedTitle,
+    config: &ScoringConfig,
+) -> bool {
+    match_gate(release, title, config).is_some()
 }
 
 fn match_gate(
     release: &Release,
+    title: &PreparedTitle,
     config: &ScoringConfig,
 ) -> Option<(f64, String, Option<nats_jobs::MatchedTarget>)> {
     if !config.match_targets.is_empty() {
-        score_against_targets(&release.title, config.match_targets, config.min_score)
+        let targets = config
+            .prepared_targets
+            .get_or_init(|| prepare_targets(config.match_targets));
+        score_prepared_targets(title, targets, config.min_score)
             .map(|r| (r.score, r.matched_target, r.semantic_target))
     } else if !config.match_patterns.is_empty() {
         match_patterns(
@@ -997,10 +1017,11 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     }
 
     // Gate 5: Pattern/target matching (always run)
-    let (match_score, matched_pattern, matched_target) = match match_gate(release, config) {
-        Some((score, pattern, target)) => (Some(score), Some(pattern), target),
-        None => (None, None, None),
-    };
+    let (match_score, matched_pattern, matched_target) =
+        match match_gate(release, &PreparedTitle::new(&release.title), config) {
+            Some((score, pattern, target)) => (Some(score), Some(pattern), target),
+            None => (None, None, None),
+        };
 
     let is_no_match = match_score.is_none();
 

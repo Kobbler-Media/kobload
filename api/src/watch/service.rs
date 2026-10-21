@@ -904,9 +904,13 @@ fn score_prepared(
     candidates: &mut HashMap<CandidateKey, CandidateEntry>,
 ) -> ScoringPassStats {
     use crate::services::want::koblem_review;
-    use crate::services::want::scoring::{release_matches, score_release};
+    use crate::services::want::scoring::{release_matches_prepared, score_release};
 
     let mut stats = ScoringPassStats::default();
+    let titles: Vec<_> = releases
+        .iter()
+        .map(|r| crate::watch::matcher::PreparedTitle::new(&r.title))
+        .collect();
 
     for prep in prepared {
         // Skip patterns with no match config (no targets and no patterns)
@@ -920,7 +924,7 @@ fn score_prepared(
             .is_some()
             .then(|| koblem_review::review_wanted_title(prep.parsed_media_want.as_ref()));
 
-        for release in releases {
+        for (release, title) in releases.iter().zip(&titles) {
             if pair_gated_out(prep, release) {
                 continue;
             }
@@ -932,7 +936,7 @@ fn score_prepared(
             // review of a related title; otherwise it's dropped, so don't
             // compute it.
             if collector.is_none()
-                && !release_matches(release, &config)
+                && !release_matches_prepared(release, title, &config)
                 && review_title
                     .as_deref()
                     .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))

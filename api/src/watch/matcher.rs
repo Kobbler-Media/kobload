@@ -38,6 +38,91 @@ pub struct TargetMatchResult {
     pub semantic_target: Option<nats_jobs::MatchedTarget>,
 }
 
+/// A release title canonicalised once, for scoring against every target of
+/// every pattern in a fetch.
+pub struct PreparedTitle<'t> {
+    title: &'t str,
+    text: TextTokens,
+    sport: std::cell::OnceCell<SportTitle>,
+}
+
+struct SportTitle {
+    words: Vec<String>,
+    text: TextTokens,
+}
+
+impl<'t> PreparedTitle<'t> {
+    pub fn new(title: &'t str) -> Self {
+        Self {
+            title,
+            text: TextTokens::new(&title.to_lowercase()),
+            sport: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn sport(&self) -> &SportTitle {
+        self.sport.get_or_init(|| {
+            let canon = crate::parsing::canonical_sport_text(self.title);
+            SportTitle {
+                words: canon.split_whitespace().map(String::from).collect(),
+                text: TextTokens::new(&canon),
+            }
+        })
+    }
+}
+
+/// A match target canonicalised once per pattern.
+pub struct PreparedTarget<'a> {
+    target: &'a MatchTarget,
+    text: PatternTokens,
+    sport: Option<SportTarget>,
+}
+
+/// Sport wants and releases spell rounds, session numbers and places
+/// differently ("R12 ... Race 1" vs "Round12 ... Race.One"), so sport targets
+/// are also scored in canonical form against the canonical title.
+///
+/// Nothing downstream checks the league: once the round, place and session line
+/// up, only the league token keeps a Moto2 want off the MotoGP release of the
+/// same session, and an SBK want off World Supersport ("WSSP"). A token or two
+/// short of a perfect score would still clear the floor, so the league has to
+/// be present outright. It is everything before the season year in the target.
+struct SportTarget {
+    league: Vec<String>,
+    text: PatternTokens,
+}
+
+impl<'a> PreparedTarget<'a> {
+    pub fn new(target: &'a MatchTarget) -> Self {
+        let sport = matches!(
+            target.semantic_target,
+            Some(nats_jobs::MatchedTarget::SportEvent)
+        )
+        .then(|| {
+            let canon = crate::parsing::canonical_sport_text(&target.target);
+            let league = canon
+                .split_whitespace()
+                .take_while(|t| !(t.len() == 4 && t.bytes().all(|b| b.is_ascii_digit())))
+                .map(String::from)
+                .collect();
+            SportTarget {
+                league,
+                text: PatternTokens::new(&canon, &[]),
+            }
+        })
+        .filter(|s| !s.league.is_empty());
+        Self {
+            target,
+            text: PatternTokens::new(&target.target.to_lowercase(), &[]),
+            sport,
+        }
+    }
+}
+
+pub fn prepare_targets(targets: &[MatchTarget]) -> Vec<PreparedTarget<'_>> {
+    targets.iter().map(PreparedTarget::new).collect()
+}
+
 /// Score a release title against multiple match targets.
 /// Returns the best matching target (highest score above threshold).
 pub fn score_against_targets(
@@ -45,25 +130,31 @@ pub fn score_against_targets(
     targets: &[MatchTarget],
     default_min_score: f64,
 ) -> Option<TargetMatchResult> {
-    let title_lower = release_title.to_lowercase();
-    let sport_title = std::cell::OnceCell::new();
+    score_prepared_targets(
+        &PreparedTitle::new(release_title),
+        &prepare_targets(targets),
+        default_min_score,
+    )
+}
 
+pub fn score_prepared_targets(
+    title: &PreparedTitle,
+    targets: &[PreparedTarget],
+    default_min_score: f64,
+) -> Option<TargetMatchResult> {
     targets
         .iter()
-        .filter_map(|target| {
-            let target_lower = target.target.to_lowercase();
-            let mut score = fuzzy_score(&target_lower, &title_lower);
-            // Sport wants and releases spell rounds, session numbers and places
-            // differently ("R12 ... Race 1" vs "Round12 ... Race.One"); score the
-            // canonical forms too, and keep the better of the two.
-            if matches!(
-                target.semantic_target,
-                Some(nats_jobs::MatchedTarget::SportEvent)
-            ) {
-                let title =
-                    sport_title.get_or_init(|| crate::parsing::canonical_sport_text(release_title));
-                if let Some(canon_score) = sport_canonical_score(&target.target, title) {
-                    score = score.max(canon_score);
+        .filter_map(|prepared| {
+            let target = prepared.target;
+            let mut score = similarity(&prepared.text, &title.text);
+            if let Some(sport) = &prepared.sport {
+                let sport_title = title.sport();
+                if sport
+                    .league
+                    .iter()
+                    .all(|l| sport_title.words.iter().any(|w| w == l))
+                {
+                    score = score.max(similarity(&sport.text, &sport_title.text));
                 }
             }
             let min_score = target.min_score.unwrap_or(default_min_score);
@@ -83,27 +174,6 @@ pub fn score_against_targets(
                 .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-}
-
-/// Fuzzy score of a sport target against an already-canonical release title,
-/// or `None` when the release is from another league.
-///
-/// Nothing downstream checks the league: once the round, place and session line
-/// up, only the league token keeps a Moto2 want off the MotoGP release of the
-/// same session, and an SBK want off World Supersport ("WSSP"). A token or two
-/// short of a perfect score would still clear the floor, so the league has to
-/// be present outright. It is everything before the season year in the target.
-fn sport_canonical_score(target: &str, title_canon: &str) -> Option<f64> {
-    let target_canon = crate::parsing::canonical_sport_text(target);
-    let league: Vec<&str> = target_canon
-        .split_whitespace()
-        .take_while(|t| !(t.len() == 4 && t.bytes().all(|b| b.is_ascii_digit())))
-        .collect();
-    let in_title = |t: &&str| title_canon.split_whitespace().any(|tt| tt == *t);
-    if league.is_empty() || !league.iter().all(in_title) {
-        return None;
-    }
-    Some(fuzzy_score(&target_canon, title_canon))
 }
 
 /// Match a release title against a watch pattern
@@ -226,6 +296,49 @@ fn fuzzy_score(pattern: &str, text: &str) -> f64 {
     title_similarity(pattern, text, &[])
 }
 
+// Canonical pattern tokens. Single-digit numbers (sequel numbers like "5")
+// are kept but other single-char tokens dropped; canonicalisation has already
+// removed punctuation, diacritics and smart quotes and expanded ampersands.
+struct PatternTokens {
+    norm: String,
+    tokens: Vec<String>,
+}
+
+impl PatternTokens {
+    fn new(pattern: &str, stopwords: &[&str]) -> Self {
+        let norm = canonical(pattern);
+        let tokens = norm
+            .split_whitespace()
+            .filter(|t| t.len() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
+            .filter(|t| !stopwords.contains(t))
+            .map(String::from)
+            .collect();
+        Self { norm, tokens }
+    }
+}
+
+// Canonical release-side tokens. The release group is stripped first so group
+// names like "samhydetorrentgalaxy" can't pollute token matching, and
+// canonicalising splits dot/underscore/hyphen-separated titles into words.
+struct TextTokens {
+    norm: String,
+    tokens: Vec<String>,
+}
+
+impl TextTokens {
+    fn new(text: &str) -> Self {
+        let stripped = crate::parsing::common::RELEASE_GROUP_RE.replace(text, "");
+        let norm = canonical(&stripped);
+        let tokens = norm
+            .split_whitespace()
+            .filter(|t| t.len() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
+            .filter(|t| !t.starts_with('[') && !t.ends_with(']'))
+            .map(String::from)
+            .collect();
+        Self { norm, tokens }
+    }
+}
+
 /// Calculate a fuzzy match score between a pattern and text, dropping any
 /// pattern tokens that match `stopwords` so articles like "the"/"in" don't
 /// pad the match denominator. Uses a combination of techniques:
@@ -233,28 +346,17 @@ fn fuzzy_score(pattern: &str, text: &str) -> f64 {
 /// 2. Substring matching for each token
 /// 3. Jaro-Winkler similarity for short patterns
 pub(crate) fn title_similarity(pattern: &str, text: &str, stopwords: &[&str]) -> f64 {
-    // Strip release group from text to prevent group names like
-    // "samhydetorrentgalaxy" from polluting token matching.
-    let text_stripped = crate::parsing::common::RELEASE_GROUP_RE.replace(text, "");
-    // Canonicalize so dot-separated release titles ("FormulaE.2026.Round01.Brazil")
-    // and underscore/hyphen-separated variants all tokenize into proper words.
-    // This also handles diacritics, smart quotes, and ampersand expansion.
-    let pattern_norm = canonical(pattern);
-    let text_norm = canonical(&text_stripped);
+    similarity(
+        &PatternTokens::new(pattern, stopwords),
+        &TextTokens::new(text),
+    )
+}
 
-    // Tokenize — keep single-digit numbers (sequel numbers like "5") but
-    // filter other single-char tokens. Tokens are already free of punctuation
-    // after canonicalization.
-    let pattern_tokens: Vec<&str> = pattern_norm
-        .split_whitespace()
-        .filter(|t| t.len() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
-        .filter(|t| !stopwords.contains(t))
-        .collect();
-    let text_tokens: Vec<&str> = text_norm
-        .split_whitespace()
-        .filter(|t| t.len() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
-        .filter(|t| !t.starts_with('[') && !t.ends_with(']'))
-        .collect();
+fn similarity(pattern: &PatternTokens, text: &TextTokens) -> f64 {
+    let pattern_norm = &pattern.norm;
+    let text_norm = &text.norm;
+    let pattern_tokens: Vec<&str> = pattern.tokens.iter().map(String::as_str).collect();
+    let text_tokens: Vec<&str> = text.tokens.iter().map(String::as_str).collect();
 
     if pattern_tokens.is_empty() {
         return 0.0;
@@ -344,7 +446,7 @@ pub(crate) fn title_similarity(pattern: &str, text: &str, stopwords: &[&str]) ->
 
     // Also check if the full pattern appears as a substring (very high confidence).
     // Both sides are already canonical, so direct contains() is sufficient.
-    let full_pattern_match = if text_norm.contains(&pattern_norm) {
+    let full_pattern_match = if text_norm.contains(pattern_norm.as_str()) {
         0.2
     } else {
         0.0
@@ -559,6 +661,9 @@ fn jaro_similarity(s1: &[char], s2: &[char]) -> f64 {
 
     (m / len1 as f64 + m / len2 as f64 + (m - t) / m) / 3.0
 }
+
+#[cfg(test)]
+mod reference;
 
 #[cfg(test)]
 mod tests {
