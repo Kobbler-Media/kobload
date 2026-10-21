@@ -674,6 +674,20 @@ fn is_default_sport_session(session: &str) -> bool {
     )
 }
 
+// Largest single 1080p race in the capture was 14.7 GiB and the smallest
+// MotoGP weekend pack 17.4 GiB. (WSBK packs go down to 12.5 GiB, but SBK
+// wants name their session, so they never reach this check.) Other resolutions scale with pixel count
+// to the 0.6 power, which keeps 32 GiB 2160p races (limit ~37 GiB) and 3.7 GiB
+// 720p races (limit ~10 GiB) in. Unknown resolution counts as 1080p.
+fn is_sport_weekend_pack(size: i64, resolution: Option<&str>) -> bool {
+    const RACE_LIMIT_1080P: f64 = 16.0 * (1u64 << 30) as f64;
+    let height = resolution
+        .and_then(crate::quality::parse_resolution)
+        .unwrap_or(1080);
+    let limit = RACE_LIMIT_1080P * (f64::from(height) / 1080.0).powf(1.2);
+    size as f64 > limit
+}
+
 /// Word tokens that signal a non-race sport session (press conference,
 /// media day, test session, warm-up, qualifying, practice, sprint, etc)
 /// rather than the main event. When a release title contains one of these
@@ -1763,6 +1777,24 @@ pub fn structural_reject_with_parsed(
             },
             ParsedMedia::Sport(sport),
         ) if sport.session_type.is_none() && !is_default_sport_session(wanted_session) => {
+            Some(StructuralRejectReason::SessionMissing)
+        }
+
+        // Sport: a session-less release only stands in for the race while it is
+        // race-sized. DHT carries whole weekends under bare names
+        // ("MotoGP.2026.Round15.Austria", 21-46 GiB) that otherwise read as the race.
+        // Reported as SessionMissing: nothing in the name says which session it is,
+        // and koblem already knows that reason.
+        (
+            MediaWant::SportEvent {
+                session_type: Some(wanted_session),
+                ..
+            },
+            ParsedMedia::Sport(sport),
+        ) if sport.session_type.is_none()
+            && is_default_sport_session(wanted_session)
+            && is_sport_weekend_pack(release.size, parsed.quality.resolution.as_deref()) =>
+        {
             Some(StructuralRejectReason::SessionMissing)
         }
 
