@@ -52,6 +52,7 @@ fn processed(title: &str) -> ProcessedRelease {
         quality_score: None,
         quality_rejected: false,
         quality_reject_reasons: Vec::new(),
+        quality_breakdown: None,
         structural_rejected: false,
         structural_reject_reason: None,
         total_score: 0.0,

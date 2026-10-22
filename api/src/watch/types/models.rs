@@ -205,6 +205,10 @@ pub struct ProcessedRelease {
     pub quality_score: Option<f64>,
     pub quality_rejected: bool,
     pub quality_reject_reasons: Vec<nats_jobs::QualityRejectReason>,
+    /// Itemised quality score, for the decision log. Not part of the scoring
+    /// output, so the golden replay doesn't compare it.
+    #[serde(skip)]
+    pub quality_breakdown: Option<crate::decision_log::QualityScoreBreakdown>,
 
     // ── Structural scoring ──
     pub structural_rejected: bool,

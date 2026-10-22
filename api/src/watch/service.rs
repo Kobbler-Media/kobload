@@ -21,7 +21,6 @@ use crate::media::{
     xem_match_targets, xem_season_match_targets,
 };
 use crate::nats;
-use crate::quality::score_quality;
 use crate::repositories::app_settings;
 use crate::repositories::media_types;
 use crate::repositories::quality_profiles::{self, QualityProfileRow};
@@ -773,15 +772,10 @@ fn record_scoring_result(
         _ => {}
     }
 
-    let quality_breakdown = if pr.quality_rejected || pr.quality_score.is_some() {
-        // Re-score to get the breakdown (ProcessedRelease doesn't carry it)
-        prep.quality_profile
-            .as_ref()
-            .map(|p| score_quality(&pr.release.title, Some(p), None, None))
-            .map(|q| q.breakdown)
-    } else {
-        None
-    };
+    let quality_breakdown = prep
+        .quality_profile
+        .as_ref()
+        .and(pr.quality_breakdown.clone());
 
     let structural_result = if pr.structural_rejected {
         Some(decision_log::StructuralResult {
@@ -2236,6 +2230,119 @@ pub async fn retry_pending_watch_callbacks(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The decision log's quality breakdown is the one scoring computed, which
+    /// is what re-scoring the title with the same profile and TRaSH filters
+    /// gives. Before, the log re-scored without the filters.
+    fn logged_breakdowns_match_a_rescore(
+        prepared: &[PreparedPattern],
+        releases: &[Arc<Release>],
+        trash: Option<&TrashFilterSet>,
+        captured_at: time::OffsetDateTime,
+    ) -> (usize, usize) {
+        use crate::services::want::release_facts::ReleaseFacts;
+        use crate::services::want::scoring::{release_matches_prepared, score_release_facts};
+        crate::clock::with_pinned_now(captured_at, || {
+            let (mut compared, mut differ_from_old) = (0, 0);
+            for prep in prepared.iter().filter(|p| has_match_config(p)) {
+                let Some(profile) = prep.quality_profile.as_ref() else {
+                    continue;
+                };
+                let config = build_scoring_config(prep, trash);
+                for release in releases {
+                    let facts = ReleaseFacts::new(release);
+                    if pair_gated_out(prep, release)
+                        || !release_matches_prepared(release, facts.title(), &config)
+                    {
+                        continue;
+                    }
+                    let collector = DecisionCollector::new("test", None, None, true);
+                    let pr = score_release_facts(&facts, &config);
+                    record_scoring_result(&collector, Uuid::nil(), &pr, prep);
+                    let Some(logged) = collector.into_flush_payload().releases.pop() else {
+                        continue;
+                    };
+                    let logged = serde_json::to_value(logged.quality_score_breakdown).unwrap();
+                    let rescored = |t| {
+                        serde_json::to_value(Some(
+                            crate::quality::score_quality(&release.title, Some(profile), None, t)
+                                .breakdown,
+                        ))
+                        .unwrap()
+                    };
+                    assert_eq!(logged, rescored(trash), "{}", release.title);
+                    compared += 1;
+                    differ_from_old += usize::from(logged != rescored(None));
+                }
+            }
+            (compared, differ_from_old)
+        })
+    }
+
+    #[test]
+    fn logged_quality_breakdown_is_the_scored_one() {
+        let profile: QualityProfileRow = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(), "name": "tv", "media_kind": "tv",
+            "min_resolution": "720p", "max_resolution": null,
+            "preferred_sources": ["web-dl"], "preferred_codecs": ["h265"],
+            "preferred_audio": [], "preferred_languages": [], "rejected_sources": ["cam"],
+            "rejected_languages": [], "rejected_terms": [], "reject_hardcoded_subs": true,
+            "reject_remux": false, "use_trash_filters": true, "is_default": true,
+            "upgrade_cutoff_score": null,
+            "created_at": OffsetDateTime::UNIX_EPOCH, "updated_at": OffsetDateTime::UNIX_EPOCH,
+        }))
+        .unwrap();
+        let mut prepared: Vec<PreparedPattern> = serde_json::from_value(serde_json::json!([{
+            "pattern": serde_json::to_value(mk_pattern(Uuid::nil(), "s")).unwrap(),
+            "quality_profile": profile,
+            "match_config": {"patterns": [], "match_targets": [{"id": "t", "target": "Show Name S01E02", "min_score": null}], "match_mode": "fuzzy", "min_score": 0.75},
+            "categories": [], "matched_guids": [], "_is_season": false,
+            "parsed_media_want": null, "episodes_needed": null, "preferred_protocol": null
+        }]))
+        .unwrap();
+        prepared[0].quality_profile = Some(profile);
+        let releases: Vec<Arc<Release>> = [
+            "Show.Name.S01E02.1080p.WEB-DL.H265-ZQ",
+            "Show.Name.S01E02.480p.HDTV.x264-GRP",
+            "Show.Name.S01E02.1080p.CAM.x264-GRP",
+        ]
+        .iter()
+        .map(|t| Arc::new(mk_release(t, t)))
+        .collect();
+        let filters = TrashFilterSet::from_tier_bonuses(&[("zq", 0.10)]);
+        let now = OffsetDateTime::now_utc();
+        assert_eq!(
+            logged_breakdowns_match_a_rescore(&prepared, &releases, None, now),
+            (3, 0)
+        );
+        assert_eq!(
+            logged_breakdowns_match_a_rescore(&prepared, &releases, Some(&filters), now),
+            (3, 1)
+        );
+    }
+
+    #[test]
+    fn logged_quality_breakdown_is_the_scored_one_on_the_corpus() {
+        let Some(dir) = std::env::var_os("KOBLOAD_SCORING_CORPUS") else {
+            return;
+        };
+        let corpus = crate::watch::capture::read_capture(std::path::Path::new(&dir)).unwrap();
+        let (mut compared, mut differ) = (0, 0);
+        for f in corpus.iter().step_by(10) {
+            let (c, d) = logged_breakdowns_match_a_rescore(
+                &f.prepared,
+                &f.fetch.releases,
+                f.trash.as_deref(),
+                f.fetch.captured_at,
+            );
+            compared += c;
+            differ += d;
+        }
+        eprintln!(
+            "{compared} logged breakdowns match a rescore; {differ} differ from the old rescore without TRaSH filters"
+        );
+        assert!(compared > 0);
+    }
     use crate::watch::ProcessedRelease;
     use nats_jobs::{RejectReason, ScoringDecision, StructuralRejectReason};
     use time::OffsetDateTime;
@@ -2287,6 +2394,7 @@ mod tests {
             quality_score: Some(0.5),
             quality_rejected: false,
             quality_reject_reasons: Vec::new(),
+            quality_breakdown: None,
             structural_rejected: structural_reject.is_some(),
             structural_reject_reason: structural_reject,
             total_score: 1.4,
