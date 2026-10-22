@@ -162,6 +162,32 @@ Patterns are deleted once they're fulfilled, so labels only cover wants that
 still exist. Sport and movies are thin; the sport supplement makes up for
 sport.
 
+### 2d. Sport aliases
+
+The captures predate the place, league and event aliases Kobbler now puts
+on sport wants, so the golden replay can't show what they change.
+`alias_eval_test` gives each captured sport want the aliases Kobbler would
+send, rebuilt from the same sources (`api/tests/integration/alias_eval_test/kobbler_aliases.rs`
+mirrors Kobbler's `sport_want`), and replays the labels, the sport
+supplement and the main capture with and without them. It needs
+`data/alias-sources/`:
+
+- `sportarr/{motogp,moto2,moto3,sbk}.json`: Sportarr's season schedules
+  (`/api/v2/json/schedule/league/{id}/{season}`)
+- `leagues/lg-*.json`: Sportarr's league records, for `alternateNames`
+- `pulselive_events.json`: the MotoGP results API's events for the season
+- `countries.tsv`, `cities.tsv`: Kobbler's gazetteer
+- `adjudication*.tsv`: a verdict for every pair the two disagree on
+
+```sh
+KOBLOAD_ALIAS_EVAL_DATA=$PWD/data \
+  cargo test --release --test integration alias_eval_test:: -- --nocapture
+```
+
+It fails if matching with aliases is worse than without on precision or
+recall, or if a disagreement has no verdict, and writes the numbers and
+every disagreement to `data/alias-eval/`.
+
 ### 3. Build the golden snapshot
 
 Copy the capture directory to the dev machine. The first run writes

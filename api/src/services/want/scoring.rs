@@ -684,7 +684,7 @@ fn is_default_sport_session(session: &str) -> bool {
 // wants name their session, so they never reach this check.) Other resolutions scale with pixel count
 // to the 0.6 power, which keeps 32 GiB 2160p races (limit ~37 GiB) and 3.7 GiB
 // 720p races (limit ~10 GiB) in. Unknown resolution counts as 1080p.
-fn is_sport_weekend_pack(size: i64, resolution: Option<&str>) -> bool {
+pub(crate) fn is_sport_weekend_pack(size: i64, resolution: Option<&str>) -> bool {
     const RACE_LIMIT_1080P: f64 = 16.0 * (1u64 << 30) as f64;
     let height = resolution
         .and_then(crate::quality::parse_resolution)
@@ -750,7 +750,7 @@ fn release_has_hint_word_outside_session(title: &str, parsed_session: Option<&st
 /// and "Czechia"/"Czech Republic" count as the same place. A wanted location
 /// that is only a country code ("DE") stands for that country; the release
 /// side is left alone, where two letters are as likely a parsing scrap.
-fn location_contains(parsed: &str, wanted: &str) -> bool {
+pub(crate) fn location_contains(parsed: &str, wanted: &str) -> bool {
     let p = crate::parsing::canonical_sport_text(parsed);
     let w = crate::parsing::canonical_sport_text(
         crate::parsing::country_for_code(wanted.trim()).unwrap_or(wanted),
@@ -801,6 +801,7 @@ pub struct ScoringConfig<'a> {
     pub preferred_protocol: Option<&'a str>,
 
     prepared_targets: std::sync::OnceLock<Vec<PreparedTarget<'a>>>,
+    sport_vocab: std::sync::OnceLock<Option<sport::SportVocab>>,
 }
 
 impl<'a> ScoringConfig<'a> {
@@ -829,6 +830,7 @@ impl<'a> ScoringConfig<'a> {
             xem_show_map: None,
             preferred_protocol: None,
             prepared_targets: std::sync::OnceLock::new(),
+            sport_vocab: std::sync::OnceLock::new(),
         }
     }
 
@@ -881,6 +883,35 @@ impl<'a> ScoringConfig<'a> {
         self.match_mode = mode;
         self
     }
+
+    fn sport_vocab(&self) -> Option<&sport::SportVocab> {
+        self.sport_vocab
+            .get_or_init(|| self.media_want.and_then(sport::SportVocab::from_want))
+            .as_ref()
+    }
+}
+
+/// The sport matcher's answer for a bare title, or `None` when the want is
+/// not one it handles.
+pub(crate) fn sport_title_match(want: &MediaWant, title: &str) -> Option<Option<(f64, String)>> {
+    let vocab = sport::SportVocab::from_want(want)?;
+    let verdict = sport::judge(&vocab, &sport::tokenize(title), 0, None, None);
+    Some(verdict.matched.then_some((verdict.score, verdict.summary)))
+}
+
+fn judge_sport(
+    vocab: &sport::SportVocab,
+    release: &Release,
+    title: &PreparedTitle,
+    resolution: Option<&str>,
+) -> sport::SportVerdict {
+    sport::judge(
+        vocab,
+        title.sport_tokens(),
+        release.size,
+        resolution,
+        sport::publish_date(&release.publish_date),
+    )
 }
 
 /// Whether the release matches the config's targets or patterns at all.
@@ -898,15 +929,27 @@ pub fn release_matches_prepared(
     title: &PreparedTitle,
     config: &ScoringConfig,
 ) -> bool {
-    match_gate(release, title, config).is_some()
+    let sport = config
+        .sport_vocab()
+        .map(|v| judge_sport(v, release, title, None));
+    match_gate(release, title, config, sport.as_ref()).is_some()
 }
 
 fn match_gate(
     release: &Release,
     title: &PreparedTitle,
     config: &ScoringConfig,
+    sport: Option<&sport::SportVerdict>,
 ) -> Option<(f64, String, Option<nats_jobs::MatchedTarget>)> {
-    if !config.match_targets.is_empty() {
+    if let Some(verdict) = sport {
+        verdict.matched.then(|| {
+            (
+                verdict.score,
+                verdict.summary.clone(),
+                Some(nats_jobs::MatchedTarget::SportEvent),
+            )
+        })
+    } else if !config.match_targets.is_empty() {
         let targets = config
             .prepared_targets
             .get_or_init(|| prepare_targets(config.match_targets));
@@ -1006,14 +1049,23 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
     let mut reject_reasons: Vec<RejectReason> = Vec::new();
 
     let kinds = config.media_want.map(structural_media_kinds);
+    let sport = config.sport_vocab().map(|v| {
+        judge_sport(
+            v,
+            release,
+            facts.title(),
+            facts.quality().resolution.as_deref(),
+        )
+    });
 
     // Gate 3: Structural rejection
     let structural_result = kinds.and_then(|(reject_kind, _)| {
-        structural_reject_with_parsed(
+        structural_reject_judged(
             release,
             &facts.parsed(reject_kind),
             config.media_want,
             config.search_context,
+            sport.as_ref(),
         )
     });
     let structural_rejected = structural_result.is_some();
@@ -1028,7 +1080,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
 
     // Gate 5: Pattern/target matching (always run)
     let (match_score, matched_pattern, matched_target) =
-        match match_gate(release, facts.title(), config) {
+        match match_gate(release, facts.title(), config, sport.as_ref()) {
             Some((score, pattern, target)) => (Some(score), Some(pattern), target),
             None => (None, None, None),
         };
@@ -1258,6 +1310,25 @@ pub fn structural_reject_with_parsed(
     media_want: Option<&MediaWant>,
     search_context: SearchContext,
 ) -> Option<nats_jobs::StructuralRejectReason> {
+    let sport = media_want.and_then(sport::SportVocab::from_want).map(|v| {
+        sport::judge(
+            &v,
+            &sport::tokenize(&release.title),
+            release.size,
+            parsed.quality.resolution.as_deref(),
+            sport::publish_date(&release.publish_date),
+        )
+    });
+    structural_reject_judged(release, parsed, media_want, search_context, sport.as_ref())
+}
+
+fn structural_reject_judged(
+    release: &Release,
+    parsed: &ParsedRelease,
+    media_want: Option<&MediaWant>,
+    search_context: SearchContext,
+    sport: Option<&sport::SportVerdict>,
+) -> Option<nats_jobs::StructuralRejectReason> {
     use nats_jobs::StructuralRejectReason;
     let media_want = media_want?;
 
@@ -1304,20 +1375,28 @@ pub fn structural_reject_with_parsed(
         return Some(StructuralRejectReason::TitleMismatch);
     }
 
-    if let MediaWant::Book { title: wanted, .. } = media_want
+    if let MediaWant::Book {
+        title: wanted,
+        alternate_titles,
+        ..
+    } = media_want
         && let ParsedMedia::Book(book) = &parsed.media
         && !wanted.is_empty()
         && !book.title.is_empty()
-        && !titles_similar(wanted, &book.title)
+        && !any_title_similar(wanted, alternate_titles.as_deref(), &book.title, false)
     {
         return Some(StructuralRejectReason::TitleMismatch);
     }
 
-    if let MediaWant::Audiobook { title: wanted, .. } = media_want
+    if let MediaWant::Audiobook {
+        title: wanted,
+        alternate_titles,
+        ..
+    } = media_want
         && let ParsedMedia::Audiobook(ab) = &parsed.media
         && !wanted.is_empty()
         && !ab.title.is_empty()
-        && !titles_similar(wanted, &ab.title)
+        && !any_title_similar(wanted, alternate_titles.as_deref(), &ab.title, false)
     {
         return Some(StructuralRejectReason::TitleMismatch);
     }
@@ -1638,6 +1717,10 @@ pub fn structural_reject_with_parsed(
         }
     }
 
+    if let Some(verdict) = sport {
+        return verdict.reject;
+    }
+
     match (media_want, &parsed.media) {
         // Movie: yearless releases are allowed — fuzzy scoring already penalises
         // the missing year token, and RSS watermark advancement means a hard reject
@@ -1901,6 +1984,9 @@ pub fn group_by_target_id(
 
 #[cfg(test)]
 mod reference;
+mod sport;
+
+pub(crate) use sport::{Token as SportToken, tokenize as tokenize_sport};
 
 #[cfg(test)]
 mod tests {
@@ -2079,6 +2165,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2101,6 +2188,7 @@ mod tests {
             series: Some("Cosmere".to_string()),
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2123,6 +2211,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2952,6 +3041,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3006,6 +3096,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3028,6 +3119,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3051,6 +3143,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3075,6 +3168,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3098,6 +3192,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         // This may or may not reject depending on parser — if parser finds season 2025, it should reject
         let result = structural_reject(&release, Some(&mw), SearchContext::default());
@@ -3140,6 +3235,7 @@ mod tests {
             event_date,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         }
     }
 
@@ -3256,6 +3352,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3280,6 +3377,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3304,6 +3402,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3331,6 +3430,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3358,6 +3458,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3382,6 +3483,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3419,6 +3521,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         }
     }
 
@@ -3561,6 +3664,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3586,6 +3690,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3609,6 +3714,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3632,6 +3738,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3658,6 +3765,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3684,6 +3792,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3712,6 +3821,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3737,6 +3847,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -3760,6 +3871,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -3784,6 +3896,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let bonus = structural_bonus(&release, Some(&mw), None);
         assert!(
@@ -4073,6 +4186,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -4093,6 +4207,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4112,6 +4227,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4132,6 +4248,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4154,6 +4271,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         // Audiobook parser may extract the author from `Author-Title` style
         // names; either a title_mismatch or author_mismatch is acceptable as
@@ -4698,6 +4816,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         }
     }
 
@@ -4822,6 +4941,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::Rss).is_none(),
@@ -4845,6 +4965,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::Rss).is_none(),
@@ -4868,6 +4989,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::Rss),
@@ -4892,6 +5014,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::Rss),
@@ -4916,6 +5039,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::Rss),
@@ -4940,6 +5064,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::Rss),
@@ -4969,6 +5094,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::Rss).is_none(),
@@ -4992,6 +5118,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::Rss).is_none(),
@@ -5015,6 +5142,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::Rss),
@@ -5039,6 +5167,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::Rss),
@@ -5403,6 +5532,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         }
     }
 
@@ -5417,6 +5547,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         }
     }
 

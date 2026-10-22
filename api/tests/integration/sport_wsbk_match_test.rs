@@ -61,6 +61,7 @@ fn sbk_want(round: u32, location: &str, session: &str) -> MediaWant {
         quality_overrides: None,
         in_library: None,
         library_video_height: None,
+        meta: Box::default(),
     }
 }
 
@@ -184,6 +185,7 @@ fn other_classes_on_the_same_weekend_are_not_grabbed() {
         quality_overrides: None,
         in_library: None,
         library_video_height: None,
+        meta: Box::default(),
     };
     assert_not_candidate(
         "MotoGP.2026.Round18.Australia.Race.1080p.WEB.h264-VERUM",

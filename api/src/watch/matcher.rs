@@ -44,6 +44,7 @@ pub struct PreparedTitle<'t> {
     title: &'t str,
     text: TextTokens,
     sport: std::cell::OnceCell<SportTitle>,
+    sport_tokens: std::cell::OnceCell<Vec<crate::services::want::scoring::SportToken>>,
 }
 
 struct SportTitle {
@@ -57,7 +58,13 @@ impl<'t> PreparedTitle<'t> {
             title,
             text: TextTokens::new(&title.to_lowercase()),
             sport: std::cell::OnceCell::new(),
+            sport_tokens: std::cell::OnceCell::new(),
         }
+    }
+
+    pub(crate) fn sport_tokens(&self) -> &[crate::services::want::scoring::SportToken] {
+        self.sport_tokens
+            .get_or_init(|| crate::services::want::scoring::tokenize_sport(self.title))
     }
 
     fn sport(&self) -> &SportTitle {

@@ -565,6 +565,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let ctx = extract_want_context(Some(&mw));
         assert_eq!(ctx.wanted_title, "MotoGP 2026");

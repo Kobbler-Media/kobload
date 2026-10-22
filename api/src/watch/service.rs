@@ -1693,6 +1693,18 @@ pub fn match_release_with_pattern(
     xem_show_map: Option<&XemShowMap>,
     scene_titles: &[SceneTitle],
 ) -> Option<super::types::MatchResult> {
+    if let Some(want) = pattern
+        .media_want
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())
+        && let Some(sport) = crate::services::want::scoring::sport_title_match(&want, release_title)
+    {
+        return sport.map(|(score, matched_pattern)| super::types::MatchResult {
+            score,
+            matched_pattern,
+        });
+    }
+
     let config = resolve_pattern_match_config(pattern, xem_show_map, scene_titles);
 
     if !config.match_targets.is_empty() {

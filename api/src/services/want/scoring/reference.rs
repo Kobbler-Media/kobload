@@ -93,11 +93,27 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     }
 
     // Gate 5: Pattern/target matching (always run)
-    let (match_score, matched_pattern, matched_target) =
-        match match_gate(release, &PreparedTitle::new(&release.title), config) {
-            Some((score, pattern, target)) => (Some(score), Some(pattern), target),
-            None => (None, None, None),
-        };
+    let (match_score, matched_pattern, matched_target) = match match_gate(
+        release,
+        &PreparedTitle::new(&release.title),
+        config,
+        config
+            .media_want
+            .and_then(sport::SportVocab::from_want)
+            .map(|v| {
+                sport::judge(
+                    &v,
+                    &sport::tokenize(&release.title),
+                    release.size,
+                    parse_quality(&release.title).resolution.as_deref(),
+                    sport::publish_date(&release.publish_date),
+                )
+            })
+            .as_ref(),
+    ) {
+        Some((score, pattern, target)) => (Some(score), Some(pattern), target),
+        None => (None, None, None),
+    };
 
     let is_no_match = match_score.is_none();
 

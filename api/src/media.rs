@@ -273,49 +273,71 @@ pub fn match_targets_from_media_want(media_want: &MediaWant) -> Vec<MatchTarget>
             title,
             author,
             series,
+            alternate_titles,
             ..
         }
         | MediaWant::Audiobook {
             title,
             author,
             series,
+            alternate_titles,
             ..
         } => {
-            if let Some(author) = author.as_ref().filter(|v| !v.trim().is_empty()) {
-                let title = title.trim();
-                let author = author.trim();
-                let st = Some(MatchedTarget::Book);
-                let mut targets = vec![
+            let st = Some(MatchedTarget::Book);
+            let author = author.as_deref().map(str::trim).filter(|v| !v.is_empty());
+            let series = series.as_deref().map(str::trim).filter(|v| !v.is_empty());
+            let titles = std::iter::once((title.trim(), "media".to_string())).chain(
+                alternate_titles
+                    .iter()
+                    .flatten()
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty())
+                    .map(|t| (t, format!("alt_{t}"))),
+            );
+            let mut targets = Vec::new();
+            for (title, id) in titles {
+                if title.is_empty() {
+                    continue;
+                }
+                let Some(author) = author else {
+                    targets.push(MatchTarget {
+                        id,
+                        target: title.to_string(),
+                        min_score: None,
+                        semantic_target: st.clone(),
+                    });
+                    continue;
+                };
+                targets.extend([
                     MatchTarget {
-                        id: "media".to_string(),
+                        id: id.clone(),
                         target: format!("{title} {author}"),
                         min_score: None,
                         semantic_target: st.clone(),
                     },
                     MatchTarget {
-                        id: "media_reversed".to_string(),
+                        id: format!("{id}_reversed"),
                         target: format!("{author} {title}"),
                         min_score: None,
                         semantic_target: st.clone(),
                     },
                     MatchTarget {
-                        id: "media_title_only".to_string(),
+                        id: format!("{id}_title_only"),
                         target: title.to_string(),
                         min_score: Some(0.9),
                         semantic_target: st.clone(),
                     },
-                ];
-                if let Some(series_name) = series.as_ref().filter(|v| !v.trim().is_empty()) {
+                ]);
+                if let Some(series_name) = series {
                     targets.push(MatchTarget {
-                        id: "media_series".to_string(),
-                        target: format!("{} {}", series_name.trim(), title),
+                        id: format!("{id}_series"),
+                        target: format!("{series_name} {title}"),
                         min_score: Some(0.80),
                         semantic_target: st.clone(),
                     });
                 }
-                return targets;
             }
-            (title.trim().to_string(), Some(MatchedTarget::Book))
+            return targets;
         }
         MediaWant::TvEpisode {
             show_name,
@@ -497,6 +519,7 @@ pub fn match_targets_from_media_want(media_want: &MediaWant) -> Vec<MatchTarget>
             location,
             session_type,
             event_title,
+            meta,
             ..
         } => {
             let league = strip_diacritics(league_name.trim());
@@ -538,9 +561,8 @@ pub fn match_targets_from_media_want(media_want: &MediaWant) -> Vec<MatchTarget>
             // For motorsport, the league+round+location targets above are sufficient
             // and event_title-based targets cause cross-sport false positives
             // (e.g., "Brazil GP" or "MotoGP 2026 Brazil GP" matching F1 releases).
-            if targets.is_empty()
-                && let Some(event_title) = event_title.as_deref()
-            {
+            let team_sport = targets.is_empty();
+            if team_sport && let Some(event_title) = event_title.as_deref() {
                 let title = strip_diacritics(event_title.trim());
                 if !title.is_empty() {
                     // Title with year: "UFC 302 Main Card 2025"
@@ -561,6 +583,10 @@ pub fn match_targets_from_media_want(media_want: &MediaWant) -> Vec<MatchTarget>
                         });
                     }
                 }
+            }
+
+            if team_sport {
+                targets.extend(team_targets(meta.teams.as_deref(), szn));
             }
 
             if !targets.is_empty() {
@@ -590,6 +616,37 @@ pub fn match_targets_from_media_want(media_want: &MediaWant) -> Vec<MatchTarget>
             semantic_target: fallback_semantic,
         }]
     }
+}
+
+/// Every pairing of the two teams' names, so "Man Utd vs Arsenal" finds a
+/// want for Manchester United. Scored like the other alias targets:
+/// near-exact or nothing.
+fn team_targets(teams: Option<&[nats_jobs::SportTeam]>, season: &str) -> Vec<MatchTarget> {
+    let [home, away] = teams.unwrap_or_default() else {
+        return Vec::new();
+    };
+    let names = |t: &nats_jobs::SportTeam| {
+        let mut out = vec![t.name.trim().to_string()];
+        for n in t.short.iter().chain(&t.aliases) {
+            let n = n.trim().to_string();
+            if !n.is_empty() && !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        out
+    };
+    let (homes, aways) = (names(home), names(away));
+    homes
+        .iter()
+        .flat_map(|h| aways.iter().map(move |a| (h, a)))
+        .filter(|(h, a)| !h.is_empty() && !a.is_empty())
+        .map(|(h, a)| MatchTarget {
+            id: format!("teams_{h}_{a}"),
+            target: format!("{h} vs {a} {season}"),
+            min_score: Some(0.80),
+            semantic_target: Some(MatchedTarget::SportEvent),
+        })
+        .collect()
 }
 
 pub fn media_quality_profile_id(media_want: &MediaWant) -> Option<uuid::Uuid> {
@@ -924,6 +981,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
 
         let terms = search_terms_from_media_want(&want);
@@ -1021,6 +1079,7 @@ mod tests {
                     series: None,
                     series_position: None,
                     release_date: None,
+                    alternate_titles: None,
                 },
                 "ebooks",
             ),
@@ -1035,6 +1094,7 @@ mod tests {
                     series: None,
                     series_position: None,
                     release_date: None,
+                    alternate_titles: None,
                 },
                 "audiobooks",
             ),
@@ -1105,6 +1165,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         assert_eq!(parse_media_kind(&sport), "sports");
 
@@ -1197,6 +1258,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(targets.len(), 3, "Expected 3 targets, got: {targets:?}");
@@ -1216,6 +1278,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(targets.len(), 1);
@@ -1233,6 +1296,7 @@ mod tests {
             series: Some("Cosmere".to_string()),
             series_position: Some("1".to_string()),
             release_date: None,
+            alternate_titles: None,
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(terms.len(), 3, "Expected 3 terms, got: {terms:?}");
@@ -1260,6 +1324,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
 
         let ids = external_ids_from_media_want(&want);
@@ -1288,6 +1353,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
 
         let ids = external_ids_from_media_want(&want);
@@ -1357,6 +1423,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(
@@ -1380,6 +1447,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let terms = search_terms_from_media_want(&want);
         assert!(
@@ -1406,6 +1474,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let targets = match_targets_from_media_want(&want);
         assert!(
@@ -1429,6 +1498,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let terms = search_terms_from_media_want(&want);
         assert!(
@@ -1463,6 +1533,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
 
         let terms = search_terms_from_media_want(&want);
@@ -1500,6 +1571,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let targets = match_targets_from_media_want(&want);
         assert!(!targets.is_empty(), "Expected targets, got none");
@@ -1534,6 +1606,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let targets = match_targets_from_media_want(&want);
         assert!(
@@ -1572,6 +1645,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let targets = match_targets_from_media_want(&want);
         assert!(
@@ -1601,6 +1675,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(
@@ -1625,6 +1700,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(
@@ -1649,6 +1725,7 @@ mod tests {
             event_date: None,
             in_library: None,
             library_video_height: None,
+            meta: Box::default(),
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(
@@ -1695,6 +1772,7 @@ mod tests {
             series: Some("Cosmere".to_string()),
             series_position: Some("1".to_string()),
             release_date: None,
+            alternate_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(targets.len(), 4, "Expected 4 targets, got: {targets:?}");
@@ -1717,6 +1795,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(
@@ -1741,6 +1820,7 @@ mod tests {
             series: None,
             series_position: None,
             release_date: None,
+            alternate_titles: None,
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(
@@ -1764,6 +1844,7 @@ mod tests {
             series: Some("Cosmere".to_string()),
             series_position: Some("1".to_string()),
             release_date: None,
+            alternate_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert!(

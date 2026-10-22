@@ -35,6 +35,7 @@ fn motogp(round: u32, location: &str) -> MediaWant {
         quality_overrides: None,
         in_library: None,
         library_video_height: None,
+        meta: Box::default(),
     }
 }
 

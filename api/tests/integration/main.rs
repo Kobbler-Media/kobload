@@ -1,9 +1,11 @@
 mod common;
 
+mod alias_eval_test;
 mod apostrophe_title_test;
 mod auth_test;
 mod backup_test;
 mod batch_selection_test;
+mod book_alternate_title_test;
 mod bulletproof_test;
 mod contract_test;
 mod debrid_availability_test;
@@ -34,6 +36,7 @@ mod rss_xem_bonus_test;
 mod scoring_capture_test;
 mod scoring_replay_test;
 mod search_flow_test;
+mod sport_alias_match_test;
 mod sport_location_code_test;
 mod sport_weekend_pack_test;
 mod sport_wsbk_match_test;
