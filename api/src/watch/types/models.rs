@@ -241,13 +241,14 @@ impl ProcessedRelease {
             + self.freshness_bonus
     }
 
-    /// Compare candidates: preferred protocol wins ties, then higher score.
-    /// Consolidates identical logic from BacklogCandidate and ScoredCandidate.
     pub fn is_better_than(&self, other: &Self) -> bool {
-        if self.is_preferred_protocol != other.is_preferred_protocol {
-            return self.is_preferred_protocol;
-        }
-        self.total_score > other.total_score
+        self.rank_cmp(other) == std::cmp::Ordering::Greater
+    }
+
+    pub fn rank_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.is_preferred_protocol
+            .cmp(&other.is_preferred_protocol)
+            .then(self.total_score.total_cmp(&other.total_score))
     }
 
     /// Convert to the wire DTO for API responses and NATS messages.

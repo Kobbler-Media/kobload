@@ -11,6 +11,7 @@ pub mod mocks;
 pub mod resolve_fixture;
 pub mod server;
 pub mod stream_fixtures;
+pub mod tv_watch;
 
 pub use client::*;
 pub use mocks::*;

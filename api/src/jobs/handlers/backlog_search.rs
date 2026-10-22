@@ -883,7 +883,7 @@ pub async fn backlog_search_pattern(
         scoring_config = scoring_config.with_preferred_protocol(proto);
     }
 
-    let processed_releases = score_batch(&all_releases, &scoring_config);
+    let mut processed_releases = score_batch(&all_releases, &scoring_config);
 
     // Log all scored releases to decision collector
     let match_mode_str = if !match_config.match_targets.is_empty() {
@@ -896,6 +896,8 @@ pub async fn backlog_search_pattern(
             log.record_release(log_release_from_processed(pr, match_mode_str));
         }
     }
+
+    processed_releases.sort_by(|a, b| b.rank_cmp(a));
 
     // For season patterns: gather best candidate per episode_key
     // For non-season: immediate upgrade check + execute on first candidate

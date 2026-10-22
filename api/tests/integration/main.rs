@@ -3,6 +3,7 @@ mod common;
 mod alias_eval_test;
 mod apostrophe_title_test;
 mod auth_test;
+mod backlog_pick_test;
 mod backup_test;
 mod batch_selection_test;
 mod book_alternate_title_test;
