@@ -295,7 +295,7 @@ fn log_release_from_processed(
             None
         },
         quality_score: pr.quality_score,
-        quality_score_breakdown: None, // score_batch doesn't expose breakdown
+        quality_score_breakdown: pr.quality_breakdown.clone(),
         total_score: if pr.is_candidate() {
             Some(pr.total_score)
         } else {
@@ -973,7 +973,7 @@ pub async fn backlog_search_pattern(
                         matched_pattern: pr.matched_pattern.clone(),
                         match_mode: Some(match_mode_str.to_string()),
                         quality_score: pr.quality_score,
-                        quality_score_breakdown: None,
+                        quality_score_breakdown: pr.quality_breakdown.clone(),
                         total_score: Some(pr.total_score),
                         parsed_quality: pr
                             .parsed_quality

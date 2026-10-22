@@ -15,9 +15,10 @@ use uuid::Uuid;
 
 use crate::common::stream_fixtures::{create_provider, hash};
 use crate::common::tv_watch::{TvWatch, episode_want, usenet_release};
+use kobload_api::decision_log::repository::{get_session_detail, list_sessions};
 use kobload_api::jobs::handlers::{SearchGates, backlog_search_pattern};
 use kobload_api::repositories::hash_index::{self, HashIndexEntry};
-use kobload_api::repositories::{watch as watch_repo, xem_cache};
+use kobload_api::repositories::{app_settings, watch as watch_repo, xem_cache};
 use kobload_api::services::stream::{StreamSearchContext, stream_search};
 use kobload_api::watch::holds::process_expired_holds;
 use kobload_api::watch::{PreparedPattern, Release, process_releases, rss_outcome};
@@ -84,6 +85,44 @@ async fn backlog_search_skips_the_numbering_collision() {
     backlog_search_pattern(&tv.server.app_state, &pattern, SearchGates::AUTOMATIC).await;
 
     assert_eq!(tv.grabbed(pattern.id).await, [ABSOLUTE_GUID]);
+    tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn backlog_search_logs_the_quality_breakdown_it_scored() {
+    let (tv, pattern) = start().await;
+    app_settings::set(
+        &tv.server.pool,
+        app_settings::keys::SEARCH_LOGGING_ENABLED,
+        &json!(true),
+    )
+    .await
+    .unwrap();
+
+    backlog_search_pattern(&tv.server.app_state, &pattern, SearchGates::AUTOMATIC).await;
+
+    // The session is flushed on a spawned task.
+    let mut session = None;
+    for _ in 0..50 {
+        session = list_sessions(&tv.server.pool, None, None, Some(pattern.id), 1, 0)
+            .await
+            .unwrap()
+            .pop();
+        if session.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let detail = get_session_detail(&tv.server.pool, session.expect("backlog session").id)
+        .await
+        .unwrap()
+        .unwrap();
+    let grabbed = detail
+        .releases
+        .iter()
+        .find(|r| r.release_guid.as_deref() == Some(ABSOLUTE_GUID))
+        .expect("grabbed release logged");
+    assert!(grabbed.quality_score_breakdown.is_some());
     tv.server.cleanup().await;
 }
 
