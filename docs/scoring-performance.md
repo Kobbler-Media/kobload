@@ -314,9 +314,10 @@ In rough order of risk against payoff.
 - **Correct poll scheduling.** Base `last_check_at` on when the poll started,
   or schedule sources independently, so that a slow source doesn't delay the
   others.
-- **Prepare patterns incrementally.** `prepare_patterns` makes several DB round
-  trips per pattern per source (about 400 per source). Cache the prepared set
-  per (source, pattern `updated_at`), or batch the queries.
+- **Prepare patterns incrementally.** Patterns are prepared once per watch
+  cycle, per (id, `updated_at`), and only categories per source. Carrying the
+  prepared set across cycles, or batching the matched-GUID query, would cut
+  the remaining ~1.8 statements per pattern per cycle.
 - **Vectorising.** Not worth hand-rolled SIMD: titles are 50–80 bytes and the
   work is branchy. The SIMD win comes from routing work through
   `memchr`/`aho-corasick`/`regex`, which already use it (item 4).

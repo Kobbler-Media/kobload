@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -568,7 +569,7 @@ struct CandidateEntry {
 /// All async/DB work is done once per pattern during preparation.
 /// The inner release loop uses only in-memory lookups. Serializable so a
 /// scoring capture can replay the loop without the database.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct PreparedPattern {
     pattern: watch_repo::WatchPatternRow,
     quality_profile: Option<QualityProfileRow>,
@@ -595,120 +596,130 @@ impl PreparedPattern {
     }
 }
 
-/// Prepare all pattern-invariant data for a set of patterns.
-///
-/// Performs all DB and async lookups once per pattern:
-/// - Quality profile resolution (cached across patterns sharing media_type_id)
-/// - XEM show map resolution
-/// - Match config (targets, patterns, mode, min_score)
-/// - Category resolution for the source
-/// - Batch-loaded matched GUIDs
-/// - Protocol preference
+/// Per-cycle caches for pattern preparation, shared by every source polled in
+/// one watch cycle. Only a pattern's categories depend on the source; the
+/// rest is prepared once per pattern version (id, updated_at), so a pattern
+/// edited mid-cycle is prepared again.
+#[derive(Default)]
+pub(crate) struct CyclePreparation {
+    profiles: HashMap<Uuid, Option<QualityProfileRow>>,
+    protocols: HashMap<Option<Uuid>, Option<String>>,
+    patterns: HashMap<(Uuid, time::OffsetDateTime), PreparedPattern>,
+}
+
+/// Prepare every pattern for scoring one source's releases: the cycle's
+/// shared preparation plus the source's categories.
 async fn prepare_patterns(
     state: &AppState,
     source: &watch_repo::IndexerSourceRow,
     patterns: &[watch_repo::WatchPatternRow],
-    profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
-    protocol_cache: &mut HashMap<Option<Uuid>, Option<String>>,
+    cycle: &mut CyclePreparation,
 ) -> Vec<PreparedPattern> {
     let mut prepared = Vec::with_capacity(patterns.len());
-
-    // Cache categories per media_type_id (same source + media_type = same categories)
-    let mut category_cache: HashMap<Option<Uuid>, Vec<i32>> = HashMap::new();
+    let mut category_cache: HashMap<Uuid, Vec<i32>> = HashMap::new();
 
     for pattern in patterns {
-        // Resolve quality profile (cached across patterns)
-        let quality_profile = if let Some(mt_id) = pattern.media_type_id {
-            resolve_quality_profile(&state.pool, mt_id, profile_cache).await
-        } else {
-            None
+        let shared = match cycle.patterns.entry((pattern.id, pattern.updated_at)) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => e.insert(
+                prepare_pattern(state, pattern, &mut cycle.profiles, &mut cycle.protocols).await,
+            ),
         };
-
-        // Resolve XEM show map
-        let xem_show_map = resolve_xem_for_pattern(state, pattern).await;
-
-        // Resolve Sonarr scene mapping titles
-        let scene_titles = resolve_scene_titles_for_pattern(state, pattern).await;
-
-        // Resolve match config (targets, patterns, mode, min_score + XEM/scene augmentation)
-        let match_config =
-            resolve_pattern_match_config(pattern, xem_show_map.as_ref(), &scene_titles);
-
-        // Resolve categories (cached per media_type_id for this source)
-        let categories = if let Some(mt_id) = pattern.media_type_id {
-            if let Some(cached) = category_cache.get(&Some(mt_id)) {
-                cached.clone()
-            } else {
-                let cats = resolve_categories_for_source(&state.pool, source, Some(mt_id))
-                    .await
-                    .unwrap_or_default();
-                category_cache.insert(Some(mt_id), cats.clone());
-                cats
-            }
-        } else {
-            Vec::new()
-        };
-
-        // Batch-load matched GUIDs
-        let matched_guids = watch_repo::matched_guids_for_pattern(&state.pool, pattern.id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-
-        let is_season = pattern
-            .media_want
-            .as_ref()
-            .is_some_and(super::episode_key::is_tv_season);
-
-        // Pre-parse MediaWant
-        let parsed_media_want = pattern
-            .media_want
-            .as_ref()
-            .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
-
-        // Pre-compute episodes_needed for TvSeason
-        let episodes_needed = if is_season {
-            pattern
-                .media_want
-                .as_ref()
-                .and_then(super::episode_key::get_episodes_needed)
-        } else {
-            None
-        };
-
-        // Resolve preferred protocol (cached across patterns)
-        let preferred_protocol = {
-            let entry = protocol_cache
-                .entry(pattern.media_type_id)
-                .or_insert_with(|| None);
-            if entry.is_none()
-                && let Some(config) = crate::services::protocol::resolve_protocol_config(
-                    &state.pool,
-                    pattern.media_type_id,
-                )
-                .await
-            {
-                *entry = config.preferred().map(|s| s.to_string());
-            }
-            entry.clone()
-        };
-
-        prepared.push(PreparedPattern {
-            pattern: pattern.clone(),
-            quality_profile,
-            match_config,
-            categories,
-            matched_guids,
-            _is_season: is_season,
-            parsed_media_want,
-            episodes_needed,
-            preferred_protocol,
-            xem_show_map,
-        });
+        let mut prep = shared.clone();
+        // Columns that don't bump updated_at (exclusions, backlog timestamps)
+        // are read fresh with this source's pattern list.
+        prep.pattern = pattern.clone();
+        if let Some(mt_id) = pattern.media_type_id {
+            prep.categories = match category_cache.entry(mt_id) {
+                Entry::Occupied(e) => e.get().clone(),
+                Entry::Vacant(e) => e
+                    .insert(
+                        resolve_categories_for_source(&state.pool, source, Some(mt_id))
+                            .await
+                            .unwrap_or_default(),
+                    )
+                    .clone(),
+            };
+        }
+        prepared.push(prep);
     }
 
     prepared
+}
+
+/// Everything about a pattern that scoring needs except the source's
+/// categories: quality profile, XEM map, scene titles and the match config
+/// built from them, matched GUIDs, parsed media want, episodes needed and
+/// preferred protocol.
+async fn prepare_pattern(
+    state: &AppState,
+    pattern: &watch_repo::WatchPatternRow,
+    profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
+    protocol_cache: &mut HashMap<Option<Uuid>, Option<String>>,
+) -> PreparedPattern {
+    let quality_profile = if let Some(mt_id) = pattern.media_type_id {
+        resolve_quality_profile(&state.pool, mt_id, profile_cache).await
+    } else {
+        None
+    };
+
+    let xem_show_map = resolve_xem_for_pattern(state, pattern).await;
+    let scene_titles = resolve_scene_titles_for_pattern(state, pattern).await;
+    let match_config = resolve_pattern_match_config(pattern, xem_show_map.as_ref(), &scene_titles);
+
+    let matched_guids = watch_repo::matched_guids_for_pattern(&state.pool, pattern.id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let is_season = pattern
+        .media_want
+        .as_ref()
+        .is_some_and(super::episode_key::is_tv_season);
+
+    let parsed_media_want = pattern
+        .media_want
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
+
+    let episodes_needed = if is_season {
+        pattern
+            .media_want
+            .as_ref()
+            .and_then(super::episode_key::get_episodes_needed)
+    } else {
+        None
+    };
+
+    let preferred_protocol = {
+        let entry = protocol_cache
+            .entry(pattern.media_type_id)
+            .or_insert_with(|| None);
+        if entry.is_none()
+            && let Some(config) = crate::services::protocol::resolve_protocol_config(
+                &state.pool,
+                pattern.media_type_id,
+            )
+            .await
+        {
+            *entry = config.preferred().map(|s| s.to_string());
+        }
+        entry.clone()
+    };
+
+    PreparedPattern {
+        pattern: pattern.clone(),
+        quality_profile,
+        match_config,
+        categories: Vec::new(),
+        matched_guids,
+        _is_season: is_season,
+        parsed_media_want,
+        episodes_needed,
+        preferred_protocol,
+        xem_show_map,
+    }
 }
 
 /// Build a `ScoringConfig` from a `PreparedPattern` for the unified scoring pipeline.
@@ -829,8 +840,7 @@ async fn score_source_releases(
     releases: &[Arc<Release>],
     patterns: &[watch_repo::WatchPatternRow],
     candidates: &mut HashMap<CandidateKey, CandidateEntry>,
-    profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
-    protocol_cache: &mut HashMap<Option<Uuid>, Option<String>>,
+    cycle: &mut CyclePreparation,
     collector: Option<(&DecisionCollector, Uuid)>,
     review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
     capture: Option<&mut super::capture::ScoringCapture>,
@@ -838,7 +848,7 @@ async fn score_source_releases(
 ) {
     // Phase 1: Pre-compute all pattern-invariant data (DB/async calls happen here)
     let prepare_start = std::time::Instant::now();
-    let prepared = prepare_patterns(state, source, patterns, profile_cache, protocol_cache).await;
+    let prepared = prepare_patterns(state, source, patterns, cycle).await;
     let prepare_ms = prepare_start.elapsed().as_millis() as u64;
 
     if let Some(capture) = capture {
@@ -1451,8 +1461,7 @@ pub async fn process_releases(
     let releases: Vec<Arc<Release>> = releases.iter().cloned().map(Arc::new).collect();
 
     let mut candidates: HashMap<CandidateKey, CandidateEntry> = HashMap::new();
-    let mut profile_cache: HashMap<Uuid, Option<QualityProfileRow>> = HashMap::new();
-    let mut protocol_cache: HashMap<Option<Uuid>, Option<String>> = HashMap::new();
+    let mut cycle = CyclePreparation::default();
     let mut processed_by_pattern: HashMap<Uuid, Vec<crate::watch::ProcessedRelease>> =
         HashMap::new();
     let collect_reviews = koblem_reviews_enabled(state).await;
@@ -1462,8 +1471,7 @@ pub async fn process_releases(
         &releases,
         patterns,
         &mut candidates,
-        &mut profile_cache,
-        &mut protocol_cache,
+        &mut cycle,
         None,
         collect_reviews.then_some(&mut processed_by_pattern),
         None,
@@ -1478,7 +1486,7 @@ pub async fn process_releases(
         state,
         &processed_by_pattern,
         &pattern_map,
-        &mut profile_cache,
+        &mut cycle.profiles,
         "rss",
     )
     .await;
@@ -1569,7 +1577,7 @@ pub async fn process_release(
 }
 
 /// Resolved match configuration extracted from a WatchPatternRow.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedMatchConfig {
     pub patterns: Vec<String>,
     pub match_targets: Vec<super::types::MatchTarget>,
@@ -1792,10 +1800,7 @@ pub async fn run_watch_service(state: AppState) {
         // Phase 1: Fetch releases from all sources and score candidates
         let sources = get_sources_to_check(&state.pool).await;
         let mut candidates: HashMap<CandidateKey, CandidateEntry> = HashMap::new();
-        // Shared caches across sources — quality profiles and protocol configs
-        // are keyed by media_type_id, so they stay valid across sources.
-        let mut profile_cache: HashMap<Uuid, Option<QualityProfileRow>> = HashMap::new();
-        let mut protocol_cache: HashMap<Option<Uuid>, Option<String>> = HashMap::new();
+        let mut cycle = CyclePreparation::default();
         let mut all_patterns: HashMap<Uuid, watch_repo::WatchPatternRow> = HashMap::new();
         // Holds releases for koblem until the end of the cycle, so it spans every
         // source; only the ones koblem would actually be sent are kept.
@@ -1882,8 +1887,7 @@ pub async fn run_watch_service(state: AppState) {
                         &releases,
                         &patterns,
                         &mut candidates,
-                        &mut profile_cache,
-                        &mut protocol_cache,
+                        &mut cycle,
                         coll_ref,
                         collect_reviews.then_some(&mut processed_by_pattern),
                         capture.as_mut(),
@@ -1952,8 +1956,7 @@ pub async fn run_watch_service(state: AppState) {
                             &releases,
                             &all_pats,
                             &mut candidates,
-                            &mut profile_cache,
-                            &mut protocol_cache,
+                            &mut cycle,
                             None,
                             collect_reviews.then_some(&mut processed_by_pattern),
                             capture.as_mut(),
@@ -1985,7 +1988,7 @@ pub async fn run_watch_service(state: AppState) {
             &state,
             &processed_by_pattern,
             &all_patterns,
-            &mut profile_cache,
+            &mut cycle.profiles,
             "rss",
         )
         .await;
