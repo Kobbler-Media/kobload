@@ -872,7 +872,7 @@ mod tests {
 
     fn candidate(title: &str) -> crate::watch::ProcessedRelease {
         crate::watch::ProcessedRelease {
-            release: Release {
+            release: std::sync::Arc::new(Release {
                 guid: Uuid::new_v4().to_string(),
                 title: title.to_string(),
                 file_name: None,
@@ -896,7 +896,7 @@ mod tests {
                 raw_data: serde_json::json!({}),
                 external_ids: Vec::new(),
                 media: None,
-            },
+            }),
             decision: nats_jobs::ScoringDecision::Candidate,
             reject_reasons: Vec::new(),
             match_score: Some(0.9),

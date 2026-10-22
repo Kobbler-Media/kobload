@@ -42,7 +42,7 @@ fn release(title: &str) -> Release {
 
 fn processed(title: &str) -> ProcessedRelease {
     ProcessedRelease {
-        release: release(title),
+        release: release(title).into(),
         decision: ScoringDecision::NoMatch,
         reject_reasons: Vec::new(),
         match_score: None,

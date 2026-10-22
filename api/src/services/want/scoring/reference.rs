@@ -12,7 +12,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
         && excluded.contains(&release.title)
     {
         return ProcessedRelease {
-            release: release.clone(),
+            release: release.clone().into(),
             decision: ScoringDecision::Excluded,
             reject_reasons: vec![],
             match_score: None,
@@ -39,7 +39,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
         && !crate::helpers::release_matches_categories(&release.category_ids, allowed_cats)
     {
         return ProcessedRelease {
-            release: release.clone(),
+            release: release.clone().into(),
             decision: ScoringDecision::Rejected,
             reject_reasons: vec![RejectReason::CategoryMismatch],
             match_score: None,
@@ -173,7 +173,7 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
     };
 
     ProcessedRelease {
-        release: release.clone(),
+        release: release.clone().into(),
         decision,
         reject_reasons,
         match_score,

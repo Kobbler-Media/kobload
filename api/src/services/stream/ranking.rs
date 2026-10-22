@@ -5,12 +5,12 @@ use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::language::{self, LanguageFit};
 use super::binge;
 use super::continuity::{self, Continuity};
 use super::outcomes;
 use super::release_fit;
 use super::trait_risk::{self, TraitRisk};
+use crate::language::{self, LanguageFit};
 use crate::repositories::stream_outcomes as repo;
 use nats_jobs::types::{StreamAvailability, StreamOption, StreamPlayback, StreamPreference};
 

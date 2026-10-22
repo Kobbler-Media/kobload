@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kob_normalize::titles_similar;
 use nats_jobs::{MediaWant, QualityOverrides};
@@ -932,7 +933,7 @@ fn match_gate(
 ///
 /// Returns a fully-populated ProcessedRelease regardless of decision.
 pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRelease {
-    score_release_facts(&ReleaseFacts::new(release), config)
+    score_release_facts(&ReleaseFacts::new(&Arc::new(release.clone())), config)
 }
 
 /// [`score_release`] for a release whose pattern-independent work is shared
@@ -946,7 +947,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
         && excluded.contains(&release.title)
     {
         return ProcessedRelease {
-            release: release.clone(),
+            release: facts.shared(),
             decision: ScoringDecision::Excluded,
             reject_reasons: vec![],
             match_score: None,
@@ -973,7 +974,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
         && !crate::helpers::release_matches_categories(&release.category_ids, allowed_cats)
     {
         return ProcessedRelease {
-            release: release.clone(),
+            release: facts.shared(),
             decision: ScoringDecision::Rejected,
             reject_reasons: vec![RejectReason::CategoryMismatch],
             match_score: None,
@@ -1108,7 +1109,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
     };
 
     ProcessedRelease {
-        release: release.clone(),
+        release: facts.shared(),
         decision,
         reject_reasons,
         match_score,

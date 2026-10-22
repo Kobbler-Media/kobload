@@ -67,7 +67,7 @@ pub struct CapturedFetch {
     pub trash: Option<String>,
     /// Only releases this capture hadn't already recorded for the source; feeds
     /// repeat most of their items from one poll to the next.
-    pub releases: Vec<Release>,
+    pub releases: Vec<Arc<Release>>,
 }
 
 pub struct ScoringCapture {
@@ -159,7 +159,7 @@ impl ScoringCapture {
         pool: &sqlx::PgPool,
         source: &IndexerSourceRow,
         prepared: &[PreparedPattern],
-        releases: &[Release],
+        releases: &[Arc<Release>],
     ) {
         if self.finished || releases.is_empty() {
             return;
@@ -204,7 +204,7 @@ impl ScoringCapture {
         handler_type: &str,
         prepared: &[PreparedPattern],
         trash_rows: Option<&[TrashFilterRow]>,
-        releases: &[Release],
+        releases: &[Arc<Release>],
     ) {
         if self.finished {
             return;
@@ -215,7 +215,7 @@ impl ScoringCapture {
         }
 
         let seen = self.seen.entry(source_id).or_default();
-        let new: Vec<Release> = releases
+        let new: Vec<Arc<Release>> = releases
             .iter()
             .filter(|r| !seen.contains(&r.guid))
             .cloned()
@@ -251,7 +251,7 @@ impl ScoringCapture {
         handler_type: &str,
         prepared: &[PreparedPattern],
         trash_rows: Option<&[TrashFilterRow]>,
-        releases: Vec<Release>,
+        releases: Vec<Arc<Release>>,
     ) -> io::Result<Vec<String>> {
         let patterns = self.store_blob("patterns", prepared)?;
         let trash = trash_rows

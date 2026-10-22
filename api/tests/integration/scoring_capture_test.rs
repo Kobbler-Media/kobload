@@ -23,8 +23,8 @@ fn captured_at() -> OffsetDateTime {
     OffsetDateTime::parse("2026-10-12T12:00:00Z", &Rfc3339).unwrap()
 }
 
-fn release(guid: &str, title: &str) -> Release {
-    Release {
+fn release(guid: &str, title: &str) -> Arc<Release> {
+    Arc::new(Release {
         guid: guid.to_string(),
         title: title.to_string(),
         file_name: None,
@@ -48,7 +48,7 @@ fn release(guid: &str, title: &str) -> Release {
         raw_data: json!({"attr": "value"}),
         external_ids: Vec::new(),
         media: None,
-    }
+    })
 }
 
 fn prepared_patterns() -> Vec<PreparedPattern> {

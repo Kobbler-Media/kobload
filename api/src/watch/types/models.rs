@@ -187,7 +187,7 @@ pub struct Release {
 /// produce this type.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessedRelease {
-    pub release: Release,
+    pub release: std::sync::Arc<Release>,
 
     // ── Decision ──
     /// Typed decision enum.

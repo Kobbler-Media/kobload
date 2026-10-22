@@ -1,5 +1,6 @@
 use sqlx::PgPool;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
@@ -810,7 +811,7 @@ fn record_scoring_result(
 async fn score_source_releases(
     state: &AppState,
     source: &watch_repo::IndexerSourceRow,
-    releases: &[Release],
+    releases: &[Arc<Release>],
     patterns: &[watch_repo::WatchPatternRow],
     candidates: &mut HashMap<CandidateKey, CandidateEntry>,
     profile_cache: &mut HashMap<Uuid, Option<QualityProfileRow>>,
@@ -896,7 +897,7 @@ fn pair_gated_out(prep: &PreparedPattern, release: &Release) -> bool {
 /// The scoring loop itself: no IO, so a captured fetch replays it exactly.
 fn score_prepared(
     prepared: &[PreparedPattern],
-    releases: &[Release],
+    releases: &[Arc<Release>],
     source_id: Uuid,
     trash_filters: Option<&TrashFilterSet>,
     collector: Option<(&DecisionCollector, Uuid)>,
@@ -1023,7 +1024,7 @@ pub struct ReplayCandidate {
 /// captured fetch, for benchmarks and allocation profiling.
 pub fn rss_scoring_pass(
     prepared: &[PreparedPattern],
-    releases: &[Release],
+    releases: &[Arc<Release>],
     source_id: Uuid,
     trash_filters: Option<&TrashFilterSet>,
     captured_at: time::OffsetDateTime,
@@ -1044,7 +1045,7 @@ pub fn rss_scoring_pass(
 /// Replay a captured fetch with the clock pinned to when it was captured.
 pub fn replay_scoring(
     prepared: &[PreparedPattern],
-    releases: &[Release],
+    releases: &[Arc<Release>],
     source_id: Uuid,
     trash_filters: Option<&TrashFilterSet>,
     captured_at: time::OffsetDateTime,
@@ -1090,7 +1091,7 @@ pub fn replay_scoring(
             .map(|((pattern_id, episode_key), entry)| ReplayCandidate {
                 pattern_id,
                 episode_key,
-                guid: entry.processed.release.guid,
+                guid: entry.processed.release.guid.clone(),
                 total_score: entry.processed.total_score,
             })
             .collect();
@@ -1112,7 +1113,7 @@ pub fn replay_scoring(
             .map(|(pattern_id, prs)| {
                 (
                     pattern_id,
-                    prs.into_iter().map(|pr| pr.release.guid).collect(),
+                    prs.into_iter().map(|pr| pr.release.guid.clone()).collect(),
                 )
             })
             .collect();
@@ -1358,6 +1359,7 @@ pub async fn process_releases(
 ) {
     // Auto-index releases with info_hash into the hash index (background)
     auto_index_releases_to_hash_index(state.pool.clone(), releases);
+    let releases: Vec<Arc<Release>> = releases.iter().cloned().map(Arc::new).collect();
 
     let mut candidates: HashMap<CandidateKey, CandidateEntry> = HashMap::new();
     let mut profile_cache: HashMap<Uuid, Option<QualityProfileRow>> = HashMap::new();
@@ -1368,7 +1370,7 @@ pub async fn process_releases(
     score_source_releases(
         state,
         source,
-        releases,
+        &releases,
         patterns,
         &mut candidates,
         &mut profile_cache,
@@ -1781,10 +1783,12 @@ pub async fn run_watch_service(state: AppState) {
                 Ok(result) => {
                     let _ = watch_repo::record_success(&state.pool, source.id).await;
                     let coll_ref = collector.as_ref().map(|c| (c, provider_call_id));
+                    let releases: Vec<Arc<Release>> =
+                        result.releases.into_iter().map(Arc::new).collect();
                     score_source_releases(
                         &state,
                         source,
-                        &result.releases,
+                        &releases,
                         &patterns,
                         &mut candidates,
                         &mut profile_cache,
@@ -1842,6 +1846,8 @@ pub async fn run_watch_service(state: AppState) {
             {
                 Ok((releases, new_watermark)) => {
                     if !releases.is_empty() {
+                        let releases: Vec<Arc<Release>> =
+                            releases.into_iter().map(Arc::new).collect();
                         // Score against all active patterns using a synthetic source
                         let all_pats = watch_repo::get_all_enabled_patterns(&state.pool)
                             .await
@@ -2175,7 +2181,7 @@ mod tests {
             None => (ScoringDecision::Candidate, Vec::new()),
         };
         ProcessedRelease {
-            release,
+            release: release.into(),
             decision,
             reject_reasons,
             match_score: Some(0.9),

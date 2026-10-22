@@ -225,6 +225,8 @@ with the same step only.
 
 Once a number is worth defending, set `KOBLOAD_SCORING_ALLOC_BUDGET` to make the
 allocation count a hard limit.
+The current budget, for the October capture at `KOBLOAD_SCORING_STEP=50`, is
+596,000,000 (measured 595,686,677).
 
 In production, each source logs `Scored source releases` with `pairs`,
 `fully_scored`, `prepare_ms` and `score_ms`.
@@ -294,6 +296,10 @@ In rough order of risk against payoff.
      lifetime).
    - Drop `raw_data` from the scoring path entirely.
    - dhat shows the before and after; set the allocation budget afterwards.
+
+   Done: `ProcessedRelease` holds an `Arc<Release>` shared from the fetch.
+   `raw_data` stays on `Release`, because matches, holds and downloads
+   forward it, but scoring no longer copies it.
 
 ## Further ideas
 

@@ -513,7 +513,7 @@ mod equivalence {
             crate::watch::capture::read_capture(&capture)
                 .expect("read capture")
                 .into_iter()
-                .flat_map(|f| f.fetch.releases.into_iter().map(|r| r.title)),
+                .flat_map(|f| f.fetch.releases.into_iter().map(|r| r.title.clone())),
         );
         for title in &all {
             assert_same(title);

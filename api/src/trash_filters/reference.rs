@@ -261,7 +261,7 @@ mod equivalence {
         let titles: std::collections::BTreeSet<String> = crate::watch::capture::read_capture(&dir)
             .expect("read capture")
             .into_iter()
-            .flat_map(|f| f.fetch.releases.into_iter().map(|r| r.title))
+            .flat_map(|f| f.fetch.releases.into_iter().map(|r| r.title.clone()))
             .collect();
         let blocked = titles
             .iter()

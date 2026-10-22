@@ -1,6 +1,7 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::parsing::{ParsedRelease, parse_release};
 use crate::quality::{ParsedQuality, parse_quality};
@@ -12,7 +13,7 @@ use crate::watch::matcher::PreparedTitle;
 /// computed on first use. One per release per fetch, shared by every pattern
 /// that scores it.
 pub struct ReleaseFacts<'r> {
-    release: &'r Release,
+    release: &'r Arc<Release>,
     title: PreparedTitle<'r>,
     quality: OnceCell<ParsedQuality>,
     parsed: RefCell<HashMap<&'static str, Rc<ParsedRelease>>>,
@@ -20,7 +21,7 @@ pub struct ReleaseFacts<'r> {
 }
 
 impl<'r> ReleaseFacts<'r> {
-    pub fn new(release: &'r Release) -> Self {
+    pub fn new(release: &'r Arc<Release>) -> Self {
         Self {
             release,
             title: PreparedTitle::new(&release.title),
@@ -32,6 +33,10 @@ impl<'r> ReleaseFacts<'r> {
 
     pub fn release(&self) -> &'r Release {
         self.release
+    }
+
+    pub fn shared(&self) -> Arc<Release> {
+        Arc::clone(self.release)
     }
 
     pub fn title(&self) -> &PreparedTitle<'r> {
