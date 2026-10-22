@@ -94,7 +94,7 @@ mod tests {
             (&["cantonese"], Some("cantonese")),
             (&["mandarin"], Some("chinese")),
             (&["per"], None),
-            (&["vff"], None),
+            (&["vff"], Some("french")),
         ];
         for (words, want) in cases {
             assert_eq!(title_language(|w| words.contains(&w)), *want, "{words:?}");

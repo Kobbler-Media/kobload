@@ -50,13 +50,12 @@ const fn lang(
 pub(crate) const LANGUAGES: &[Language] = &[
     lang("en", "english", &["eng"], &["eng"]),
     Language {
-        stream_tags: &["vff", "vfq", "vfi", "vf2"],
         profile_tags: &["vostfr", "subfrench", "fastsub"],
         ..lang(
             "fr",
             "french",
             &["fre", "fra"],
-            &["fre", "fra", "truefrench"],
+            &["fre", "fra", "truefrench", "vff", "vfq", "vfi", "vf2"],
         )
     },
     Language {
