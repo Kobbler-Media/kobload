@@ -1,5 +1,6 @@
 mod common;
 
+mod apostrophe_title_test;
 mod auth_test;
 mod backup_test;
 mod batch_selection_test;

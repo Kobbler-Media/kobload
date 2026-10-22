@@ -204,7 +204,7 @@ pub fn match_patterns(
     min_score: f64,
     release_title: &str,
 ) -> Option<MatchResult> {
-    let title_lower = release_title.to_lowercase();
+    let title_lower = crate::parsing::common::repair_apostrophes(release_title).to_lowercase();
 
     match match_mode {
         "any" => match_any(patterns, &title_lower),
@@ -327,8 +327,9 @@ struct TextTokens {
 
 impl TextTokens {
     fn new(text: &str) -> Self {
-        let stripped = crate::parsing::common::RELEASE_GROUP_RE.replace(text, "");
-        let norm = canonical(&stripped);
+        let repaired = crate::parsing::common::repair_apostrophes(text);
+        let stripped = crate::parsing::common::RELEASE_GROUP_RE.replace(&repaired, "");
+        let norm = rejoin_possessive_s(&canonical(&stripped));
         let tokens = norm
             .split_whitespace()
             .filter(|t| t.len() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
@@ -337,6 +338,30 @@ impl TextTokens {
             .collect();
         Self { norm, tokens }
     }
+}
+
+/// Releases that replaced an apostrophe with a separator ("Grey s Anatomy",
+/// "Grey_s.Anatomy") leave a lone "s" where canonical() of the wanted title
+/// has "greys". A lone "s" before a number is a season marker ("S 01"),
+/// before another single letter it is part of an initialism ("S.H.I.E.L.D"),
+/// and at the end of a title it is no possessive, so those stay.
+pub(super) fn rejoin_possessive_s(norm: &str) -> String {
+    let words: Vec<&str> = norm.split(' ').collect();
+    let mut out = String::with_capacity(norm.len());
+    for (i, word) in words.iter().enumerate() {
+        let joins = *word == "s"
+            && i > 0
+            && words[i - 1].len() > 1
+            && words[i - 1].chars().all(char::is_alphabetic)
+            && words.get(i + 1).is_some_and(|next| {
+                next.len() > 1 && !next.starts_with(|c: char| c.is_ascii_digit())
+            });
+        if !joins && !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
 }
 
 /// Calculate a fuzzy match score between a pattern and text, dropping any

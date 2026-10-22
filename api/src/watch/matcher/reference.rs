@@ -89,12 +89,13 @@ fn sport_canonical_score(target: &str, title_canon: &str) -> Option<f64> {
 pub(crate) fn title_similarity(pattern: &str, text: &str, stopwords: &[&str]) -> f64 {
     // Strip release group from text to prevent group names like
     // "samhydetorrentgalaxy" from polluting token matching.
-    let text_stripped = crate::parsing::common::RELEASE_GROUP_RE.replace(text, "");
+    let repaired = crate::parsing::common::repair_apostrophes(text);
+    let text_stripped = crate::parsing::common::RELEASE_GROUP_RE.replace(&repaired, "");
     // Canonicalize so dot-separated release titles ("FormulaE.2026.Round01.Brazil")
     // and underscore/hyphen-separated variants all tokenize into proper words.
     // This also handles diacritics, smart quotes, and ampersand expansion.
     let pattern_norm = canonical(pattern);
-    let text_norm = canonical(&text_stripped);
+    let text_norm = super::rejoin_possessive_s(&canonical(&text_stripped));
 
     // Tokenize — keep single-digit numbers (sequel numbers like "5") but
     // filter other single-char tokens. Tokens are already free of punctuation

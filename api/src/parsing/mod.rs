@@ -97,7 +97,7 @@ use crate::quality::parse_quality;
 /// ```
 pub fn parse_release(name: &str, media_kind: &str) -> ParsedRelease {
     // Strip torrent site watermarks before parsing (e.g. "www.UIndex.org - ", "[EZTVx.to]")
-    let name = common::strip_site_watermarks(name);
+    let name = common::strip_site_watermarks(&common::repair_apostrophes(name));
     let name = name.as_ref();
 
     // Parse quality information (resolution, source, codec, flags, etc.)

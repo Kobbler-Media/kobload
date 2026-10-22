@@ -161,6 +161,15 @@ static LEADING_DIGITS_PREFIX_RE: LazyLock<Regex> =
 // Title Cleaning
 // =============================================================================
 
+static MANGLED_APOSTROPHE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(\p{L})(?:&#0*39;|&apos;|#0*39;?|\\')(\p{L})").unwrap());
+
+/// Restore an apostrophe that an indexer escaped or half-decoded between two
+/// letters: "Grey#039s", "Grey&#039;s", "Grey\'s" -> "Grey's".
+pub fn repair_apostrophes(name: &str) -> std::borrow::Cow<'_, str> {
+    MANGLED_APOSTROPHE_RE.replace_all(name, "${1}'${2}")
+}
+
 /// Strip torrent site watermarks from a release name.
 /// Handles prefixes like "www.UIndex.org - " and suffixes like "[EZTVx.to]".
 pub fn strip_site_watermarks(name: &str) -> String {
