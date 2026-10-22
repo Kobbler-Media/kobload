@@ -747,10 +747,14 @@ fn release_has_hint_word_outside_session(title: &str, parsed_session: Option<&st
 /// TheSportsDB may only have the country ("Portugal"), or vice versa.
 /// All words of the shorter string must appear as whole words in the longer string.
 /// Both sides are canonicalised first, so "Spanish"/"Spain", "UK"/"Great Britain"
-/// and "Czechia"/"Czech Republic" count as the same place.
+/// and "Czechia"/"Czech Republic" count as the same place. A wanted location
+/// that is only a country code ("DE") stands for that country; the release
+/// side is left alone, where two letters are as likely a parsing scrap.
 fn location_contains(parsed: &str, wanted: &str) -> bool {
     let p = crate::parsing::canonical_sport_text(parsed);
-    let w = crate::parsing::canonical_sport_text(wanted);
+    let w = crate::parsing::canonical_sport_text(
+        crate::parsing::country_for_code(wanted.trim()).unwrap_or(wanted),
+    );
     if p == w {
         return true;
     }

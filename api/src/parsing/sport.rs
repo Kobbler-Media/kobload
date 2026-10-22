@@ -345,6 +345,68 @@ fn one_word_alias(w: &str) -> Option<&'static str> {
     })
 }
 
+/// The country an ISO 3166 alpha-2 code stands for, spelt as
+/// [`canonical_sport_text`] spells it. Only for a value that is nothing but the
+/// code, such as a want's location: inside a title "IT", "IN", "AT" and "NO"
+/// are words.
+pub fn country_for_code(code: &str) -> Option<&'static str> {
+    if code.len() != 2 {
+        return None;
+    }
+    Some(match code.to_ascii_lowercase().as_str() {
+        "ae" => "united arab emirates",
+        "ar" => "argentina",
+        "at" => "austria",
+        "au" => "australia",
+        "az" => "azerbaijan",
+        "be" => "belgium",
+        "bh" => "bahrain",
+        "br" => "brazil",
+        "ca" => "canada",
+        "ch" => "switzerland",
+        "cn" => "china",
+        "cz" => "czech",
+        "de" => "germany",
+        "dk" => "denmark",
+        "es" => "spain",
+        "fi" => "finland",
+        "fr" => "france",
+        "gb" | "uk" => "uk",
+        "gr" => "greece",
+        "hr" => "croatia",
+        "hu" => "hungary",
+        "id" => "indonesia",
+        "ie" => "ireland",
+        "in" => "india",
+        "it" => "italy",
+        "jp" => "japan",
+        "kr" => "korea",
+        "kz" => "kazakhstan",
+        "ma" => "morocco",
+        "mc" => "monaco",
+        "mx" => "mexico",
+        "my" => "malaysia",
+        "nl" => "netherlands",
+        "no" => "norway",
+        "nz" => "new zealand",
+        "pl" => "poland",
+        "pt" => "portugal",
+        "qa" => "qatar",
+        "sa" => "saudi arabia",
+        "se" => "sweden",
+        "sg" => "singapore",
+        "si" => "slovenia",
+        "sk" => "slovakia",
+        "sm" => "san marino",
+        "th" => "thailand",
+        "tr" => "turkey",
+        "us" => "united states",
+        "vn" => "vietnam",
+        "za" => "south africa",
+        _ => return None,
+    })
+}
+
 // =============================================================================
 // Parsing
 // =============================================================================
