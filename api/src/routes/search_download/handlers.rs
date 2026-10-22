@@ -70,8 +70,13 @@ async fn search_and_download(
     let mut match_targets = request.match_targets.clone();
     let mut quality_profile = None;
     let mut quality_overrides = None;
+    let mut xem_show_map = None;
 
     if let Some(media_want) = request.media_want.as_ref() {
+        xem_show_map = state
+            .xem_cache
+            .show_map_for_want(&state.http_client, &state.pool, media_want)
+            .await;
         if patterns.is_empty() {
             patterns = search_terms_from_media_want(media_want);
         }
@@ -210,6 +215,9 @@ async fn search_and_download(
     .with_search_context(ScoringSearchContext::TextFallback);
     if let Some(ref mw) = request.media_want {
         config = config.with_media_want(mw);
+    }
+    if let Some(ref xem) = xem_show_map {
+        config = config.with_xem_show_map(xem);
     }
     if !use_match_targets {
         config = config.with_match_mode("fuzzy");

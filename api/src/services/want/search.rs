@@ -145,83 +145,68 @@ pub(super) async fn do_immediate_search(
             match_targets = match_targets_from_media_want(media_want);
         }
 
-        // Augment with XEM scene numbering for TV episodes
-        if let MediaWant::TvEpisode {
-            show_name,
-            season,
-            episode,
-            identifiers,
-            ..
-        } = media_want
-            && let Some(tvdb_id) = identifiers
-                .as_ref()
-                .and_then(|i| i.tvdb_id.as_ref()?.parse::<i64>().ok())
-            && let Some(show_map) = ctx
-                .xem_cache
-                .get_show_map(ctx.http_client, ctx.pool, tvdb_id)
-                .await
-        {
-            if let (Ok(tmdb_s), Ok(tmdb_e)) = (season.parse::<u32>(), episode.parse::<u32>())
-                && let Some(scene) = show_map.scene_for_tvdb(tmdb_s, tmdb_e)
-                && (scene.scene_season != tmdb_s || scene.scene_episode != tmdb_e)
-            {
-                debug!(
-                    tvdb_id,
-                    tmdb_season = tmdb_s,
-                    tmdb_episode = tmdb_e,
-                    scene_season = scene.scene_season,
-                    scene_episode = scene.scene_episode,
-                    "XEM scene numbering differs, adding extra search terms"
-                );
-                let extra_terms = episode_search_terms(
+        xem_show_map = ctx
+            .xem_cache
+            .show_map_for_want(ctx.http_client, ctx.pool, media_want)
+            .await;
+        match (media_want, &xem_show_map) {
+            (
+                MediaWant::TvEpisode {
                     show_name,
-                    &scene.scene_season.to_string(),
-                    &scene.scene_episode.to_string(),
-                );
-                for term in extra_terms {
-                    if !patterns.contains(&term) {
-                        patterns.push(term);
+                    season,
+                    episode,
+                    ..
+                },
+                Some(show_map),
+            ) => {
+                if let (Ok(tmdb_s), Ok(tmdb_e)) = (season.parse::<u32>(), episode.parse::<u32>())
+                    && let Some(scene) = show_map.scene_for_tvdb(tmdb_s, tmdb_e)
+                    && (scene.scene_season != tmdb_s || scene.scene_episode != tmdb_e)
+                {
+                    debug!(
+                        tmdb_season = tmdb_s,
+                        tmdb_episode = tmdb_e,
+                        scene_season = scene.scene_season,
+                        scene_episode = scene.scene_episode,
+                        "XEM scene numbering differs, adding extra search terms"
+                    );
+                    let extra_terms = episode_search_terms(
+                        show_name,
+                        &scene.scene_season.to_string(),
+                        &scene.scene_episode.to_string(),
+                    );
+                    for term in extra_terms {
+                        if !patterns.contains(&term) {
+                            patterns.push(term);
+                        }
                     }
+                    match_targets.extend(xem_match_targets(
+                        show_name,
+                        scene.scene_season,
+                        scene.scene_episode,
+                        tmdb_s,
+                        tmdb_e,
+                    ));
                 }
-                match_targets.extend(xem_match_targets(
-                    show_name,
-                    scene.scene_season,
-                    scene.scene_episode,
-                    tmdb_s,
-                    tmdb_e,
-                ));
             }
-            xem_show_map = Some(show_map);
-        }
-
-        // Augment with XEM scene numbering for TV seasons
-        if let MediaWant::TvSeason {
-            show_name,
-            season,
-            identifiers,
-            ..
-        } = media_want
-            && let Some(tvdb_id) = identifiers
-                .as_ref()
-                .and_then(|i| i.tvdb_id.as_ref()?.parse::<i64>().ok())
-            && let Some(show_map) = ctx
-                .xem_cache
-                .get_show_map(ctx.http_client, ctx.pool, tvdb_id)
-                .await
-        {
-            if let Ok(tvdb_s) = season.parse::<u32>()
-                && let Some(scene_season) = show_map.scene_season_for_tvdb(tvdb_s)
-                && scene_season != tvdb_s
-            {
-                debug!(
-                    tvdb_id,
-                    tvdb_season = tvdb_s,
-                    scene_season,
-                    "XEM scene season differs, adding extra match targets"
-                );
-                match_targets.extend(xem_season_match_targets(show_name, scene_season));
+            (
+                MediaWant::TvSeason {
+                    show_name, season, ..
+                },
+                Some(show_map),
+            ) => {
+                if let Ok(tvdb_s) = season.parse::<u32>()
+                    && let Some(scene_season) = show_map.scene_season_for_tvdb(tvdb_s)
+                    && scene_season != tvdb_s
+                {
+                    debug!(
+                        tvdb_season = tvdb_s,
+                        scene_season, "XEM scene season differs, adding extra match targets"
+                    );
+                    match_targets.extend(xem_season_match_targets(show_name, scene_season));
+                }
             }
-            xem_show_map = Some(show_map);
+            _ => {}
         }
 
         // Augment with Sonarr scene mapping titles, XEM title aliases, and the

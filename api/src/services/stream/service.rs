@@ -284,25 +284,13 @@ pub async fn stream_search(
     // Prepare scoring dependencies early (these are cheap/cached lookups)
     let patterns = build_patterns(request);
     let quality_profile = load_quality_profile(ctx.pool, request).await;
-    let _xem_show_map = if matches!(request.media_type.as_deref(), Some("tv")) {
-        if let Some(ref mw) = request.media_want {
-            let ids = media_want_external_ids(mw);
-            let tvdb_id = ids
-                .iter()
-                .find(|(src, _)| src == "tvdb")
-                .and_then(|(_, id)| id.parse::<i64>().ok());
-            if let Some(tvdb) = tvdb_id {
-                ctx.xem_cache
-                    .get_show_map(ctx.http_client, ctx.pool, tvdb)
-                    .await
-            } else {
-                None
-            }
-        } else {
-            None
+    let xem_show_map = match request.media_want {
+        Some(ref mw) => {
+            ctx.xem_cache
+                .show_map_for_want(ctx.http_client, ctx.pool, mw)
+                .await
         }
-    } else {
-        None
+        None => None,
     };
     let trash_filter_set = ctx.trash_filters.get_filters();
 
@@ -313,18 +301,13 @@ pub async fn stream_search(
         if releases.is_empty() {
             return Vec::new();
         }
-        let mut config = crate::services::want::scoring::ScoringConfig::new(
-            &[],
+        let config = scoring_config(
+            request,
             &patterns,
-            0.0,
             quality_profile.as_ref(),
-            trash_filter_set.as_ref().map(|arc| arc.as_ref()),
-        )
-        .with_match_mode("any")
-        .with_search_context(SearchContext::Structured);
-        if let Some(ref mw) = request.media_want {
-            config = config.with_media_want(mw);
-        }
+            trash_filter_set.as_deref(),
+            xem_show_map.as_ref(),
+        );
         crate::services::want::scoring::score_batch(releases, &config)
     };
 
@@ -609,7 +592,15 @@ pub async fn stream_search(
             info!("Indexer result cache hit");
             cached
         } else {
-            match search_and_score_indexers(ctx, request, &debrid_sources, &cache_key).await {
+            match search_and_score_indexers(
+                ctx,
+                request,
+                &debrid_sources,
+                &cache_key,
+                xem_show_map.as_ref(),
+            )
+            .await
+            {
                 Ok(result) => result,
                 Err(e) => {
                     warn!(error = %e, "Cardigann fallback search failed");
@@ -970,6 +961,7 @@ async fn search_and_score_indexers(
     request: &StreamSearchRequest,
     debrid_sources: &[watch_repo::IndexerSourceRow],
     cache_key: &str,
+    xem_show_map: Option<&crate::xem::XemShowMap>,
 ) -> Result<(Vec<crate::watch::ProcessedRelease>, Vec<Release>), StreamSearchError> {
     let query = build_search_query(request);
     let indexer_ctx = IndexerContext {
@@ -1043,18 +1035,13 @@ async fn search_and_score_indexers(
     // Stream search uses lenient scoring: TRaSH filters disabled because public
     // trackers commonly have unnamed groups and x265 at HD which TRaSH rejects.
     // Quality scoring (resolution, codec, audio) still applies for ranking.
-    let mut config = crate::services::want::scoring::ScoringConfig::new(
-        &[],
+    let config = scoring_config(
+        request,
         &patterns,
-        0.0, // min_score — accept everything, we'll rank by total_score
         quality_profile.as_ref(),
-        None, // no TRaSH filters for streaming — too strict for public trackers
-    )
-    .with_match_mode("any")
-    .with_search_context(SearchContext::Structured);
-    if let Some(ref mw) = request.media_want {
-        config = config.with_media_want(mw);
-    }
+        None,
+        xem_show_map,
+    );
     // Return the FULL scored set (candidates + rejects). Downstream filters
     // via `is_candidate()` where it needs candidates only; rejects are used
     // by the decision log so we don't have to re-score them.
@@ -1087,6 +1074,33 @@ async fn search_and_score_indexers(
     }
 
     Ok((scored, releases))
+}
+
+/// Streams rank everything by total score, so nothing is cut by a minimum
+/// match score.
+fn scoring_config<'a>(
+    request: &'a StreamSearchRequest,
+    patterns: &'a [String],
+    quality_profile: Option<&'a crate::repositories::quality_profiles::QualityProfileRow>,
+    trash_filters: Option<&'a crate::trash_filters::TrashFilterSet>,
+    xem_show_map: Option<&'a crate::xem::XemShowMap>,
+) -> crate::services::want::scoring::ScoringConfig<'a> {
+    let mut config = crate::services::want::scoring::ScoringConfig::new(
+        &[],
+        patterns,
+        0.0,
+        quality_profile,
+        trash_filters,
+    )
+    .with_match_mode("any")
+    .with_search_context(SearchContext::Structured);
+    if let Some(ref mw) = request.media_want {
+        config = config.with_media_want(mw);
+    }
+    if let Some(xem) = xem_show_map {
+        config = config.with_xem_show_map(xem);
+    }
+    config
 }
 
 /// Extract the primary title from a MediaWant variant.

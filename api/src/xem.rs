@@ -290,6 +290,21 @@ impl XemCache {
         Some(map)
     }
 
+    pub async fn show_map_for_want(
+        &self,
+        client: &Client,
+        pool: &PgPool,
+        want: &nats_jobs::MediaWant,
+    ) -> Option<XemShowMap> {
+        let (nats_jobs::MediaWant::TvEpisode { identifiers, .. }
+        | nats_jobs::MediaWant::TvSeason { identifiers, .. }) = want
+        else {
+            return None;
+        };
+        let tvdb_id = identifiers.as_ref()?.tvdb_id.as_ref()?.parse().ok()?;
+        self.get_show_map(client, pool, tvdb_id).await
+    }
+
     /// Convenience: get scene mapping for a specific episode.
     pub async fn scene_mapping_for_episode(
         &self,

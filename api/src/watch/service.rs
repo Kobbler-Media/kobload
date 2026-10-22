@@ -503,52 +503,33 @@ pub async fn resolve_quality_profile(
     profile
 }
 
-/// Resolve an XEM show map for a pattern's media_want (if it's a TvEpisode with a TVDB ID).
-pub async fn resolve_xem_for_pattern(
+pub async fn resolve_pattern_match_inputs(
     state: &AppState,
     pattern: &watch_repo::WatchPatternRow,
-) -> Option<XemShowMap> {
+) -> (ResolvedMatchConfig, Option<XemShowMap>) {
     let media_want = pattern
         .media_want
         .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())?;
-
-    let tvdb_id = match &media_want {
-        nats_jobs::MediaWant::TvEpisode { identifiers, .. }
-        | nats_jobs::MediaWant::TvSeason { identifiers, .. } => identifiers
-            .as_ref()
-            .and_then(|i| i.tvdb_id.as_ref()?.parse::<i64>().ok())?,
-        _ => return None,
+        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
+    let (xem_show_map, scene_titles) = match &media_want {
+        Some(mw) => (
+            state
+                .xem_cache
+                .show_map_for_want(&state.http_client, &state.pool, mw)
+                .await,
+            crate::scene_titles::resolve(
+                &state.scene_mappings,
+                &state.xem_cache,
+                &state.http_client,
+                &state.pool,
+                mw,
+            )
+            .await,
+        ),
+        None => (None, Vec::new()),
     };
-
-    state
-        .xem_cache
-        .get_show_map(&state.http_client, &state.pool, tvdb_id)
-        .await
-}
-
-/// Resolve alternate show titles for a pattern's media_want (if it's TV with a
-/// TVDB ID).
-pub async fn resolve_scene_titles_for_pattern(
-    state: &AppState,
-    pattern: &watch_repo::WatchPatternRow,
-) -> Vec<SceneTitle> {
-    let Some(media_want) = pattern
-        .media_want
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())
-    else {
-        return Vec::new();
-    };
-
-    crate::scene_titles::resolve(
-        &state.scene_mappings,
-        &state.xem_cache,
-        &state.http_client,
-        &state.pool,
-        &media_want,
-    )
-    .await
+    let match_config = resolve_pattern_match_config(pattern, xem_show_map.as_ref(), &scene_titles);
+    (match_config, xem_show_map)
 }
 
 /// Grouping key for batch selection: (pattern_id, episode_key).
@@ -662,9 +643,7 @@ async fn prepare_pattern(
         None
     };
 
-    let xem_show_map = resolve_xem_for_pattern(state, pattern).await;
-    let scene_titles = resolve_scene_titles_for_pattern(state, pattern).await;
-    let match_config = resolve_pattern_match_config(pattern, xem_show_map.as_ref(), &scene_titles);
+    let (match_config, xem_show_map) = resolve_pattern_match_inputs(state, pattern).await;
 
     let matched_guids = watch_repo::matched_guids_for_pattern(&state.pool, pattern.id)
         .await

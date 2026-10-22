@@ -344,6 +344,7 @@ impl TestServer {
             .merge(routes::download_clients::routes())
             .merge(routes::downloads::routes())
             .merge(routes::media_types::routes())
+            .merge(routes::providers::routes())
             .merge(routes::quality_profiles::routes())
             .merge(routes::indexer_category_mappings::routes())
             .merge(routes::indexer_rss_cache::routes())

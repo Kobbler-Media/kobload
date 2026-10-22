@@ -109,23 +109,10 @@ pub(super) async fn run_episode_fallback(
         Vec::new()
     };
 
-    // Fetch XEM show map once for the whole fallback (if applicable)
-    let xem_show_map = if let MediaWant::TvEpisode { identifiers, .. }
-    | MediaWant::TvSeason { identifiers, .. } = media_want
-    {
-        if let Some(tvdb_id) = identifiers
-            .as_ref()
-            .and_then(|i| i.tvdb_id.as_ref()?.parse::<i64>().ok())
-        {
-            ctx.xem_cache
-                .get_show_map(ctx.http_client, ctx.pool, tvdb_id)
-                .await
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let xem_show_map = ctx
+        .xem_cache
+        .show_map_for_want(ctx.http_client, ctx.pool, media_want)
+        .await;
 
     // Phase 2: Pluck from existing results (aired episodes only)
     let episode_targets: Vec<MatchTarget> = aired_episodes

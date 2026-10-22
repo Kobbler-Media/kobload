@@ -397,11 +397,8 @@ pub async fn backlog_search_pattern(
     // against. Alternate show titles (Sonarr scene mappings, XEM aliases,
     // provider alternate titles) have to reach both — a show whose releases use
     // a regional name ("The Block" → "The Block AU") matches nothing without them.
-    let xem_show_map = crate::watch::service::resolve_xem_for_pattern(state, pattern).await;
-    let scene_titles =
-        crate::watch::service::resolve_scene_titles_for_pattern(state, pattern).await;
-    let match_config =
-        crate::watch::resolve_pattern_match_config(pattern, xem_show_map.as_ref(), &scene_titles);
+    let (match_config, xem_show_map) =
+        crate::watch::resolve_pattern_match_inputs(state, pattern).await;
     let min_score = match_config.min_score;
 
     // Custom patterns require per-term search; media_want uses a single cascaded call
@@ -874,6 +871,9 @@ pub async fn backlog_search_pattern(
     if let Some(ref mw) = parsed_media_want {
         scoring_config = scoring_config.with_media_want(mw);
     }
+    if let Some(ref xem) = xem_show_map {
+        scoring_config = scoring_config.with_xem_show_map(xem);
+    }
     if let Some(ref eps) = episodes_needed
         && let Some(ref mw_json) = pattern.media_want
     {
@@ -1205,6 +1205,9 @@ pub async fn backlog_search_pattern(
 
                 if let Some(ref mw) = parsed_media_want {
                     ep_scoring_config = ep_scoring_config.with_media_want(mw);
+                }
+                if let Some(ref xem) = xem_show_map {
+                    ep_scoring_config = ep_scoring_config.with_xem_show_map(xem);
                 }
                 if let Some(ref eps) = episodes_needed
                     && let Some(ref mw_json) = pattern.media_want

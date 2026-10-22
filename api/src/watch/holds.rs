@@ -619,8 +619,8 @@ async fn final_search_for_hold(
     let config = resolve_protocol_config(&state.pool, pattern.media_type_id).await?;
     let preferred = config.preferred()?;
 
-    // Use shared pattern match config resolution
-    let match_config = crate::watch::resolve_pattern_match_config(pattern, None, &[]);
+    let (match_config, xem_show_map) =
+        crate::watch::resolve_pattern_match_inputs(state, pattern).await;
 
     // Resolve allowed categories for post-filtering
     let allowed_categories = if let Some(mt_id) = pattern.media_type_id {
@@ -672,6 +672,9 @@ async fn final_search_for_hold(
     // on a single episode of a still-airing season.
     if let Some(ref mw) = parsed_media_want {
         config = config.with_media_want(mw);
+    }
+    if let Some(ref xem) = xem_show_map {
+        config = config.with_xem_show_map(xem);
     }
     if let Some(ref eps) = episodes_needed
         && let Some(ref mw_json) = pattern.media_want

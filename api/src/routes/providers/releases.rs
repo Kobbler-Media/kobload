@@ -264,7 +264,10 @@ async fn search_releases(
 
     let total_found = all_releases.len();
 
-    // Score all results
+    let xem_show_map = state
+        .xem_cache
+        .show_map_for_want(&state.http_client, &state.pool, media_want)
+        .await;
     let trash_filters = state.trash_filters.get_filters();
     let mut config = ScoringConfig::new(
         if use_match_targets {
@@ -284,6 +287,9 @@ async fn search_releases(
     }
     if let Some(overrides) = quality_overrides {
         config = config.with_quality_overrides(overrides);
+    }
+    if let Some(ref xem) = xem_show_map {
+        config = config.with_xem_show_map(xem);
     }
     let batch = score_batch(&all_releases, &config);
     let mut candidates_pr: Vec<&ProcessedRelease> =
