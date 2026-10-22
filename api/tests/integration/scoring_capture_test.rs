@@ -196,6 +196,7 @@ fn capture_round_trips_and_replays() {
         first.fetch.source_id,
         None,
         captured_at(),
+        None,
     );
     assert_eq!((stats.pairs, stats.fully_scored), (2, 1));
 }

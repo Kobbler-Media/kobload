@@ -360,6 +360,29 @@ pub fn read_capture(dir: &Path) -> io::Result<Vec<CorpusFetch>> {
     Ok(out)
 }
 
+/// Each fetch's releases as its feed served them. A capture keeps only the
+/// releases it hadn't seen from the source before, but a feed returns its
+/// newest items every poll, so this puts the overlap back: each fetch's new
+/// releases followed by the source's previous feed, `page` items in all (or
+/// every new release, if there are more).
+pub fn overlapping_feeds(corpus: &[CorpusFetch], page: usize) -> Vec<Vec<Arc<Release>>> {
+    let mut previous: HashMap<Uuid, Vec<Arc<Release>>> = HashMap::new();
+    corpus
+        .iter()
+        .map(|f| {
+            let new = &f.fetch.releases;
+            let feed: Vec<Arc<Release>> = new
+                .iter()
+                .cloned()
+                .chain(previous.remove(&f.fetch.source_id).unwrap_or_default())
+                .take(page.max(new.len()))
+                .collect();
+            previous.insert(f.fetch.source_id, feed.clone());
+            feed
+        })
+        .collect()
+}
+
 fn read_blob<T: serde::de::DeserializeOwned>(dir: &Path, kind: &str, key: &str) -> io::Result<T> {
     let mut json = Vec::new();
     MultiGzDecoder::new(File::open(dir.join(kind).join(format!("{key}.json.gz")))?)

@@ -25,6 +25,7 @@ mod prerelease_source_test;
 mod quality_default_test;
 mod quality_profiles_test;
 mod quality_word_match_test;
+mod rss_gate_memo_test;
 mod rss_match_prefilter_test;
 mod rss_poll_schedule_test;
 mod scoring_capture_test;

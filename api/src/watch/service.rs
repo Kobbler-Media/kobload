@@ -585,6 +585,12 @@ pub struct PreparedPattern {
     preferred_protocol: Option<String>,
 }
 
+impl PreparedPattern {
+    pub(crate) fn match_config(&self) -> &ResolvedMatchConfig {
+        &self.match_config
+    }
+}
+
 /// Prepare all pattern-invariant data for a set of patterns.
 ///
 /// Performs all DB and async lookups once per pattern:
@@ -819,6 +825,7 @@ async fn score_source_releases(
     collector: Option<(&DecisionCollector, Uuid)>,
     review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
     capture: Option<&mut super::capture::ScoringCapture>,
+    gate_memo: Option<&mut super::gate_memo::MatchGateMemo>,
 ) {
     // Phase 1: Pre-compute all pattern-invariant data (DB/async calls happen here)
     let prepare_start = std::time::Instant::now();
@@ -848,6 +855,7 @@ async fn score_source_releases(
             collector,
             review_queue,
             candidates,
+            gate_memo,
         )
     });
     info!(
@@ -855,6 +863,7 @@ async fn score_source_releases(
         releases = releases.len(),
         patterns = prepared.len(),
         pairs = stats.pairs,
+        gates_reused = stats.gates_reused,
         fully_scored = stats.fully_scored,
         prepare_ms,
         score_ms = score_start.elapsed().as_millis() as u64,
@@ -869,6 +878,8 @@ pub struct ScoringPassStats {
     pub pairs: usize,
     /// Pairs that went through the full `score_release` gates.
     pub fully_scored: usize,
+    /// Pairs whose match gate was answered from the source's previous fetch.
+    pub gates_reused: usize,
 }
 
 pub(crate) fn has_match_config(prep: &PreparedPattern) -> bool {
@@ -895,6 +906,7 @@ fn pair_gated_out(prep: &PreparedPattern, release: &Release) -> bool {
 }
 
 /// The scoring loop itself: no IO, so a captured fetch replays it exactly.
+#[allow(clippy::too_many_arguments)]
 fn score_prepared(
     prepared: &[PreparedPattern],
     releases: &[Arc<Release>],
@@ -903,6 +915,7 @@ fn score_prepared(
     collector: Option<(&DecisionCollector, Uuid)>,
     mut review_queue: Option<&mut HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>>,
     candidates: &mut HashMap<CandidateKey, CandidateEntry>,
+    gate_memo: Option<&mut super::gate_memo::MatchGateMemo>,
 ) -> ScoringPassStats {
     use crate::services::want::koblem_review;
     use crate::services::want::release_facts::ReleaseFacts;
@@ -910,8 +923,12 @@ fn score_prepared(
 
     let mut stats = ScoringPassStats::default();
     let facts: Vec<_> = releases.iter().map(ReleaseFacts::new).collect();
+    // The decision log fully scores every pair, so it never asks the gate.
+    let mut gates = gate_memo
+        .filter(|_| collector.is_none())
+        .map(|memo| memo.begin(source_id, prepared, releases));
 
-    for prep in prepared {
+    for (pattern_idx, prep) in prepared.iter().enumerate() {
         // Skip patterns with no match config (no targets and no patterns)
         if !has_match_config(prep) {
             continue;
@@ -923,7 +940,7 @@ fn score_prepared(
             .is_some()
             .then(|| koblem_review::review_wanted_title(prep.parsed_media_want.as_ref()));
 
-        for (release, facts) in releases.iter().zip(&facts) {
+        for (release_idx, (release, facts)) in releases.iter().zip(&facts).enumerate() {
             if pair_gated_out(prep, release) {
                 continue;
             }
@@ -934,13 +951,23 @@ fn score_prepared(
             // A no-match is only used by the decision log or by a koblem
             // review of a related title; otherwise it's dropped, so don't
             // compute it.
-            if collector.is_none()
-                && !release_matches_prepared(release, facts.title(), &config)
-                && review_title
-                    .as_deref()
-                    .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
-            {
-                continue;
+            if collector.is_none() {
+                let reused = gates
+                    .as_ref()
+                    .and_then(|g| g.known(pattern_idx, release_idx));
+                stats.gates_reused += usize::from(reused.is_some());
+                let matched = reused
+                    .unwrap_or_else(|| release_matches_prepared(release, facts.title(), &config));
+                if let Some(gates) = gates.as_mut() {
+                    gates.record(pattern_idx, release_idx, matched);
+                }
+                if !matched
+                    && review_title
+                        .as_deref()
+                        .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
+                {
+                    continue;
+                }
             }
 
             stats.fully_scored += 1;
@@ -990,6 +1017,9 @@ fn score_prepared(
         }
     }
 
+    if let Some(gates) = gates {
+        gates.finish(releases);
+    }
     stats
 }
 
@@ -1028,6 +1058,7 @@ pub fn rss_scoring_pass(
     source_id: Uuid,
     trash_filters: Option<&TrashFilterSet>,
     captured_at: time::OffsetDateTime,
+    gate_memo: Option<&mut super::gate_memo::MatchGateMemo>,
 ) -> ScoringPassStats {
     crate::clock::with_pinned_now(captured_at, || {
         score_prepared(
@@ -1038,8 +1069,75 @@ pub fn rss_scoring_pass(
             None,
             None,
             &mut HashMap::new(),
+            gate_memo,
         )
     })
+}
+
+/// What the RSS path decides for one fetch, with the clock pinned.
+#[derive(Debug, PartialEq, serde::Serialize)]
+pub struct RssOutcome {
+    pub candidates: Vec<ReplayCandidate>,
+    /// Empty unless reviews were collected.
+    pub review: BTreeMap<Uuid, Vec<String>>,
+}
+
+pub fn rss_outcome(
+    prepared: &[PreparedPattern],
+    releases: &[Arc<Release>],
+    source_id: Uuid,
+    trash_filters: Option<&TrashFilterSet>,
+    captured_at: time::OffsetDateTime,
+    reviews: bool,
+    gate_memo: Option<&mut super::gate_memo::MatchGateMemo>,
+) -> (RssOutcome, ScoringPassStats) {
+    crate::clock::with_pinned_now(captured_at, || {
+        let mut candidates = HashMap::new();
+        let mut queue = HashMap::new();
+        let stats = score_prepared(
+            prepared,
+            releases,
+            source_id,
+            trash_filters,
+            None,
+            reviews.then_some(&mut queue),
+            &mut candidates,
+            gate_memo,
+        );
+        let outcome = RssOutcome {
+            candidates: sorted_candidates(candidates),
+            review: review_guids(queue),
+        };
+        (outcome, stats)
+    })
+}
+
+fn sorted_candidates(candidates: HashMap<CandidateKey, CandidateEntry>) -> Vec<ReplayCandidate> {
+    let mut candidates: Vec<ReplayCandidate> = candidates
+        .into_iter()
+        .map(|((pattern_id, episode_key), entry)| ReplayCandidate {
+            pattern_id,
+            episode_key,
+            guid: entry.processed.release.guid.clone(),
+            total_score: entry.processed.total_score,
+        })
+        .collect();
+    candidates.sort_by(|a, b| (a.pattern_id, &a.episode_key).cmp(&(b.pattern_id, &b.episode_key)));
+    candidates
+}
+
+fn review_guids(
+    queue: HashMap<Uuid, Vec<crate::watch::ProcessedRelease>>,
+) -> BTreeMap<Uuid, Vec<String>> {
+    queue
+        .into_iter()
+        .map(|(pattern_id, prs)| {
+            (
+                pattern_id,
+                prs.into_iter().map(|pr| pr.release.guid.clone()).collect(),
+            )
+        })
+        .collect()
 }
 
 /// Replay a captured fetch with the clock pinned to when it was captured.
@@ -1085,18 +1183,8 @@ pub fn replay_scoring(
             None,
             None,
             &mut candidates,
+            None,
         );
-        let mut candidates: Vec<ReplayCandidate> = candidates
-            .into_iter()
-            .map(|((pattern_id, episode_key), entry)| ReplayCandidate {
-                pattern_id,
-                episode_key,
-                guid: entry.processed.release.guid.clone(),
-                total_score: entry.processed.total_score,
-            })
-            .collect();
-        candidates
-            .sort_by(|a, b| (a.pattern_id, &a.episode_key).cmp(&(b.pattern_id, &b.episode_key)));
 
         let mut queue = HashMap::new();
         score_prepared(
@@ -1107,21 +1195,13 @@ pub fn replay_scoring(
             None,
             Some(&mut queue),
             &mut HashMap::new(),
+            None,
         );
-        let review = queue
-            .into_iter()
-            .map(|(pattern_id, prs)| {
-                (
-                    pattern_id,
-                    prs.into_iter().map(|pr| pr.release.guid.clone()).collect(),
-                )
-            })
-            .collect();
 
         ScoringReplay {
             matched,
-            candidates,
-            review,
+            candidates: sorted_candidates(candidates),
+            review: review_guids(queue),
             stats,
         }
     })
@@ -1377,6 +1457,7 @@ pub async fn process_releases(
         &mut protocol_cache,
         None,
         collect_reviews.then_some(&mut processed_by_pattern),
+        None,
         None,
     )
     .await;
@@ -1661,6 +1742,7 @@ async fn cleanup_orphaned_patterns(pool: &PgPool) {
 /// Main watch service loop - runs periodically if there are active patterns
 pub async fn run_watch_service(state: AppState) {
     let mut capture = super::capture::ScoringCapture::from_env();
+    let mut gate_memo = super::gate_memo::MatchGateMemo::default();
     loop {
         // Skip this cycle if backlog search is running
         if state
@@ -1796,6 +1878,7 @@ pub async fn run_watch_service(state: AppState) {
                         coll_ref,
                         collect_reviews.then_some(&mut processed_by_pattern),
                         capture.as_mut(),
+                        Some(&mut gate_memo),
                     )
                     .await;
                     // Collect patterns for the selection phase
@@ -1865,6 +1948,7 @@ pub async fn run_watch_service(state: AppState) {
                             None,
                             collect_reviews.then_some(&mut processed_by_pattern),
                             capture.as_mut(),
+                            Some(&mut gate_memo),
                         )
                         .await;
 

@@ -47,6 +47,7 @@ fn main() {
             f.fetch.source_id,
             f.trash.as_deref(),
             f.fetch.captured_at,
+            None,
         );
         pairs += stats.pairs;
         fully_scored += stats.fully_scored;

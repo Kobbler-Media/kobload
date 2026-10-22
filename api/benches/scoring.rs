@@ -12,8 +12,12 @@ use std::path::PathBuf;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use kobload_api::quality::parse_quality;
-use kobload_api::watch::capture::read_capture;
+use kobload_api::watch::capture::{overlapping_feeds, read_capture};
+use kobload_api::watch::gate_memo::MatchGateMemo;
 use kobload_api::watch::rss_scoring_pass;
+
+/// Newznab's RSS page size.
+const RSS_PAGE: usize = 100;
 
 fn scoring(c: &mut Criterion) {
     let Some(dir) = std::env::var_os("KOBLOAD_SCORING_CORPUS").map(PathBuf::from) else {
@@ -26,11 +30,13 @@ fn scoring(c: &mut Criterion) {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let corpus: Vec<_> = read_capture(&dir)
-        .expect("read capture directory")
-        .into_iter()
-        .step_by(step)
-        .collect();
+    let full = read_capture(&dir).expect("read capture directory");
+    // Feeds repeat releases only between consecutive polls, so the
+    // overlapping-feed benches take a contiguous run of the same length
+    // instead of every Nth fetch.
+    let run = &full[..full.len() / step];
+    let feeds = overlapping_feeds(run, RSS_PAGE);
+    let corpus: Vec<_> = full.iter().step_by(step).collect();
     let titles: Vec<&str> = corpus
         .iter()
         .flat_map(|f| f.fetch.releases.iter().map(|r| r.title.as_str()))
@@ -49,10 +55,31 @@ fn scoring(c: &mut Criterion) {
                     f.fetch.source_id,
                     f.trash.as_deref(),
                     f.fetch.captured_at,
+                    None,
                 ));
             }
         })
     });
+    for (name, reuse) in [
+        ("overlapping_feeds_gates_recomputed", false),
+        ("overlapping_feeds_gates_reused", true),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let mut memo = MatchGateMemo::default();
+                for (f, feed) in run.iter().zip(&feeds) {
+                    std::hint::black_box(rss_scoring_pass(
+                        &f.prepared,
+                        feed,
+                        f.fetch.source_id,
+                        f.trash.as_deref(),
+                        f.fetch.captured_at,
+                        reuse.then_some(&mut memo),
+                    ));
+                }
+            })
+        });
+    }
     group.bench_function("parse_quality_all_titles", |b| {
         b.iter(|| {
             for title in &titles {
