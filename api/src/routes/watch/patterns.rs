@@ -13,16 +13,12 @@ use std::time::Duration;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::auth::{require_auth, require_auth_with_token};
-use crate::repositories::{
-    downloads as downloads_repo, indexer_rss_cache, media_types as media_types_repo,
-    watch as watch_repo,
-};
+use crate::repositories::{indexer_rss_cache, watch as watch_repo};
 use crate::state::AppState;
 use crate::types::WatchPatternStreamEvent;
 use crate::watch::{
     EpisodeProgress, ListWatchPatternsResponse, WatchMatchResponse, WatchPatternDetailResponse,
-    WatchPatternResponse, WatchPatternUpdateRequest, WatchSyncItem, WatchSyncRequest,
-    WatchSyncResponse, compute_pattern_status, episode_key,
+    WatchPatternResponse, WatchPatternUpdateRequest, compute_pattern_status, episode_key,
 };
 
 fn default_pattern_limit() -> i64 {
@@ -93,145 +89,6 @@ pub(super) struct WatchListQuery {
     enabled: Option<bool>,
     media_type_id: Option<String>,
     search: Option<String>,
-}
-
-/// Bulk sync watch patterns from a consumer
-pub(super) async fn sync_watch_patterns(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<WatchSyncRequest>,
-) -> Result<Json<WatchSyncResponse>, (StatusCode, String)> {
-    if require_auth(&state, &headers).await.is_err() {
-        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
-    }
-
-    let source_system = &request.source_system;
-
-    // Get existing patterns for this source system
-    let existing = watch_repo::list_patterns_by_source(&state.pool, source_system)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let existing_ids: std::collections::HashSet<String> =
-        existing.iter().map(|p| p.source_id.clone()).collect();
-    let new_ids: std::collections::HashSet<String> =
-        request.items.iter().map(|i| i.source_id.clone()).collect();
-
-    let mut created = 0;
-    let mut updated = 0;
-    let mut deleted = 0;
-
-    // Upsert each item
-    for item in &request.items {
-        let result = upsert_watch_pattern(&state, source_system, item).await;
-        match result {
-            Ok(true) => created += 1,
-            Ok(false) => updated += 1,
-            Err(e) => {
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-            }
-        }
-    }
-
-    // Delete patterns that are no longer in the sync
-    for source_id in existing_ids.difference(&new_ids) {
-        let metadata = existing
-            .iter()
-            .find(|p| &p.source_id == source_id)
-            .and_then(|p| p.metadata.clone());
-        if watch_repo::delete_pattern_by_source(&state.pool, source_system, source_id)
-            .await
-            .is_ok()
-        {
-            crate::jobs::handlers::publish_watch_pattern_deleted(
-                &state,
-                source_system,
-                source_id,
-                metadata,
-            )
-            .await;
-            deleted += 1;
-        }
-    }
-
-    Ok(Json(WatchSyncResponse {
-        created,
-        updated,
-        deleted,
-    }))
-}
-
-async fn upsert_watch_pattern(
-    state: &AppState,
-    source_system: &str,
-    item: &WatchSyncItem,
-) -> Result<bool, crate::repositories::RepositoryError> {
-    // Resolve media_type_id from media_want kind
-    let media_type_id = resolve_media_type_from_want(&state.pool, item.media_want.as_ref()).await;
-
-    let search_not_before = item.search_not_before.as_deref().and_then(|s| {
-        time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
-    });
-
-    // Build sync input
-    let input = watch_repo::WatchPatternSyncInput {
-        source_system: source_system.to_string(),
-        source_id: item.source_id.clone(),
-        callback_url: Some(item.callback_url.clone()),
-        patterns: item.patterns.clone(),
-        media_want: item
-            .media_want
-            .as_ref()
-            .and_then(|v| serde_json::to_value(v).ok()),
-        match_targets: if item.match_targets.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_value(&item.match_targets).unwrap_or_default())
-        },
-        match_mode: item.match_mode.clone(),
-        min_score: item.min_score,
-        media_type_id,
-        auto_download: item.auto_download,
-        metadata: item.metadata.clone(),
-        enabled: item.enabled,
-        upgrade_allowed: item.upgrade_allowed,
-        excluded_releases: None,
-        search_not_before,
-    };
-
-    let exists = watch_repo::pattern_exists(&state.pool, source_system, &item.source_id).await?;
-
-    if exists {
-        watch_repo::update_pattern_by_source(&state.pool, &input).await?;
-        Ok(false)
-    } else {
-        watch_repo::insert_pattern_from_sync(&state.pool, &input).await?;
-        Ok(true)
-    }
-}
-
-/// Resolve media_type_id from media_want kind by looking up the media_type_config table.
-async fn resolve_media_type_from_want(
-    pool: &sqlx::PgPool,
-    media_want: Option<&nats_jobs::MediaWant>,
-) -> Option<uuid::Uuid> {
-    let key = match media_want? {
-        nats_jobs::MediaWant::TvEpisode { .. }
-        | nats_jobs::MediaWant::TvSeason { .. }
-        | nats_jobs::MediaWant::SportEvent { .. }
-        | nats_jobs::MediaWant::SportSeason { .. } => "tv",
-        nats_jobs::MediaWant::Movie { .. } => "movie",
-        nats_jobs::MediaWant::Book { .. } => "book",
-        nats_jobs::MediaWant::Audiobook { .. } => "audiobook",
-        nats_jobs::MediaWant::Comic { .. } => "comic",
-        nats_jobs::MediaWant::Music { .. } => "music",
-        nats_jobs::MediaWant::Game { .. } => "game",
-        nats_jobs::MediaWant::Software { .. } => "software",
-    };
-    media_types_repo::get_by_key(pool, key)
-        .await
-        .ok()?
-        .map(|mt| mt.id)
 }
 
 /// List all watch patterns with cursor pagination
@@ -451,67 +308,6 @@ pub(super) async fn update_watch_pattern(
 
     // Fetch updated pattern
     let pattern = watch_repo::get_pattern_by_id(&state.pool, id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Pattern not found after update".to_string(),
-            )
-        })?;
-
-    let response = with_download_state(&state.pool, pattern.into()).await;
-    let _ = state
-        .watch_pattern_events
-        .send(WatchPatternStreamEvent::Updated {
-            watch_pattern: Box::new(response.clone()),
-        });
-
-    Ok(Json(response))
-}
-
-/// Update a watch pattern by source_system + source_id
-pub(super) async fn update_watch_pattern_by_source(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((source_system, source_id)): Path<(String, String)>,
-    Json(request): Json<WatchPatternUpdateRequest>,
-) -> Result<Json<WatchPatternResponse>, (StatusCode, String)> {
-    if require_auth(&state, &headers).await.is_err() {
-        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
-    }
-
-    let input = watch_repo::WatchPatternInput {
-        callback_url: request.callback_url,
-        patterns: request.patterns,
-        media_want: request
-            .media_want
-            .as_ref()
-            .and_then(|v| serde_json::to_value(v).ok()),
-        match_targets: request
-            .match_targets
-            .as_ref()
-            .and_then(|v| serde_json::to_value(v).ok()),
-        match_mode: Some(request.match_mode),
-        min_score: Some(request.min_score),
-        media_type_id: request.media_type_id,
-        auto_download: request.auto_download,
-        metadata: request.metadata,
-        enabled: request.enabled,
-        upgrade_allowed: request.upgrade_allowed,
-        search_not_before: None,
-    };
-
-    let updated = watch_repo::update_pattern_full(&state.pool, &source_system, &source_id, input)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if !updated {
-        return Err((StatusCode::NOT_FOUND, "Watch pattern not found".to_string()));
-    }
-
-    // Fetch updated pattern
-    let pattern = watch_repo::get_pattern_by_source(&state.pool, &source_system, &source_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| {
@@ -1000,92 +796,14 @@ pub(super) async fn bulk_delete_watch_patterns(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    // Collect download IDs before cascade-deleting matches
-    let download_ids = downloads_repo::get_download_ids_for_patterns(&state.pool, &body.ids)
-        .await
-        .unwrap_or_default();
-
-    match watch_repo::bulk_delete_patterns(&state.pool, &body.ids).await {
-        Ok(deleted) => {
-            // Clean up orphaned hidden downloads
-            let _ =
-                downloads_repo::hard_delete_orphaned_hidden_downloads(&state.pool, &download_ids)
-                    .await;
-
-            // Broadcast delete events for each pattern
-            for id in &body.ids {
-                let _ = state
-                    .watch_pattern_events
-                    .send(crate::types::WatchPatternStreamEvent::Deleted { id: *id });
-            }
-            Json(BulkDeletePatternsResponse { deleted }).into_response()
-        }
+    match crate::jobs::handlers::delete_patterns(&state, &body.ids).await {
+        Ok(deleted) => Json(BulkDeletePatternsResponse {
+            deleted: deleted.len() as u64,
+        })
+        .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to bulk delete watch patterns: {}", e),
-        )
-            .into_response(),
-    }
-}
-
-/// Delete a watch pattern
-pub(super) async fn delete_watch_pattern(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path((source_system, source_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    if require_auth(&state, &headers).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized".to_string()).into_response();
-    }
-
-    // Fetch metadata before deleting so we can include it in the event
-    let metadata = watch_repo::get_pattern_by_source(&state.pool, &source_system, &source_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|p| p.metadata);
-
-    // Get pattern ID before deletion for the stream event and orphan cleanup
-    let pattern_id = watch_repo::get_pattern_by_source(&state.pool, &source_system, &source_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|p| p.id);
-
-    // Collect download IDs before cascade-deleting matches
-    let download_ids = if let Some(pid) = pattern_id {
-        downloads_repo::get_download_ids_for_pattern(&state.pool, pid)
-            .await
-            .unwrap_or_default()
-    } else {
-        vec![]
-    };
-
-    match watch_repo::delete_pattern_by_source(&state.pool, &source_system, &source_id).await {
-        Ok(true) => {
-            // Clean up orphaned hidden downloads (matches were cascade-deleted)
-            let _ =
-                downloads_repo::hard_delete_orphaned_hidden_downloads(&state.pool, &download_ids)
-                    .await;
-
-            crate::jobs::handlers::publish_watch_pattern_deleted(
-                &state,
-                &source_system,
-                &source_id,
-                metadata,
-            )
-            .await;
-            if let Some(id) = pattern_id {
-                let _ = state
-                    .watch_pattern_events
-                    .send(WatchPatternStreamEvent::Deleted { id });
-            }
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(false) => (StatusCode::NOT_FOUND, "not found").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to delete watch pattern: {}", e),
         )
             .into_response(),
     }

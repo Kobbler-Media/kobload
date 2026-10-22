@@ -16,7 +16,7 @@ use crate::jobs::handlers::{
     JobCleanupHandler, MetadataExtractionHandler, RefreshIndexerCapsHandler,
     SearchPatternNowHandler, SearchRequestHandler, TrashFilterSyncHandler, UpgradeCleanupHandler,
     WantRequestHandler, WatchDirectoryNotifyHandler, WatchDirectoryScanCheckHandler,
-    WatchDirectoryScanHandler, WatchPatternDeleteHandler, WatchPatternUpsertHandler,
+    WatchDirectoryScanHandler, WatchPatternDeleteHandler,
 };
 use crate::jobs::worker::JobHandler;
 
@@ -117,9 +117,6 @@ pub async fn start_nats_worker(
     let mut worker = nats_jobs::JobWorker::new(nats, config).with_job_db(job_db);
 
     // Register handlers using the adapter
-    worker.register_handler(HandlerAdapter::new(WatchPatternUpsertHandler::new(
-        state.pool.clone(),
-    )));
     worker.register_handler(HandlerAdapter::new(WatchPatternDeleteHandler::new(
         state.clone(),
     )));

@@ -6,17 +6,16 @@ mod sources;
 
 // Re-export pattern types and functions
 pub use patterns::{
-    OrphanPatternRow, WatchPatternInput, WatchPatternListOptions, WatchPatternListResponse,
-    WatchPatternPartialUpdate, WatchPatternRow, WatchPatternSyncInput, WatchPatternUpdate,
-    WatchPatternUpsertInput, append_excluded_release, bulk_delete_patterns, clear_upgrade_until,
+    DeletedPattern, OrphanPatternRow, WatchPatternInput, WatchPatternListOptions,
+    WatchPatternListResponse, WatchPatternPartialUpdate, WatchPatternRow, WatchPatternSourceInput,
+    WatchPatternUpdate, append_excluded_release, bulk_delete_patterns, clear_upgrade_until,
     create_pattern, decode_cursor as decode_pattern_cursor, delete_expired_upgrades,
     delete_pattern_by_id, delete_pattern_by_source, fetch_pattern_list, find_orphaned_patterns,
     get_all_enabled_patterns, get_pattern_by_id, get_pattern_by_source,
-    get_patterns_for_media_type, has_active_patterns, insert_pattern_from_sync, list_patterns,
+    get_patterns_for_media_type, has_active_patterns, insert_pattern_by_source, list_patterns,
     list_patterns_by_enabled, list_patterns_by_source, list_patterns_by_source_enabled,
     pattern_exists, reset_backlog_search, set_pattern_enabled, set_upgrade_until,
-    update_pattern_by_id, update_pattern_by_source, update_pattern_full, update_pattern_partial,
-    upsert_pattern_from_job,
+    update_pattern_by_id, update_pattern_by_source, update_pattern_partial,
 };
 
 // Re-export match types and functions

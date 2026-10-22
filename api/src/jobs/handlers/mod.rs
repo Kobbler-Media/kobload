@@ -46,5 +46,5 @@ pub use want_request::WantRequestHandler;
 pub use watch_directory_notify::WatchDirectoryNotifyHandler;
 pub use watch_directory_scan::WatchDirectoryScanHandler;
 pub use watch_directory_scan_check::WatchDirectoryScanCheckHandler;
-pub(crate) use watch_pattern::publish_watch_pattern_deleted;
-pub use watch_pattern::{WatchPatternDeleteHandler, WatchPatternUpsertHandler};
+pub use watch_pattern::WatchPatternDeleteHandler;
+pub(crate) use watch_pattern::delete_patterns;

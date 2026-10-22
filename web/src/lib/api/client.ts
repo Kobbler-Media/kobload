@@ -561,12 +561,6 @@ export async function patchWatchPattern(
   });
 }
 
-export async function deleteWatchPattern(sourceSystem: string, sourceId: string): Promise<void> {
-  await request(`/api/v1/watch/${sourceSystem}/${sourceId}`, {
-    method: 'DELETE'
-  });
-}
-
 export async function getPatternDetail(
   sourceSystem: string,
   sourceId: string

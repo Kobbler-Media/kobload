@@ -347,8 +347,7 @@ Kobbler requires these runtime config values (stored in `config/kobbler.toml`):
 
 | Job Type | Direction | Purpose |
 |----------|-----------|---------|
-| `want_request` | Kobbler → Kobload | Search + create watch pattern |
+| `want_request` | Kobbler → Kobload | Search + create or update watch pattern |
 | `watch_pattern_delete` | Kobbler → Kobload | Remove watch pattern |
-| `watch_pattern_upsert` | Kobbler → Kobload | Create/update watch pattern |
 | `events.want.response.kobbler` | Kobload → Kobbler | Want request response |
 | `events.download.>` | Kobload → Kobbler | Download status updates |

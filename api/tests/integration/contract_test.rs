@@ -51,16 +51,6 @@ fn kobload_serializes_search_response() {
 }
 
 #[test]
-fn kobload_deserializes_watch_pattern_upsert() {
-    let fixture = test_fixtures::sample_watch_pattern_upsert();
-    let json = serde_json::to_value(&fixture).unwrap();
-
-    let deserialized: nats_jobs::WatchPatternUpsert = serde_json::from_value(json).unwrap();
-    assert_eq!(deserialized.source_system, "kobbler");
-    assert!(deserialized.enabled);
-}
-
-#[test]
 fn kobload_deserializes_watch_pattern_delete() {
     let fixture = test_fixtures::sample_watch_pattern_delete();
     let json = serde_json::to_value(&fixture).unwrap();

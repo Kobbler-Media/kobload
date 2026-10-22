@@ -20,7 +20,6 @@ inter-service communication. Key subjects:\n\n\
 |---------|-------------|\n\
 | `search_request` | Async search (equivalent to POST /api/v1/search) |\n\
 | `want_request` | Async want (equivalent to POST /api/v1/want), publishes response to `want.response.{source_system}` |\n\
-| `watch_pattern_upsert` | Create/update watch pattern by source_system/source_id |\n\
 | `watch_pattern_delete` | Delete watch pattern by source_system/source_id |\n\
 | `indexer_sync` | Scheduled hourly indexer sync from Prowlarr |\n\n\
 **Events** (pub/sub):\n\n\
@@ -47,7 +46,6 @@ See `nats-jobs` in koblibs for type definitions.";
         nats_jobs::WantRequest,
         nats_jobs::WantResponse,
         nats_jobs::WantStatus,
-        nats_jobs::WatchPatternUpsert,
         nats_jobs::WatchPatternDelete,
         nats_jobs::WatchMatchedEvent,
         nats_jobs::DownloadCompletedEvent,
@@ -68,7 +66,7 @@ See `nats-jobs` in koblibs for type definitions.";
         (name = "downloads", description = "Download management. Completion events also published to NATS subject `download.completed`."),
         (name = "search", description = "Search and download. Also available via NATS subject `search_request`."),
         (name = "want", description = "Want requests (search + watch). Also available via NATS subject `want_request`; responses published to `want.response.{source_system}`."),
-        (name = "watch", description = "Watch patterns and matches. Also available via NATS subjects `watch_pattern_upsert` and `watch_pattern_delete`. Match events published to `download.watch_matched`."),
+        (name = "watch", description = "Watch patterns and matches. Also available via the NATS subjects `want_request` and `watch_pattern_delete`. Match events published to `download.watch_matched`."),
         (name = "settings", description = "Indexers, clients, profiles"),
         (name = "system", description = "Health, webhooks, API info"),
     )
@@ -262,7 +260,7 @@ fn build_spec() -> openapi::OpenApi {
         HttpMethod::Post,
         "/api/v1/admin/watch/patterns",
         "watch",
-        "Create watch pattern (NATS: watch_pattern_upsert)",
+        "Create watch pattern",
     );
     add(
         HttpMethod::Delete,

@@ -115,7 +115,7 @@ Everything is under `/api/v1`. Authenticate with an API key (`X-API-Key`) or an 
 
 **Search and want** — `POST /search`, `POST /want` (search now + create a watch pattern), `POST /want/bulk`
 
-**Watch patterns** — `GET/POST /watch`, `PUT /watch/{id}`, `DELETE /watch/{source_system}/{source_id}`
+**Watch patterns** — `GET/POST /watch`, `PUT/PATCH /watch/{id}`, `POST /watch/bulk-delete`
 
 **Interpretation** — `POST /interpret`, `POST /interpret/stream`
 

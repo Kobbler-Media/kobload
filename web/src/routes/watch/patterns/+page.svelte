@@ -15,7 +15,6 @@
     listWatchPatterns,
     listMediaTypes,
     patchWatchPattern,
-    deleteWatchPattern,
     bulkDeleteWatchPatterns,
     testWatchPattern
   } from '$lib/api/client';
@@ -273,7 +272,7 @@
   async function doSingleDelete() {
     if (!deletingPattern) return;
     try {
-      await deleteWatchPattern(deletingPattern.source_system, deletingPattern.source_id);
+      await bulkDeleteWatchPatterns([deletingPattern.id]);
       deletingPattern = null;
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to delete pattern';

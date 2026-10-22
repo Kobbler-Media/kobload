@@ -372,54 +372,6 @@ where
     Ok(id)
 }
 
-/// Update a watch pattern (full sync from consumer).
-pub async fn update_pattern_full<'e, E>(
-    exec: E,
-    source_system: &str,
-    source_id: &str,
-    input: WatchPatternInput,
-) -> Result<bool>
-where
-    E: Executor<'e, Database = Postgres>,
-{
-    let result = sqlx::query!(
-        r#"
-        UPDATE watch_patterns SET
-            callback_url = $3,
-            patterns = $4,
-            media_want = $5,
-            match_targets = $6,
-            match_mode = $7,
-            min_score = $8,
-            media_type_id = $9,
-            auto_download = $10,
-            metadata = $11,
-            enabled = $12,
-            upgrade_allowed = $13,
-            search_not_before = $14,
-            updated_at = NOW()
-        WHERE source_system = $1 AND source_id = $2
-        "#,
-        source_system,
-        source_id,
-        &input.callback_url,
-        &input.patterns,
-        input.media_want as Option<serde_json::Value>,
-        input.match_targets as Option<serde_json::Value>,
-        input.match_mode.as_deref(),
-        input.min_score as Option<f64>,
-        input.media_type_id as Option<Uuid>,
-        input.auto_download,
-        input.metadata as Option<serde_json::Value>,
-        input.enabled,
-        input.upgrade_allowed,
-        input.search_not_before as Option<OffsetDateTime>,
-    )
-    .execute(exec)
-    .await?;
-    Ok(result.rows_affected() > 0)
-}
-
 /// Update a watch pattern by ID (full update).
 pub async fn update_pattern_by_id<'e, E>(
     exec: E,
@@ -553,12 +505,11 @@ where
 }
 
 // =============================================================================
-// Watch Pattern Sync Operations
+// Want patterns, keyed by their source
 // =============================================================================
 
-/// Input for syncing/upserting a watch pattern from an external source.
 #[derive(Debug, Default)]
-pub struct WatchPatternSyncInput {
+pub struct WatchPatternSourceInput {
     pub source_system: String,
     pub source_id: String,
     pub callback_url: Option<String>,
@@ -576,16 +527,16 @@ pub struct WatchPatternSyncInput {
     pub search_not_before: Option<OffsetDateTime>,
 }
 
-/// Update pattern by source_system and source_id with all sync fields.
-/// Update a pattern from a client sync.
-///
 /// `excluded_releases` is merged, not replaced. The client only knows what it
 /// blocklisted itself; Kobload adds its own entries as downloads fail
-/// (`trigger_research_for_download`), and a sync that overwrote the column threw
+/// (`trigger_research_for_download`), and a want that overwrote the column threw
 /// those away — handing the next search the release it just watched fail. The
 /// union is deduplicated on the whole entry, and jsonb compares structurally, so
 /// re-sending the same blocklist is idempotent rather than cumulative.
-pub async fn update_pattern_by_source<'e, E>(exec: E, input: &WatchPatternSyncInput) -> Result<bool>
+pub async fn update_pattern_by_source<'e, E>(
+    exec: E,
+    input: &WatchPatternSourceInput,
+) -> Result<bool>
 where
     E: Executor<'e, Database = Postgres>,
 {
@@ -636,8 +587,10 @@ where
     Ok(result.rows_affected() > 0)
 }
 
-/// Insert a new watch pattern from sync.
-pub async fn insert_pattern_from_sync<'e, E>(exec: E, input: &WatchPatternSyncInput) -> Result<Uuid>
+pub async fn insert_pattern_by_source<'e, E>(
+    exec: E,
+    input: &WatchPatternSourceInput,
+) -> Result<Uuid>
 where
     E: Executor<'e, Database = Postgres>,
 {
@@ -746,75 +699,6 @@ where
 
     let result = query.execute(exec).await?;
     Ok(result.rows_affected() > 0)
-}
-
-/// Input for upserting a watch pattern from a NATS job.
-#[derive(Debug)]
-pub struct WatchPatternUpsertInput {
-    pub source_system: String,
-    pub source_id: String,
-    pub callback_url: String,
-    pub patterns: serde_json::Value,
-    pub media_want: Option<serde_json::Value>,
-    pub match_targets: serde_json::Value,
-    pub match_mode: String,
-    pub min_score: Option<f64>,
-    pub media_type_id: Option<Uuid>,
-    pub auto_download: bool,
-    pub metadata: Option<serde_json::Value>,
-    pub enabled: bool,
-    pub upgrade_allowed: bool,
-    pub search_not_before: Option<OffsetDateTime>,
-}
-
-/// Upsert a watch pattern from a NATS job (ON CONFLICT DO UPDATE).
-/// Left as a runtime query because `patterns` is serde_json::Value bound to a text[] column.
-pub async fn upsert_pattern_from_job<'e, E>(exec: E, input: WatchPatternUpsertInput) -> Result<()>
-where
-    E: Executor<'e, Database = Postgres>,
-{
-    sqlx::query(
-        r#"
-        INSERT INTO watch_patterns (
-            source_system, source_id, callback_url, patterns, media_want, match_targets, match_mode,
-            min_score, media_type_id, auto_download, metadata, enabled, upgrade_allowed,
-            search_not_before, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
-        ON CONFLICT (source_system, source_id) DO UPDATE SET
-            callback_url = EXCLUDED.callback_url,
-            patterns = EXCLUDED.patterns,
-            media_want = EXCLUDED.media_want,
-            match_targets = EXCLUDED.match_targets,
-            match_mode = EXCLUDED.match_mode,
-            min_score = EXCLUDED.min_score,
-            media_type_id = EXCLUDED.media_type_id,
-            auto_download = EXCLUDED.auto_download,
-            metadata = EXCLUDED.metadata,
-            enabled = EXCLUDED.enabled,
-            upgrade_allowed = EXCLUDED.upgrade_allowed,
-            search_not_before = EXCLUDED.search_not_before,
-            upgrade_until = NULL,
-            updated_at = NOW()
-        "#,
-    )
-    .bind(&input.source_system)
-    .bind(&input.source_id)
-    .bind(&input.callback_url)
-    .bind(&input.patterns)
-    .bind(&input.media_want)
-    .bind(&input.match_targets)
-    .bind(&input.match_mode)
-    .bind(input.min_score)
-    .bind(input.media_type_id)
-    .bind(input.auto_download)
-    .bind(&input.metadata)
-    .bind(input.enabled)
-    .bind(input.upgrade_allowed)
-    .bind(input.search_not_before)
-    .execute(exec)
-    .await?;
-    Ok(())
 }
 
 /// Delete all patterns whose upgrade window has expired.
@@ -943,15 +827,26 @@ where
     Ok(result.rows_affected() > 0)
 }
 
-/// Bulk delete watch patterns by IDs. Returns the number of rows deleted.
-pub async fn bulk_delete_patterns<'e, E>(exec: E, ids: &[Uuid]) -> Result<u64>
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DeletedPattern {
+    pub id: Uuid,
+    pub source_system: String,
+    pub source_id: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
+pub async fn bulk_delete_patterns<'e, E>(exec: E, ids: &[Uuid]) -> Result<Vec<DeletedPattern>>
 where
     E: Executor<'e, Database = Postgres>,
 {
-    let result = sqlx::query!("DELETE FROM watch_patterns WHERE id = ANY($1)", ids)
-        .execute(exec)
-        .await?;
-    Ok(result.rows_affected())
+    let rows = sqlx::query_as!(
+        DeletedPattern,
+        "DELETE FROM watch_patterns WHERE id = ANY($1) RETURNING id, source_system, source_id, metadata",
+        ids
+    )
+    .fetch_all(exec)
+    .await?;
+    Ok(rows)
 }
 
 /// Append an entry to a pattern's `excluded_releases` JSON array.

@@ -12,17 +12,11 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         // Watch patterns
-        .route("/api/v1/watch/sync", post(patterns::sync_watch_patterns))
         .route("/api/v1/watch", get(patterns::list_watch_patterns))
         .route("/api/v1/watch", post(patterns::create_watch_pattern))
         .route(
             "/api/v1/watch/{id}",
             axum::routing::put(patterns::update_watch_pattern).patch(patterns::patch_watch_pattern),
-        )
-        .route(
-            "/api/v1/watch/{source_system}/{source_id}",
-            axum::routing::put(patterns::update_watch_pattern_by_source)
-                .delete(patterns::delete_watch_pattern),
         )
         .route(
             "/api/v1/watch/{source_system}/{source_id}/detail",

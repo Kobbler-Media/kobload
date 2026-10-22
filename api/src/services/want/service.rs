@@ -178,7 +178,7 @@ async fn create_or_update_watch_pattern(
     pool: &PgPool,
     request: &WantServiceRequest,
 ) -> Result<watch_repo::WatchPatternRow, String> {
-    let input = watch_repo::WatchPatternSyncInput {
+    let input = watch_repo::WatchPatternSourceInput {
         source_system: request.source_system.clone(),
         source_id: request.source_id.clone(),
         callback_url: Some(request.callback_url.clone()),
@@ -212,7 +212,7 @@ async fn create_or_update_watch_pattern(
             .await
             .map_err(|e| e.to_string())?;
     } else {
-        watch_repo::insert_pattern_from_sync(pool, &input)
+        watch_repo::insert_pattern_by_source(pool, &input)
             .await
             .map_err(|e| e.to_string())?;
     }

@@ -54,3 +54,4 @@ mod upgrade_dedup_test;
 mod watch_directories_test;
 mod watch_directory_notify_test;
 mod watch_directory_scan_test;
+mod watch_pattern_delete_test;
