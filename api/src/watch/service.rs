@@ -936,10 +936,7 @@ fn score_prepared(
 
     let mut stats = ScoringPassStats::default();
     let facts: Vec<_> = releases.iter().map(ReleaseFacts::new).collect();
-    // The decision log fully scores every pair, so it never asks the gate.
-    let mut gates = gate_memo
-        .filter(|_| collector.is_none())
-        .map(|memo| memo.begin(source_id, prepared, releases));
+    let mut gates = gate_memo.map(|memo| memo.begin(source_id, prepared, releases));
 
     for (pattern_idx, prep) in prepared.iter().enumerate() {
         // Skip patterns with no match config (no targets and no patterns)
@@ -961,45 +958,46 @@ fn score_prepared(
 
             // Nearly every release × pattern pair is a no-match, and the full
             // gates (quality, TRaSH, structural parses) cost milliseconds each.
-            // A no-match is only used by the decision log or by a koblem
-            // review of a related title; otherwise it's dropped, so don't
-            // compute it.
-            if collector.is_none() {
-                let reused = gates
-                    .as_ref()
-                    .and_then(|g| g.known(pattern_idx, release_idx));
-                stats.gates_reused += usize::from(reused.is_some());
-                let matched = reused
-                    .unwrap_or_else(|| release_matches_prepared(release, facts.title(), &config));
-                if let Some(gates) = gates.as_mut() {
-                    gates.record(pattern_idx, release_idx, matched);
-                }
-                if !matched
-                    && review_title
-                        .as_deref()
-                        .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
-                {
-                    continue;
-                }
+            // A no-match is only kept for a koblem review of a related title;
+            // otherwise it's dropped, so don't compute it.
+            let reused = gates
+                .as_ref()
+                .and_then(|g| g.known(pattern_idx, release_idx));
+            stats.gates_reused += usize::from(reused.is_some());
+            let matched =
+                reused.unwrap_or_else(|| release_matches_prepared(release, facts.title(), &config));
+            if let Some(gates) = gates.as_mut() {
+                gates.record(pattern_idx, release_idx, matched);
+            }
+            if !matched
+                && review_title
+                    .as_deref()
+                    .is_none_or(|t| !koblem_review::has_title_overlap(&release.title, t))
+            {
+                continue;
             }
 
             stats.fully_scored += 1;
             let pr = score_release_facts(facts, &config);
 
-            // Record evaluation in decision collector if enabled
-            if let Some((coll, call_id)) = collector {
-                record_scoring_result(coll, call_id, &pr, prep);
-            }
-
             // Collect processed release for koblem review, keyed by the pattern
             // that scored it. Dispatching per-pattern prevents cross-pattern
             // contamination (reject reasons computed against another pattern's
             // media_want leaking into this pattern's review request).
-            if let Some(queue) = review_queue.as_deref_mut()
+            let queued = if let Some(queue) = review_queue.as_deref_mut()
                 && let Some(title) = review_title.as_deref()
                 && koblem_review::worth_reviewing(&pr, title)
             {
                 queue.entry(prep.pattern.id).or_default().push(pr.clone());
+                true
+            } else {
+                false
+            };
+
+            if let Some((coll, call_id)) = collector
+                && (matched || queued)
+            {
+                record_scoring_result(coll, call_id, &pr, prep);
             }
 
             if !pr.is_candidate() {
@@ -1123,6 +1121,39 @@ pub fn rss_outcome(
         };
         (outcome, stats)
     })
+}
+
+/// The feed log one fetch would write with feed logging on, winners marked,
+/// with the clock pinned.
+pub fn rss_feed_log(
+    prepared: &[PreparedPattern],
+    releases: &[Arc<Release>],
+    source_id: Uuid,
+    trash_filters: Option<&TrashFilterSet>,
+    captured_at: time::OffsetDateTime,
+) -> Vec<LogRelease> {
+    crate::clock::with_pinned_now(captured_at, || {
+        let collector = DecisionCollector::new("feed_sync", None, Some(source_id), true);
+        let mut candidates = HashMap::new();
+        score_prepared(
+            prepared,
+            releases,
+            source_id,
+            trash_filters,
+            Some((&collector, Uuid::nil())),
+            None,
+            &mut candidates,
+            None,
+        );
+        mark_winners(&collector, &candidates);
+        collector.into_flush_payload().releases
+    })
+}
+
+fn mark_winners(collector: &DecisionCollector, candidates: &HashMap<CandidateKey, CandidateEntry>) {
+    for winner in candidates.values() {
+        collector.mark_best_by_title(&winner.processed.release.title);
+    }
 }
 
 fn sorted_candidates(candidates: HashMap<CandidateKey, CandidateEntry>) -> Vec<ReplayCandidate> {
@@ -1992,9 +2023,7 @@ pub async fn run_watch_service(state: AppState) {
         if had_candidates {
             // Mark winners in all collectors before executing
             for coll in &source_collectors {
-                for winner in candidates.values() {
-                    coll.mark_best_by_title(&winner.processed.release.title);
-                }
+                mark_winners(coll, &candidates);
             }
             select_and_execute_winners(&state, candidates, &all_patterns).await;
         }

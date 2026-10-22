@@ -12,6 +12,7 @@ mod download_list_test;
 mod e2e_want_test;
 mod e2e_watch_match_test;
 mod episode_tracking_test;
+mod feed_log_content_test;
 mod file_download_test;
 mod hash_index_bootstrap_test;
 mod hash_index_persist_test;
