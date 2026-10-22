@@ -317,10 +317,6 @@ In rough order of risk against payoff.
 - **Prepare patterns incrementally.** `prepare_patterns` makes several DB round
   trips per pattern per source (about 400 per source). Cache the prepared set
   per (source, pattern `updated_at`), or batch the queries.
-- **XEM in RSS scoring.** `build_scoring_config` never calls
-  `with_xem_show_map`, so the XEM scene-numbering bonus doesn't apply in RSS.
-  That's a behaviour fix, separate from performance, and it will change the
-  snapshot.
 - **Vectorising.** Not worth hand-rolled SIMD: titles are 50–80 bytes and the
   work is branchy. The SIMD win comes from routing work through
   `memchr`/`aho-corasick`/`regex`, which already use it (item 4).

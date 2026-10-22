@@ -583,6 +583,10 @@ pub struct PreparedPattern {
     episodes_needed: Option<Vec<nats_jobs::EpisodeRef>>,
     /// Whether this pattern's preferred protocol is set and what it is.
     preferred_protocol: Option<String>,
+    // Captures taken before this field existed have no map; they replay as
+    // scored then.
+    #[serde(default)]
+    xem_show_map: Option<XemShowMap>,
 }
 
 impl PreparedPattern {
@@ -700,6 +704,7 @@ async fn prepare_patterns(
             parsed_media_want,
             episodes_needed,
             preferred_protocol,
+            xem_show_map,
         });
     }
 
@@ -727,6 +732,10 @@ pub(crate) fn build_scoring_config<'a>(
 
     if let Some(ref mw) = prep.parsed_media_want {
         config = config.with_media_want(mw);
+    }
+
+    if let Some(ref xem) = prep.xem_show_map {
+        config = config.with_xem_show_map(xem);
     }
 
     if let Some(ref eps) = prep.episodes_needed

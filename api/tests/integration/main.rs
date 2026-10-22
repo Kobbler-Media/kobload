@@ -28,6 +28,7 @@ mod quality_word_match_test;
 mod rss_gate_memo_test;
 mod rss_match_prefilter_test;
 mod rss_poll_schedule_test;
+mod rss_xem_bonus_test;
 mod scoring_capture_test;
 mod scoring_replay_test;
 mod search_flow_test;
