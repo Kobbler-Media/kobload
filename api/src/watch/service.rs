@@ -791,6 +791,7 @@ fn record_scoring_result(
             .as_ref()
             .and_then(|pq| serde_json::to_value(pq).ok()),
         structural_result,
+        match_explanation: pr.match_explanation.clone(),
         decision: pr.decision.to_string(),
         decision_reason,
         episode_key: pr.episode_key.clone(),
@@ -2415,6 +2416,7 @@ mod tests {
             quality_rejected: false,
             quality_reject_reasons: Vec::new(),
             quality_breakdown: None,
+            match_explanation: None,
             structural_rejected: structural_reject.is_some(),
             structural_reject_reason: structural_reject,
             total_score: 1.4,

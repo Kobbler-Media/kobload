@@ -451,6 +451,7 @@ pub(super) async fn do_immediate_search(
                     .as_ref()
                     .and_then(|pq| serde_json::to_value(pq).ok()),
                 structural_result,
+                match_explanation: pr.match_explanation.clone(),
                 decision: pr.decision.to_string(),
                 decision_reason,
                 episode_key: pr.episode_key.clone(),
@@ -670,6 +671,7 @@ pub(super) async fn do_immediate_search(
                                             .as_ref()
                                             .and_then(|pq| serde_json::to_value(pq).ok()),
                                         structural_result: None,
+                                        match_explanation: best.match_explanation.clone(),
                                         decision: "skipped".to_string(),
                                         decision_reason: Some(reason),
                                         episode_key: ep_key,

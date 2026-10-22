@@ -306,6 +306,7 @@ fn log_release_from_processed(
             .as_ref()
             .and_then(|q| serde_json::to_value(q).ok()),
         structural_result,
+        match_explanation: pr.match_explanation.clone(),
         decision: decision.to_string(),
         decision_reason,
         episode_key: pr.episode_key.clone(),
@@ -979,6 +980,7 @@ pub async fn backlog_search_pattern(
                             .as_ref()
                             .and_then(|q| serde_json::to_value(q).ok()),
                         structural_result: None,
+                        match_explanation: pr.match_explanation.clone(),
                         decision: "rejected_upgrade".to_string(),
                         decision_reason: uc.skip_reason.map(|r| r.to_string()),
                         episode_key: pr.episode_key.clone(),

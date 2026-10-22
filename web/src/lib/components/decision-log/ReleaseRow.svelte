@@ -272,6 +272,30 @@
         </div>
       {/if}
 
+      {#if release.match_explanation}
+        {@const ex = release.match_explanation}
+        <div class="detail-section">
+          <h4 class="section-title">Match Explanation</h4>
+          <div class="kv-grid">
+            {#each ex.matched as hit, i (i)}
+              <span class="kv-key">{hit.slot}</span>
+              <span class="kv-val">
+                {hit.value}{#if hit.alias && hit.alias !== hit.value}
+                  <span class="alias">on "{hit.alias}"</span>{/if}{#if hit.weak}
+                  <span class="alias">(weak)</span>{/if}
+              </span>
+            {/each}
+            {#if ex.unexplained.length > 0}
+              <span class="kv-key">unexplained</span>
+              <span class="kv-val">{ex.unexplained.join(' ')}</span>
+            {/if}
+          </div>
+          {#each ex.contradictions as c, i (i)}
+            <div class="rejection-reason">other {c.slot}: {c.value}</div>
+          {/each}
+        </div>
+      {/if}
+
       <!-- Match Details -->
       {#if release.match_mode || release.matched_pattern || release.match_score !== null}
         <div class="detail-section">
@@ -320,6 +344,10 @@
 </button>
 
 <style>
+  .alias {
+    color: var(--muted);
+  }
+
   .release-row {
     display: block;
     width: 100%;

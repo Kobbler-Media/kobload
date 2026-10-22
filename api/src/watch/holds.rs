@@ -910,6 +910,7 @@ mod tests {
             quality_rejected: false,
             quality_reject_reasons: Vec::new(),
             quality_breakdown: None,
+            match_explanation: None,
             structural_rejected: false,
             structural_reject_reason: None,
             total_score: 1.4,

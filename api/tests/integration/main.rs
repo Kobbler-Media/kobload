@@ -38,6 +38,7 @@ mod scoring_replay_test;
 mod search_flow_test;
 mod sport_alias_match_test;
 mod sport_location_code_test;
+mod sport_match_explanation_test;
 mod sport_weekend_pack_test;
 mod sport_wsbk_match_test;
 mod stream_binge_test;

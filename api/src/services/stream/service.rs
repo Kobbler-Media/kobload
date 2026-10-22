@@ -656,6 +656,7 @@ pub async fn stream_search(
                     .as_ref()
                     .and_then(|pq| serde_json::to_value(pq).ok()),
                 structural_result: None,
+                match_explanation: pr.match_explanation.clone(),
                 decision: if is_candidate {
                     "candidate".to_string()
                 } else {

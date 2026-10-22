@@ -75,6 +75,10 @@ pub async fn flush_session(pool: &PgPool, payload: FlushPayload) -> Result<(), s
             .structural_result
             .as_ref()
             .and_then(|s| serde_json::to_value(s).ok());
+        let explanation_json = release
+            .match_explanation
+            .as_ref()
+            .and_then(|e| serde_json::to_value(e).ok());
 
         sqlx::query!(
             r#"
@@ -83,12 +87,12 @@ pub async fn flush_session(pool: &PgPool, payload: FlushPayload) -> Result<(), s
                 release_size, protocol, indexer_name,
                 match_score, matched_pattern, match_mode,
                 quality_score, quality_score_breakdown, total_score,
-                parsed_quality, structural_result,
+                parsed_quality, structural_result, match_explanation,
                 decision, decision_reason, episode_key, is_best,
                 release_data, created_at
             ) VALUES (
                 gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW()
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW()
             )
             "#,
             payload.session_id,
@@ -106,6 +110,7 @@ pub async fn flush_session(pool: &PgPool, payload: FlushPayload) -> Result<(), s
             release.total_score,
             release.parsed_quality,
             structural_json,
+            explanation_json,
             release.decision,
             release.decision_reason,
             release.episode_key,
@@ -309,6 +314,7 @@ pub async fn get_session_detail(
             total_score,
             parsed_quality,
             structural_result,
+            match_explanation,
             decision,
             decision_reason,
             episode_key,

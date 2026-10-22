@@ -209,6 +209,8 @@ pub struct ProcessedRelease {
     /// output, so the golden replay doesn't compare it.
     #[serde(skip)]
     pub quality_breakdown: Option<crate::decision_log::QualityScoreBreakdown>,
+    #[serde(skip)]
+    pub match_explanation: Option<crate::services::want::scoring::MatchExplanation>,
 
     // ── Structural scoring ──
     pub structural_rejected: bool,

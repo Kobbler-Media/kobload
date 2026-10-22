@@ -896,7 +896,11 @@ impl<'a> ScoringConfig<'a> {
 pub(crate) fn sport_title_match(want: &MediaWant, title: &str) -> Option<Option<(f64, String)>> {
     let vocab = sport::SportVocab::from_want(want)?;
     let verdict = sport::judge(&vocab, &sport::tokenize(title), 0, None, None);
-    Some(verdict.matched.then_some((verdict.score, verdict.summary)))
+    Some(
+        verdict
+            .matched
+            .then(|| (verdict.score, verdict.explanation.summary())),
+    )
 }
 
 fn judge_sport(
@@ -945,7 +949,7 @@ fn match_gate(
         verdict.matched.then(|| {
             (
                 verdict.score,
-                verdict.summary.clone(),
+                verdict.explanation.summary(),
                 Some(nats_jobs::MatchedTarget::SportEvent),
             )
         })
@@ -1005,6 +1009,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
             quality_rejected: false,
             quality_reject_reasons: vec![],
             quality_breakdown: None,
+            match_explanation: None,
             structural_rejected: false,
             structural_reject_reason: None,
             total_score: 0.0,
@@ -1033,6 +1038,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
             quality_rejected: false,
             quality_reject_reasons: vec![],
             quality_breakdown: None,
+            match_explanation: None,
             structural_rejected: false,
             structural_reject_reason: None,
             total_score: 0.0,
@@ -1179,6 +1185,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
         quality_rejected,
         quality_reject_reasons,
         quality_breakdown: Some(quality.breakdown),
+        match_explanation: sport.map(|v| v.explanation),
         structural_rejected,
         structural_reject_reason: structural_result,
         total_score,
@@ -1985,6 +1992,7 @@ pub fn group_by_target_id(
 #[cfg(test)]
 mod reference;
 mod sport;
+pub use sport::MatchExplanation;
 
 pub(crate) use sport::{Token as SportToken, tokenize as tokenize_sport};
 

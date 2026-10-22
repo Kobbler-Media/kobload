@@ -626,6 +626,12 @@ export type StructuralResult = {
   want_year?: number | null;
 };
 
+export type MatchExplanation = {
+  matched: { slot: string; value: string; alias?: string; weak?: boolean }[];
+  contradictions: { slot: string; value: string }[];
+  unexplained: string[];
+};
+
 export type DecisionLogRelease = {
   id: string;
   provider_call_id: string | null;
@@ -642,6 +648,7 @@ export type DecisionLogRelease = {
   total_score: number | null;
   parsed_quality: Record<string, unknown> | null;
   structural_result: StructuralResult | null;
+  match_explanation: MatchExplanation | null;
   decision: string;
   decision_reason: string | null;
   episode_key: string | null;

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            id,\n            provider_call_id,\n            release_title,\n            release_guid,\n            release_size,\n            protocol,\n            indexer_name,\n            match_score,\n            matched_pattern,\n            match_mode,\n            quality_score,\n            quality_score_breakdown,\n            total_score,\n            parsed_quality,\n            structural_result,\n            decision,\n            decision_reason,\n            episode_key,\n            is_best,\n            release_data\n        FROM decision_log_releases\n        WHERE session_id = $1\n        ORDER BY is_best DESC, total_score DESC NULLS LAST, created_at\n        ",
+  "query": "\n        SELECT\n            id,\n            provider_call_id,\n            release_title,\n            release_guid,\n            release_size,\n            protocol,\n            indexer_name,\n            match_score,\n            matched_pattern,\n            match_mode,\n            quality_score,\n            quality_score_breakdown,\n            total_score,\n            parsed_quality,\n            structural_result,\n            match_explanation,\n            decision,\n            decision_reason,\n            episode_key,\n            is_best,\n            release_data\n        FROM decision_log_releases\n        WHERE session_id = $1\n        ORDER BY is_best DESC, total_score DESC NULLS LAST, created_at\n        ",
   "describe": {
     "columns": [
       {
@@ -170,6 +170,17 @@
       },
       {
         "ordinal": 15,
+        "name": "match_explanation",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "decision_log_releases",
+            "name": "match_explanation"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
         "name": "decision",
         "type_info": "Text",
         "origin": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "decision_reason",
         "type_info": "Text",
         "origin": {
@@ -191,7 +202,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "episode_key",
         "type_info": "Text",
         "origin": {
@@ -202,7 +213,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "is_best",
         "type_info": "Bool",
         "origin": {
@@ -213,7 +224,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "release_data",
         "type_info": "Jsonb",
         "origin": {
@@ -245,6 +256,7 @@
       true,
       true,
       true,
+      true,
       false,
       true,
       true,
@@ -252,5 +264,5 @@
       true
     ]
   },
-  "hash": "efccaff31be3688b016230f388404487ab98eccaf887ac874841b114391bc0c5"
+  "hash": "3dd6b66c35ac61084334197d11d9e76654ac2f8f69c7b89a573ebc72f45778df"
 }

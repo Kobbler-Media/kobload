@@ -1,3 +1,4 @@
+mod explain;
 mod tokens;
 mod vocab;
 
@@ -7,6 +8,8 @@ use nats_jobs::{MediaWant, StructuralRejectReason};
 use time::Date;
 
 use crate::parsing::{canonical_sport_text, country_for_code, country_names};
+pub use explain::MatchExplanation;
+use explain::{Contradiction, ExplainedSlot, SlotMatch};
 pub(crate) use tokens::{Token, tokenize};
 use tokens::{normalize_phrase, parse_date_marker};
 use vocab::{Phrase, Slot, UMBRELLA, class_of, closed_vocab, session_of};
@@ -48,7 +51,7 @@ pub(crate) struct SportVerdict {
     pub matched: bool,
     pub score: f64,
     pub reject: Option<StructuralRejectReason>,
-    pub summary: String,
+    pub explanation: MatchExplanation,
 }
 
 fn parse_date(s: &str) -> Option<Date> {
@@ -291,7 +294,7 @@ struct Reading {
     date_hit: bool,
     other_date: bool,
     penalty: f64,
-    notes: Vec<String>,
+    explanation: MatchExplanation,
 }
 
 fn names_a_country(words: &[&str], country: Option<&str>) -> Option<String> {
@@ -351,37 +354,37 @@ pub(crate) fn judge(
     }
 
     let mut r = Reading::default();
-    let mut hits: Vec<String> = Vec::new();
     let mut seen_starts = HashSet::new();
-    for (i, a) in assign.iter().enumerate() {
+    for a in &assign {
         match a {
             Some(Assign::Phrase { slot, value, start }) => {
                 if !seen_starts.insert(*start) {
                     continue;
                 }
+                let words = || phrase_words(tokens, &assign, *start);
                 match slot {
                     Slot::Class if vocab.classes.contains(value) => {
                         r.class_hit = true;
-                        hits.push(format!("class={value}"));
+                        r.matched(SlotMatch::new(ExplainedSlot::Class, value).on(words()));
                     }
                     Slot::Class if vocab.umbrella.contains(value) => {}
                     Slot::Class => {
                         r.other_class = true;
-                        r.notes.push(format!("class {value}"));
+                        r.contradicts(ExplainedSlot::Class, value);
                     }
                     Slot::Session => {
                         r.sessions_named += 1;
                         if vocab.sessions.contains(value) {
                             r.session_hit = true;
-                            hits.push(format!("session={value}"));
+                            r.matched(SlotMatch::new(ExplainedSlot::Session, value).on(words()));
                         } else {
                             r.other_session = true;
-                            r.notes.push(format!("session {value}"));
+                            r.contradicts(ExplainedSlot::Session, value);
                         }
                     }
                     Slot::Event => {
                         r.strong_place = true;
-                        hits.push(format!("event={}", tokens[i].text));
+                        r.matched(SlotMatch::new(ExplainedSlot::Event, words()));
                     }
                     Slot::Filler | Slot::Broadcaster => {}
                 }
@@ -389,30 +392,33 @@ pub(crate) fn judge(
             Some(Assign::Date(d)) => match vocab.event_date {
                 Some(ev) if (*d - ev).whole_days().abs() <= DATE_WINDOW_DAYS => {
                     r.date_hit = true;
-                    hits.push(format!("date={d}"));
+                    r.matched(SlotMatch::new(ExplainedSlot::Date, d));
                 }
                 Some(_) => {
                     r.other_date = true;
-                    r.notes.push(format!("date {d}"));
+                    r.contradicts(ExplainedSlot::Date, d);
                 }
                 None => {}
             },
             Some(Assign::Year(y)) => match vocab.season {
-                Some(s) if s == *y => r.year_hit = true,
+                Some(s) if s == *y => {
+                    r.year_hit = true;
+                    r.matched(SlotMatch::new(ExplainedSlot::Season, y));
+                }
                 Some(_) => {
                     r.other_year = true;
-                    r.notes.push(format!("season {y}"));
+                    r.contradicts(ExplainedSlot::Season, y);
                 }
                 None => {}
             },
             Some(Assign::Round(n)) => match vocab.round {
                 Some(w) if w == *n => {
                     r.round_hit = true;
-                    hits.push(format!("round={n}"));
+                    r.matched(SlotMatch::new(ExplainedSlot::Round, n));
                 }
                 Some(_) if *n > 0 => {
                     r.other_round = true;
-                    r.notes.push(format!("round {n}"));
+                    r.contradicts(ExplainedSlot::Round, n);
                 }
                 _ => {}
             },
@@ -420,7 +426,7 @@ pub(crate) fn judge(
         }
     }
 
-    read_places(vocab, tokens, &mut assign, first_quality, &mut r, &mut hits);
+    read_places(vocab, tokens, &mut assign, first_quality, &mut r);
     for (a, t) in assign.iter_mut().zip(tokens) {
         if a.is_none() && t.quality {
             *a = Some(Assign::Quality);
@@ -432,6 +438,7 @@ pub(crate) fn judge(
         if assign[i].is_some() {
             continue;
         }
+        r.explanation.unexplained.push(t.text.clone());
         if i >= first_quality {
             let cost = TRAILER_COST.min(TRAILER_CAP - trailer).max(0.0);
             trailer += cost;
@@ -487,16 +494,32 @@ pub(crate) fn judge(
         matched,
         score: (score / FULL_SCORE).clamp(0.0, 1.0),
         reject,
-        summary: format!(
-            "sport [{}]{}",
-            hits.join(" "),
-            if r.notes.is_empty() {
-                String::new()
-            } else {
-                format!(" against [{}]", r.notes.join(", "))
-            }
-        ),
+        explanation: r.explanation,
     }
+}
+
+impl Reading {
+    fn matched(&mut self, hit: SlotMatch) {
+        self.explanation.matched.push(hit);
+    }
+
+    fn contradicts(&mut self, slot: ExplainedSlot, value: impl ToString) {
+        self.explanation
+            .contradictions
+            .push(Contradiction::new(slot, value));
+    }
+}
+
+fn phrase_words(tokens: &[Token], assign: &[Option<Assign>], start: usize) -> String {
+    let len = assign[start..]
+        .iter()
+        .take_while(|a| matches!(a, Some(Assign::Phrase { start: s, .. }) if *s == start))
+        .count();
+    tokens[start..start + len]
+        .iter()
+        .map(|t| t.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A run is the want's place when any one of its place names passes
@@ -510,7 +533,6 @@ fn read_places(
     assign: &mut [Option<Assign>],
     first_quality: usize,
     r: &mut Reading,
-    hits: &mut Vec<String>,
 ) {
     let mut i = 0;
     while i < first_quality {
@@ -538,24 +560,24 @@ fn read_places(
                 )
             );
         let short_span = words.len() == 1 && span.chars().count() <= 3;
+        let span_canon = canonical_sport_text(&span);
         let found = vocab
             .places
             .iter()
             .filter(|p| !(p.short || short_span) || in_place_position)
             .filter(|p| crate::services::want::scoring::location_contains(&span, &p.name))
-            .map(|p| place_is_weak(vocab, p, &span))
-            .min();
+            .map(|p| (place_is_weak(vocab, p, &span), p))
+            .min_by_key(|(weak, p)| (*weak, p.canon != span_canon));
         match found {
-            Some(weak) => {
+            Some((weak, place)) => {
                 if weak {
                     r.weak_place = true;
                 } else {
                     r.strong_place = true;
                 }
-                hits.push(format!(
-                    "place={span}({})",
-                    if weak { "weak" } else { "strong" }
-                ));
+                let mut hit = SlotMatch::new(ExplainedSlot::Place, &span).on(&place.name);
+                hit.weak = weak;
+                r.matched(hit);
                 for a in &mut assign[start..i] {
                     *a = Some(Assign::Place);
                 }
@@ -563,7 +585,7 @@ fn read_places(
             None => {
                 if let Some(other) = names_a_country(&words, vocab.country.as_deref()) {
                     r.other_place = true;
-                    r.notes.push(format!("place {other}"));
+                    r.contradicts(ExplainedSlot::Place, other);
                     for a in &mut assign[start..i] {
                         *a = Some(Assign::Place);
                     }
