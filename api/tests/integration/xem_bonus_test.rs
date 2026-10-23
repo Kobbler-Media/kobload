@@ -13,16 +13,14 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::common::stream_fixtures::{create_provider, hash};
+use crate::common::stream_fixtures::hash;
 use crate::common::tv_watch::{TvWatch, episode_want, usenet_release};
 use kobload_api::decision_log::repository::{get_session_detail, list_sessions};
 use kobload_api::jobs::handlers::{SearchGates, backlog_search_pattern};
 use kobload_api::repositories::hash_index::{self, HashIndexEntry};
 use kobload_api::repositories::{app_settings, watch as watch_repo, xem_cache};
-use kobload_api::services::stream::{StreamSearchContext, stream_search};
 use kobload_api::watch::holds::process_expired_holds;
 use kobload_api::watch::{PreparedPattern, Release, process_releases, rss_outcome};
-use nats_jobs::types::StreamSearchRequest;
 
 const TVDB_ID: i64 = 424_242;
 const ABSOLUTE_GUID: &str = "xem-absolute-13";
@@ -259,46 +257,7 @@ async fn stream_search_ranks_the_unambiguous_release_first() {
             }
             StreamSource::IndexerFallback => tv.indexer.set_search_results(torrents.to_vec()),
         }
-        create_provider(pool, "real_debrid").await;
-        sqlx::query("UPDATE indexer_sources SET debrid_mode = 'both' WHERE id = $1")
-            .bind(tv.source.id)
-            .execute(pool)
-            .await
-            .unwrap();
-
-        let state = &tv.server.app_state;
-        let unreachable = reqwest::Client::builder()
-            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
-            .build()
-            .unwrap();
-        let ctx = StreamSearchContext {
-            pool,
-            http_client: &unreachable,
-            indexers: state.indexers.as_ref(),
-            debrid_providers: state.debrid_providers.as_ref(),
-            definitions: &state.definitions,
-            xem_cache: state.xem_cache.as_ref(),
-            scene_mappings: state.scene_mappings.as_ref(),
-            trash_filters: state.trash_filters.as_ref(),
-            download_events: &state.download_events,
-            debrid_providers_arc: state.debrid_providers.clone(),
-        };
-        let request = StreamSearchRequest {
-            media_want: Some(media_want()),
-            query: String::new(),
-            media_type: Some("tv".to_string()),
-            quality_profile_id: None,
-            limit: None,
-            include_uncached: Some(true),
-            prefer: None,
-            audio_languages: Vec::new(),
-        };
-        let response = stream_search(&ctx, &request).await.unwrap();
-        let order: Vec<String> = response
-            .options
-            .iter()
-            .map(|o| o.release_title.clone())
-            .collect();
+        let order = tv.stream_titles(&media_want()).await;
         rankings.push((format!("{source:?}"), order));
         tv.server.cleanup().await;
     }

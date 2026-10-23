@@ -18,14 +18,13 @@ use crate::decision_log::{self, DecisionCollector, LogProviderCall, LogRelease};
 use crate::helpers::{release_matches_categories, resolve_categories_for_source};
 use crate::media::{
     match_targets_from_media_want, media_type_key_to_quality_kind, search_terms_from_media_want,
-    xem_match_targets, xem_season_match_targets,
 };
 use crate::nats;
 use crate::repositories::app_settings;
 use crate::repositories::media_types;
 use crate::repositories::quality_profiles::{self, QualityProfileRow};
 use crate::repositories::watch as watch_repo;
-use crate::scene_mappings::SceneTitle;
+use crate::scene_titles::TvNaming;
 use crate::services::upgrade;
 use crate::state::AppState;
 use crate::trash_filters::TrashFilterSet;
@@ -206,10 +205,19 @@ pub async fn handle_match_locked(
     if let Some(media_want_json) = pattern.media_want.as_ref()
         && let Ok(media_want) =
             serde_json::from_value::<nats_jobs::MediaWant>(media_want_json.clone())
+        && let naming = TvNaming::resolve(
+            &state.scene_mappings,
+            &state.xem_cache,
+            &state.http_client,
+            &state.pool,
+            &media_want,
+        )
+        .await
         && let Some(reason) = crate::services::want::structural_reject_from_want(
             release,
             &media_want,
             crate::services::want::SearchContext::Rss,
+            naming.view(),
         )
     {
         info!(
@@ -511,25 +519,21 @@ pub async fn resolve_pattern_match_inputs(
         .media_want
         .as_ref()
         .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
-    let (xem_show_map, scene_titles) = match &media_want {
-        Some(mw) => (
-            state
-                .xem_cache
-                .show_map_for_want(&state.http_client, &state.pool, mw)
-                .await,
-            crate::scene_titles::resolve(
+    let naming = match &media_want {
+        Some(mw) => {
+            TvNaming::resolve(
                 &state.scene_mappings,
                 &state.xem_cache,
                 &state.http_client,
                 &state.pool,
                 mw,
             )
-            .await,
-        ),
-        None => (None, Vec::new()),
+            .await
+        }
+        None => TvNaming::default(),
     };
-    let match_config = resolve_pattern_match_config(pattern, xem_show_map.as_ref(), &scene_titles);
-    (match_config, xem_show_map)
+    let match_config = resolve_pattern_match_config(pattern, &naming);
+    (match_config, naming.xem_show_map)
 }
 
 /// Grouping key for batch selection: (pattern_id, episode_key).
@@ -726,6 +730,7 @@ pub(crate) fn build_scoring_config<'a>(
     if let Some(ref xem) = prep.xem_show_map {
         config = config.with_xem_show_map(xem);
     }
+    config = config.with_show_aliases(&prep.match_config.show_aliases);
 
     if let Some(ref eps) = prep.episodes_needed
         && let Some(ref mw_json) = prep.pattern.media_want
@@ -1588,14 +1593,16 @@ pub struct ResolvedMatchConfig {
     pub match_targets: Vec<super::types::MatchTarget>,
     pub match_mode: String,
     pub min_score: f64,
+    // Captures taken before scene titles reached the structural gates have none.
+    #[serde(default)]
+    pub show_aliases: Vec<String>,
 }
 
 /// Extract match configuration from a WatchPatternRow, falling back to
-/// media_want fields and augmenting with XEM scene numbering.
+/// media_want fields and augmenting with the want's scene naming.
 pub fn resolve_pattern_match_config(
     pattern: &watch_repo::WatchPatternRow,
-    xem_show_map: Option<&XemShowMap>,
-    scene_titles: &[SceneTitle],
+    naming: &TvNaming,
 ) -> ResolvedMatchConfig {
     let match_mode = pattern.match_mode.as_deref().unwrap_or("fuzzy").to_string();
     let min_score = pattern.min_score.unwrap_or(0.75);
@@ -1619,43 +1626,7 @@ pub fn resolve_pattern_match_config(
         if match_targets.is_empty() {
             match_targets = match_targets_from_media_want(&media_want);
         }
-
-        // Augment with XEM scene numbering for TV episodes
-        if let Some(show_map) = xem_show_map
-            && let nats_jobs::MediaWant::TvEpisode {
-                show_name,
-                season,
-                episode,
-                ..
-            } = &media_want
-            && let (Ok(tvdb_s), Ok(tvdb_e)) = (season.parse::<u32>(), episode.parse::<u32>())
-            && let Some(scene) = show_map.scene_for_tvdb(tvdb_s, tvdb_e)
-            && (scene.scene_season != tvdb_s || scene.scene_episode != tvdb_e)
-        {
-            match_targets.extend(xem_match_targets(
-                show_name,
-                scene.scene_season,
-                scene.scene_episode,
-                tvdb_s,
-                tvdb_e,
-            ));
-        }
-
-        // Augment with XEM scene numbering for TV seasons
-        if let Some(show_map) = xem_show_map
-            && let nats_jobs::MediaWant::TvSeason {
-                show_name, season, ..
-            } = &media_want
-            && let Ok(tvdb_s) = season.parse::<u32>()
-            && let Some(scene_season) = show_map.scene_season_for_tvdb(tvdb_s)
-            && scene_season != tvdb_s
-        {
-            match_targets.extend(xem_season_match_targets(show_name, scene_season));
-        }
-
-        // Augment with Sonarr scene mapping titles, XEM title aliases, and the
-        // provider's alternate titles
-        crate::scene_titles::augment(&media_want, scene_titles, &mut patterns, &mut match_targets);
+        naming.augment(&media_want, &mut patterns, &mut match_targets);
     }
 
     ResolvedMatchConfig {
@@ -1663,6 +1634,7 @@ pub fn resolve_pattern_match_config(
         match_targets,
         match_mode,
         min_score,
+        show_aliases: naming.show_aliases.clone(),
     }
 }
 
@@ -1670,8 +1642,7 @@ pub fn resolve_pattern_match_config(
 pub fn match_release_with_pattern(
     pattern: &watch_repo::WatchPatternRow,
     release_title: &str,
-    xem_show_map: Option<&XemShowMap>,
-    scene_titles: &[SceneTitle],
+    naming: &TvNaming,
 ) -> Option<super::types::MatchResult> {
     if let Some(want) = pattern
         .media_want
@@ -1685,7 +1656,7 @@ pub fn match_release_with_pattern(
         });
     }
 
-    let config = resolve_pattern_match_config(pattern, xem_show_map, scene_titles);
+    let config = resolve_pattern_match_config(pattern, naming);
 
     if !config.match_targets.is_empty() {
         if let Some(result) =

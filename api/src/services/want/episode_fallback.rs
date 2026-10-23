@@ -17,6 +17,7 @@ use crate::indexers::{IndexerContext, IndexerResolver, IndexerSearchRequest};
 use crate::media::{episode_match_target, episode_search_terms, xem_match_targets};
 use crate::repositories::quality_profiles::QualityProfileRow;
 use crate::repositories::watch as watch_repo;
+use crate::scene_titles::TvNaming;
 use crate::services::search::search_type_from_media_want;
 use crate::watch::{ExternalId, MatchTarget, ProcessedRelease, Release};
 use nats_jobs::{EpisodeRef, MediaWant, QualityOverrides};
@@ -109,10 +110,14 @@ pub(super) async fn run_episode_fallback(
         Vec::new()
     };
 
-    let xem_show_map = ctx
-        .xem_cache
-        .show_map_for_want(ctx.http_client, ctx.pool, media_want)
-        .await;
+    let naming = TvNaming::resolve(
+        ctx.scene_mappings,
+        ctx.xem_cache,
+        ctx.http_client,
+        ctx.pool,
+        media_want,
+    )
+    .await;
 
     // Phase 2: Pluck from existing results (aired episodes only)
     let episode_targets: Vec<MatchTarget> = aired_episodes
@@ -147,9 +152,7 @@ pub(super) async fn run_episode_fallback(
         if let Some(overrides) = quality_overrides {
             config = config.with_quality_overrides(overrides);
         }
-        if let Some(ref xem) = xem_show_map {
-            config = config.with_xem_show_map(xem);
-        }
+        config = naming.configure(config);
         let batch = score_batch(&filtered_refs, &config);
         let candidates: Vec<ProcessedRelease> =
             batch.into_iter().filter(|pr| pr.is_candidate()).collect();
@@ -313,7 +316,7 @@ pub(super) async fn run_episode_fallback(
             let mut targets = vec![target];
 
             // Augment with XEM scene numbering if available
-            if let Some(ref show_map) = xem_show_map
+            if let Some(ref show_map) = naming.xem_show_map
                 && let (Ok(tvdb_s), Ok(tvdb_e)) =
                     (season.parse::<u32>(), ep_ref.episode.parse::<u32>())
                 && let Some(scene) = show_map.scene_for_tvdb(tvdb_s, tvdb_e)
@@ -381,9 +384,7 @@ pub(super) async fn run_episode_fallback(
             if let Some(overrides) = quality_overrides {
                 ep_config = ep_config.with_quality_overrides(overrides);
             }
-            if let Some(ref xem) = xem_show_map {
-                ep_config = ep_config.with_xem_show_map(xem);
-            }
+            ep_config = naming.configure(ep_config);
             let ep_batch = score_batch(&ep_releases, &ep_config);
             let mut candidates: Vec<ProcessedRelease> = ep_batch
                 .into_iter()

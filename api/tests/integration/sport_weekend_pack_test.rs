@@ -63,7 +63,7 @@ fn check(title: &str, gib: f64, want: &MediaWant, pack: bool) {
     let release = release(title, (gib * GIB as f64) as i64);
     let expected = pack.then_some(StructuralRejectReason::SessionMissing);
     assert_eq!(
-        structural_reject_from_want(&release, want, SearchContext::Rss),
+        structural_reject_from_want(&release, want, SearchContext::Rss, Default::default()),
         expected,
         "{title} at {gib} GiB, search entry point"
     );

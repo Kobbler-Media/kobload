@@ -14,6 +14,7 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::auth::{require_auth, require_auth_with_token};
 use crate::repositories::{indexer_rss_cache, watch as watch_repo};
+use crate::scene_titles::TvNaming;
 use crate::state::AppState;
 use crate::types::WatchPatternStreamEvent;
 use crate::watch::{
@@ -383,6 +384,23 @@ pub(super) async fn test_watch_pattern(
         None
     };
 
+    let naming = match pattern
+        .media_want
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())
+    {
+        Some(mw) => {
+            TvNaming::resolve(
+                &state.scene_mappings,
+                &state.xem_cache,
+                &state.http_client,
+                &state.pool,
+                &mw,
+            )
+            .await
+        }
+        None => TvNaming::default(),
+    };
     let trash_filters = state.trash_filters.get_filters();
     let release_string = body.and_then(|Json(b)| b.release_string);
 
@@ -405,7 +423,7 @@ pub(super) async fn test_watch_pattern(
         });
 
         let match_result =
-            crate::watch::service::match_release_with_pattern(&pattern, title, None, &[]);
+            crate::watch::service::match_release_with_pattern(&pattern, title, &naming);
         let parsed = parse_quality(title);
         let quality_result = quality_profile
             .as_ref()
@@ -501,7 +519,7 @@ pub(super) async fn test_watch_pattern(
             for release in &releases {
                 let title = &release.title;
                 let match_result =
-                    crate::watch::service::match_release_with_pattern(&pattern, title, None, &[]);
+                    crate::watch::service::match_release_with_pattern(&pattern, title, &naming);
 
                 let parsed = parse_quality(title);
                 let quality_result = quality_profile

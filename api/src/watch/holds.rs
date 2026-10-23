@@ -676,6 +676,7 @@ async fn final_search_for_hold(
     if let Some(ref xem) = xem_show_map {
         config = config.with_xem_show_map(xem);
     }
+    config = config.with_show_aliases(&match_config.show_aliases);
     if let Some(ref eps) = episodes_needed
         && let Some(ref mw_json) = pattern.media_want
     {

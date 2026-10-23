@@ -130,7 +130,12 @@ fn assert_grabbed(title: &str, published: &str, want: &MediaWant) {
         "{title}"
     );
     assert_eq!(
-        structural_reject_from_want(&release(title, published), want, SearchContext::Rss),
+        structural_reject_from_want(
+            &release(title, published),
+            want,
+            SearchContext::Rss,
+            Default::default()
+        ),
         None,
         "{title}, backlog entry point"
     );
@@ -317,7 +322,8 @@ fn a_mismatch_is_reported_for_the_weekends_other_sessions() {
         structural_reject_from_want(
             &release(title, "2026-05-31T18:00:00Z"),
             &race_one,
-            SearchContext::Rss
+            SearchContext::Rss,
+            Default::default()
         ),
         Some(StructuralRejectReason::SessionMismatch)
     );
@@ -347,7 +353,8 @@ fn an_old_shape_want_keeps_the_old_matching() {
         structural_reject_from_want(
             &release(circuit_only, "2026-05-30T18:00:00Z"),
             &old,
-            SearchContext::Rss
+            SearchContext::Rss,
+            Default::default()
         ),
         Some(StructuralRejectReason::LocationMismatch)
     );
@@ -401,7 +408,11 @@ fn the_pattern_title_check_reads_the_aliases_too() {
         search_not_before: None,
     };
     let check = |title: &str| {
-        kobload_api::watch::service::match_release_with_pattern(&pattern, title, None, &[])
+        kobload_api::watch::service::match_release_with_pattern(
+            &pattern,
+            title,
+            &Default::default(),
+        )
     };
     for title in [
         "MotoGP.2026.Round03.Austin.Race.WEB-DL.1080p.H264.English-MWR",

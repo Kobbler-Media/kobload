@@ -24,6 +24,7 @@ use crate::repositories::hash_index::{self, HashFileEntry, HashIndexEntry, HashI
 use crate::repositories::quality_profiles;
 use crate::repositories::watch as watch_repo;
 use crate::scene_mappings::SceneMappingCache;
+use crate::scene_titles::TvNaming;
 use crate::services::search::{SearchIndexersParams, search_indexers};
 use crate::services::want::scoring::SearchContext;
 use crate::trash_filters::TrashFilterCache;
@@ -282,16 +283,21 @@ pub async fn stream_search(
     }
 
     // Prepare scoring dependencies early (these are cheap/cached lookups)
-    let patterns = build_patterns(request);
-    let quality_profile = load_quality_profile(ctx.pool, request).await;
-    let xem_show_map = match request.media_want {
+    let naming = match request.media_want {
         Some(ref mw) => {
-            ctx.xem_cache
-                .show_map_for_want(ctx.http_client, ctx.pool, mw)
-                .await
+            TvNaming::resolve(
+                ctx.scene_mappings,
+                ctx.xem_cache,
+                ctx.http_client,
+                ctx.pool,
+                mw,
+            )
+            .await
         }
-        None => None,
+        None => TvNaming::default(),
     };
+    let patterns = build_patterns(request, &naming);
+    let quality_profile = load_quality_profile(ctx.pool, request).await;
     let trash_filter_set = ctx.trash_filters.get_filters();
 
     // Helper closure: score a set of releases through the unified pipeline.
@@ -306,7 +312,7 @@ pub async fn stream_search(
             &patterns,
             quality_profile.as_ref(),
             trash_filter_set.as_deref(),
-            xem_show_map.as_ref(),
+            &naming,
         );
         crate::services::want::scoring::score_batch(releases, &config)
     };
@@ -592,14 +598,8 @@ pub async fn stream_search(
             info!("Indexer result cache hit");
             cached
         } else {
-            match search_and_score_indexers(
-                ctx,
-                request,
-                &debrid_sources,
-                &cache_key,
-                xem_show_map.as_ref(),
-            )
-            .await
+            match search_and_score_indexers(ctx, request, &debrid_sources, &cache_key, &naming)
+                .await
             {
                 Ok(result) => result,
                 Err(e) => {
@@ -962,7 +962,7 @@ async fn search_and_score_indexers(
     request: &StreamSearchRequest,
     debrid_sources: &[watch_repo::IndexerSourceRow],
     cache_key: &str,
-    xem_show_map: Option<&crate::xem::XemShowMap>,
+    naming: &TvNaming,
 ) -> Result<(Vec<crate::watch::ProcessedRelease>, Vec<Release>), StreamSearchError> {
     let query = build_search_query(request);
     let indexer_ctx = IndexerContext {
@@ -1007,7 +1007,7 @@ async fn search_and_score_indexers(
         );
     }
 
-    let patterns = build_patterns(request);
+    let patterns = build_patterns(request, naming);
     info!(patterns = ?patterns, "Scoring patterns");
 
     // Use explicit quality_profile_id if provided, otherwise fall back to
@@ -1036,13 +1036,7 @@ async fn search_and_score_indexers(
     // Stream search uses lenient scoring: TRaSH filters disabled because public
     // trackers commonly have unnamed groups and x265 at HD which TRaSH rejects.
     // Quality scoring (resolution, codec, audio) still applies for ranking.
-    let config = scoring_config(
-        request,
-        &patterns,
-        quality_profile.as_ref(),
-        None,
-        xem_show_map,
-    );
+    let config = scoring_config(request, &patterns, quality_profile.as_ref(), None, naming);
     // Return the FULL scored set (candidates + rejects). Downstream filters
     // via `is_candidate()` where it needs candidates only; rejects are used
     // by the decision log so we don't have to re-score them.
@@ -1084,7 +1078,7 @@ fn scoring_config<'a>(
     patterns: &'a [String],
     quality_profile: Option<&'a crate::repositories::quality_profiles::QualityProfileRow>,
     trash_filters: Option<&'a crate::trash_filters::TrashFilterSet>,
-    xem_show_map: Option<&'a crate::xem::XemShowMap>,
+    naming: &'a TvNaming,
 ) -> crate::services::want::scoring::ScoringConfig<'a> {
     let mut config = crate::services::want::scoring::ScoringConfig::new(
         &[],
@@ -1098,10 +1092,7 @@ fn scoring_config<'a>(
     if let Some(ref mw) = request.media_want {
         config = config.with_media_want(mw);
     }
-    if let Some(xem) = xem_show_map {
-        config = config.with_xem_show_map(xem);
-    }
-    config
+    naming.configure(config)
 }
 
 /// Extract the primary title from a MediaWant variant.
@@ -1190,10 +1181,14 @@ fn build_search_query(request: &StreamSearchRequest) -> String {
     }
 }
 
-/// Build patterns for scoring from request.
-fn build_patterns(request: &StreamSearchRequest) -> Vec<String> {
+/// Build patterns for scoring from request. Stream scoring matches by
+/// substring, so every name the show goes by is a pattern.
+fn build_patterns(request: &StreamSearchRequest, naming: &TvNaming) -> Vec<String> {
     if let Some(ref mw) = request.media_want {
-        vec![media_want_title(mw)]
+        std::iter::once(media_want_title(mw))
+            .chain(naming.show_aliases.iter().cloned())
+            .chain(crate::scene_titles::alternate_titles_of(mw).iter().cloned())
+            .collect()
     } else if !request.query.is_empty() {
         vec![request.query.clone()]
     } else {

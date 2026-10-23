@@ -1,6 +1,6 @@
 //! Provider release endpoints for batch interpretation and dry-run search.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Json, Router,
@@ -26,10 +26,11 @@ use crate::parsing::parse_release;
 use crate::quality::{parse_quality, score_quality};
 use crate::repositories::media_types as media_types_repo;
 use crate::repositories::quality_profiles as quality_repo;
+use crate::scene_titles::TvNaming;
 use crate::services::search::{SearchIndexersParams, search_indexers};
 use crate::services::want::{
     scoring::{ScoringConfig, SearchContext as ScoringSearchContext, score_batch},
-    structural_reject, votes_reject,
+    votes_reject,
 };
 use crate::state::AppState;
 use crate::watch::{ProcessedRelease, Release, match_patterns, score_against_targets};
@@ -168,8 +169,17 @@ async fn search_releases(
         http_client: &state.http_client,
     };
 
-    let patterns = search_terms_from_media_want(media_want);
-    let match_targets = match_targets_from_media_want(media_want);
+    let mut patterns = search_terms_from_media_want(media_want);
+    let mut match_targets = match_targets_from_media_want(media_want);
+    let naming = TvNaming::resolve(
+        &state.scene_mappings,
+        &state.xem_cache,
+        &state.http_client,
+        &state.pool,
+        media_want,
+    )
+    .await;
+    naming.augment(media_want, &mut patterns, &mut match_targets);
 
     // Resolve quality profile: explicit ID, media_want embedded, or default for kind
     let mut quality_profile = None;
@@ -264,10 +274,6 @@ async fn search_releases(
 
     let total_found = all_releases.len();
 
-    let xem_show_map = state
-        .xem_cache
-        .show_map_for_want(&state.http_client, &state.pool, media_want)
-        .await;
     let trash_filters = state.trash_filters.get_filters();
     let mut config = ScoringConfig::new(
         if use_match_targets {
@@ -288,9 +294,7 @@ async fn search_releases(
     if let Some(overrides) = quality_overrides {
         config = config.with_quality_overrides(overrides);
     }
-    if let Some(ref xem) = xem_show_map {
-        config = config.with_xem_show_map(xem);
-    }
+    config = naming.configure(config);
     let batch = score_batch(&all_releases, &config);
     let mut candidates_pr: Vec<&ProcessedRelease> =
         batch.iter().filter(|pr| pr.is_candidate()).collect();
@@ -315,12 +319,20 @@ async fn search_releases(
         .iter()
         .map(|pr| pr.release.guid.as_str())
         .collect();
+    let structural_reasons: HashMap<&str, String> = batch
+        .iter()
+        .filter_map(|pr| {
+            let reason = pr.structural_reject_reason.as_ref()?;
+            Some((pr.release.guid.as_str(), reason.to_string()))
+        })
+        .collect();
     let rejected: Vec<ScoredRelease> = all_releases
         .iter()
         .filter(|r| !accepted_guids.contains(r.guid.as_str()))
         .map(|r| {
-            let reason = structural_reject(r, Some(media_want), ScoringSearchContext::TextFallback)
-                .map(|s| s.to_string())
+            let reason = structural_reasons
+                .get(r.guid.as_str())
+                .cloned()
                 .or_else(|| votes_reject(r).map(|s| s.to_string()))
                 .unwrap_or_else(|| {
                     let q = score_quality(

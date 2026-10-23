@@ -10,11 +10,11 @@ use crate::indexers::IndexerContext;
 use crate::media::{
     episode_search_terms, external_ids_from_media_want, match_targets_from_media_want,
     media_quality_overrides, media_quality_profile_id, quality_media_kind,
-    search_terms_from_media_want, season_episode_from_media_want, xem_match_targets,
-    xem_season_match_targets,
+    search_terms_from_media_want, season_episode_from_media_want,
 };
 use crate::repositories::watch as watch_repo;
 use crate::repositories::{app_settings, quality_profiles as quality_repo};
+use crate::scene_titles::{TvNaming, scene_numbering};
 use crate::services::protocol::{ProtocolConfig, resolve_protocol_config};
 use crate::services::search::{CascadedSearchParams, SearchContext, search_all_sources_cascaded};
 #[cfg(test)]
@@ -135,7 +135,7 @@ pub(super) async fn do_immediate_search(
     let mut quality_overrides = None;
     let mut external_ids: Vec<ExternalId> = Vec::new();
 
-    let mut xem_show_map = None;
+    let mut naming = TvNaming::default();
 
     if let Some(media_want) = request.media_want.as_ref() {
         if patterns.is_empty() {
@@ -145,74 +145,7 @@ pub(super) async fn do_immediate_search(
             match_targets = match_targets_from_media_want(media_want);
         }
 
-        xem_show_map = ctx
-            .xem_cache
-            .show_map_for_want(ctx.http_client, ctx.pool, media_want)
-            .await;
-        match (media_want, &xem_show_map) {
-            (
-                MediaWant::TvEpisode {
-                    show_name,
-                    season,
-                    episode,
-                    ..
-                },
-                Some(show_map),
-            ) => {
-                if let (Ok(tmdb_s), Ok(tmdb_e)) = (season.parse::<u32>(), episode.parse::<u32>())
-                    && let Some(scene) = show_map.scene_for_tvdb(tmdb_s, tmdb_e)
-                    && (scene.scene_season != tmdb_s || scene.scene_episode != tmdb_e)
-                {
-                    debug!(
-                        tmdb_season = tmdb_s,
-                        tmdb_episode = tmdb_e,
-                        scene_season = scene.scene_season,
-                        scene_episode = scene.scene_episode,
-                        "XEM scene numbering differs, adding extra search terms"
-                    );
-                    let extra_terms = episode_search_terms(
-                        show_name,
-                        &scene.scene_season.to_string(),
-                        &scene.scene_episode.to_string(),
-                    );
-                    for term in extra_terms {
-                        if !patterns.contains(&term) {
-                            patterns.push(term);
-                        }
-                    }
-                    match_targets.extend(xem_match_targets(
-                        show_name,
-                        scene.scene_season,
-                        scene.scene_episode,
-                        tmdb_s,
-                        tmdb_e,
-                    ));
-                }
-            }
-            (
-                MediaWant::TvSeason {
-                    show_name, season, ..
-                },
-                Some(show_map),
-            ) => {
-                if let Ok(tvdb_s) = season.parse::<u32>()
-                    && let Some(scene_season) = show_map.scene_season_for_tvdb(tvdb_s)
-                    && scene_season != tvdb_s
-                {
-                    debug!(
-                        tvdb_season = tvdb_s,
-                        scene_season, "XEM scene season differs, adding extra match targets"
-                    );
-                    match_targets.extend(xem_season_match_targets(show_name, scene_season));
-                }
-            }
-            _ => {}
-        }
-
-        // Augment with Sonarr scene mapping titles, XEM title aliases, and the
-        // provider's alternate titles. Without these, a show whose releases use
-        // a regional name ("The Block" → "The Block AU") never matches.
-        let scene_titles = crate::scene_titles::resolve(
+        naming = TvNaming::resolve(
             ctx.scene_mappings,
             ctx.xem_cache,
             ctx.http_client,
@@ -220,7 +153,29 @@ pub(super) async fn do_immediate_search(
             media_want,
         )
         .await;
-        crate::scene_titles::augment(media_want, &scene_titles, &mut patterns, &mut match_targets);
+        if let MediaWant::TvEpisode { show_name, .. } = media_want
+            && let Some(show_map) = &naming.xem_show_map
+            && let Some(scene) = scene_numbering(media_want, show_map)
+            && let Some(scene_episode) = scene.episode
+        {
+            debug!(
+                tvdb_season = scene.tvdb_season,
+                tvdb_episode = ?scene.tvdb_episode,
+                scene_season = scene.season,
+                scene_episode,
+                "XEM scene numbering differs, adding extra search terms"
+            );
+            for term in episode_search_terms(
+                show_name,
+                &scene.season.to_string(),
+                &scene_episode.to_string(),
+            ) {
+                if !patterns.contains(&term) {
+                    patterns.push(term);
+                }
+            }
+        }
+        naming.augment(media_want, &mut patterns, &mut match_targets);
 
         if let Some(profile_id) = media_quality_profile_id(media_want) {
             quality_profile = quality_repo::get_quality_profile_by_id(ctx.pool, profile_id)
@@ -329,9 +284,7 @@ pub(super) async fn do_immediate_search(
     if let Some(mw) = request.media_want.as_ref() {
         scoring_config = scoring_config.with_media_want(mw);
     }
-    if let Some(ref xem) = xem_show_map {
-        scoring_config = scoring_config.with_xem_show_map(xem);
-    }
+    scoring_config = naming.configure(scoring_config);
     if let Some(ref cats) = allowed_categories {
         scoring_config = scoring_config.with_allowed_categories(cats);
     }

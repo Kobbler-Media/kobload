@@ -43,7 +43,12 @@ fn decision(title: &str, want: &MediaWant) -> ScoringDecision {
     let config = ScoringConfig::new(&targets, &[], 0.75, None, None).with_media_want(want);
     let scored = score_release(&release(title), &config);
     assert_eq!(
-        structural_reject_from_want(&release(title), want, SearchContext::Rss),
+        structural_reject_from_want(
+            &release(title),
+            want,
+            SearchContext::Rss,
+            Default::default()
+        ),
         scored.structural_reject_reason,
         "{title}: the backlog check disagrees with scoring"
     );

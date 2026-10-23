@@ -6,16 +6,19 @@
 //! mapping list, XEM's title aliases, and the `alternate_titles` a caller
 //! already carries on its `MediaWant`.
 //!
-//! Every search path that matches TV releases needs all three. Resolving them
-//! lives here so the want, backlog, and RSS paths share one implementation.
+//! Every path that scores TV releases needs all three, plus XEM's scene
+//! numbering, for its match targets and its structural gates alike. `TvNaming`
+//! resolves them once so every path shares one implementation.
 
 use reqwest::Client;
 use sqlx::PgPool;
 use tracing::debug;
 
+use crate::media::{xem_match_targets, xem_season_match_targets};
 use crate::scene_mappings::{SceneMappingCache, SceneTitle};
+use crate::services::want::scoring::{ScoringConfig, TvNamingView};
 use crate::watch::MatchTarget;
-use crate::xem::XemCache;
+use crate::xem::{XemCache, XemShowMap};
 
 /// Match targets built from an alternate title score against this instead of
 /// the pattern's own threshold. Aliases are a weaker signal than the canonical
@@ -31,7 +34,7 @@ fn tvdb_id_of(media_want: &nats_jobs::MediaWant) -> Option<i64> {
     identifiers.tvdb_id.as_ref()?.parse::<i64>().ok()
 }
 
-fn alternate_titles_of(media_want: &nats_jobs::MediaWant) -> &[String] {
+pub fn alternate_titles_of(media_want: &nats_jobs::MediaWant) -> &[String] {
     match media_want {
         nats_jobs::MediaWant::TvEpisode {
             alternate_titles, ..
@@ -76,6 +79,163 @@ pub async fn resolve(
     titles
 }
 
+/// How a TV want is named and numbered on scene releases. Every path that
+/// scores TV resolves this once per want, adds its targets, and hands it to
+/// the scorer so the structural gates accept the same names and numbering.
+#[derive(Default)]
+pub struct TvNaming {
+    pub xem_show_map: Option<XemShowMap>,
+    pub scene_titles: Vec<SceneTitle>,
+    /// The scene titles that apply to the want's season.
+    pub show_aliases: Vec<String>,
+}
+
+impl TvNaming {
+    pub async fn resolve(
+        scene_mappings: &SceneMappingCache,
+        xem_cache: &XemCache,
+        http_client: &Client,
+        pool: &PgPool,
+        media_want: &nats_jobs::MediaWant,
+    ) -> Self {
+        let xem_show_map = xem_cache
+            .show_map_for_want(http_client, pool, media_want)
+            .await;
+        let scene_titles = resolve(scene_mappings, xem_cache, http_client, pool, media_want).await;
+        Self::from_parts(media_want, xem_show_map, scene_titles)
+    }
+
+    pub fn from_parts(
+        media_want: &nats_jobs::MediaWant,
+        xem_show_map: Option<XemShowMap>,
+        scene_titles: Vec<SceneTitle>,
+    ) -> Self {
+        let show_aliases = applicable(media_want, &scene_titles)
+            .map(|st| st.title.clone())
+            .collect();
+        Self {
+            xem_show_map,
+            scene_titles,
+            show_aliases,
+        }
+    }
+
+    pub fn augment(
+        &self,
+        media_want: &nats_jobs::MediaWant,
+        patterns: &mut Vec<String>,
+        match_targets: &mut Vec<MatchTarget>,
+    ) {
+        if let Some(show_map) = &self.xem_show_map {
+            match_targets.extend(xem_targets(media_want, show_map));
+        }
+        augment(media_want, &self.scene_titles, patterns, match_targets);
+    }
+
+    pub fn view(&self) -> TvNamingView<'_> {
+        TvNamingView {
+            xem_show_map: self.xem_show_map.as_ref(),
+            show_aliases: &self.show_aliases,
+        }
+    }
+
+    pub fn configure<'a>(&'a self, config: ScoringConfig<'a>) -> ScoringConfig<'a> {
+        let config = config.with_show_aliases(&self.show_aliases);
+        match &self.xem_show_map {
+            Some(xem) => config.with_xem_show_map(xem),
+            None => config,
+        }
+    }
+}
+
+/// XEM's scene numbering for the want, when it differs from TVDB's.
+pub struct SceneNumbering {
+    pub tvdb_season: u32,
+    pub tvdb_episode: Option<u32>,
+    pub season: u32,
+    /// None for a season want.
+    pub episode: Option<u32>,
+}
+
+pub fn scene_numbering(
+    media_want: &nats_jobs::MediaWant,
+    show_map: &XemShowMap,
+) -> Option<SceneNumbering> {
+    match media_want {
+        nats_jobs::MediaWant::TvEpisode {
+            season, episode, ..
+        } => {
+            let (tvdb_season, tvdb_episode) = (season.parse().ok()?, episode.parse().ok()?);
+            let scene = show_map.scene_for_tvdb(tvdb_season, tvdb_episode)?;
+            ((scene.scene_season, scene.scene_episode) != (tvdb_season, tvdb_episode)).then_some(
+                SceneNumbering {
+                    tvdb_season,
+                    tvdb_episode: Some(tvdb_episode),
+                    season: scene.scene_season,
+                    episode: Some(scene.scene_episode),
+                },
+            )
+        }
+        nats_jobs::MediaWant::TvSeason { season, .. } => {
+            let tvdb_season = season.parse().ok()?;
+            let scene_season = show_map.scene_season_for_tvdb(tvdb_season)?;
+            (scene_season != tvdb_season).then_some(SceneNumbering {
+                tvdb_season,
+                tvdb_episode: None,
+                season: scene_season,
+                episode: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn xem_targets(media_want: &nats_jobs::MediaWant, show_map: &XemShowMap) -> Vec<MatchTarget> {
+    let (Some(scene), Some(show_name)) = (
+        scene_numbering(media_want, show_map),
+        show_name_of(media_want),
+    ) else {
+        return Vec::new();
+    };
+    match (scene.episode, scene.tvdb_episode) {
+        (Some(episode), Some(tvdb_episode)) => xem_match_targets(
+            show_name,
+            scene.season,
+            episode,
+            scene.tvdb_season,
+            tvdb_episode,
+        ),
+        _ => xem_season_match_targets(show_name, scene.season),
+    }
+}
+
+fn show_name_of(media_want: &nats_jobs::MediaWant) -> Option<&str> {
+    match media_want {
+        nats_jobs::MediaWant::TvEpisode { show_name, .. }
+        | nats_jobs::MediaWant::TvSeason { show_name, .. } => Some(show_name),
+        _ => None,
+    }
+}
+
+fn applicable<'t>(
+    media_want: &nats_jobs::MediaWant,
+    scene_titles: &'t [SceneTitle],
+) -> impl Iterator<Item = &'t SceneTitle> {
+    scene_titles.iter().filter(|st| {
+        // Entries with filterRegex are ambiguous and risk false positives
+        // without per-release regex checking
+        if st.filter_regex.is_some() {
+            debug!(
+                title = %st.title,
+                filter_regex = ?st.filter_regex,
+                "Skipping scene mapping with filterRegex"
+            );
+            return false;
+        }
+        season_applies(st.season, media_want)
+    })
+}
+
 /// Add alias-derived entries to a pattern's search terms and match targets.
 ///
 /// Scene/XEM titles are curated, so they become search queries as well as match
@@ -88,22 +248,7 @@ pub fn augment(
     patterns: &mut Vec<String>,
     match_targets: &mut Vec<MatchTarget>,
 ) {
-    for st in scene_titles {
-        // Skip filtered scene mappings — entries with filterRegex are ambiguous
-        // and risk false positives without per-release regex checking
-        if st.filter_regex.is_some() {
-            debug!(
-                title = %st.title,
-                filter_regex = ?st.filter_regex,
-                "Skipping scene mapping with filterRegex"
-            );
-            continue;
-        }
-
-        if !season_applies(st.season, media_want) {
-            continue;
-        }
-
+    for st in applicable(media_want, scene_titles) {
         push_alias_targets(media_want, &st.title, "scene", match_targets);
 
         if !patterns.contains(&st.title) {

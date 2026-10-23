@@ -7,6 +7,7 @@ use nats_jobs::{MediaWant, QualityOverrides};
 use crate::parsing::{ParsedMedia, ParsedRelease, parse_release};
 use crate::quality::score_quality_parsed;
 use crate::repositories::quality_profiles::QualityProfileRow;
+use crate::scene_titles::{SceneNumbering, alternate_titles_of, scene_numbering};
 use crate::services::want::release_facts::ReleaseFacts;
 use crate::trash_filters::TrashFilterSet;
 use crate::watch::matcher::{
@@ -88,6 +89,21 @@ pub fn freshness_tiebreaker(release: &Release) -> f64 {
     } else {
         base
     }
+}
+
+/// How the want's episode or season is numbered on scene releases, so the
+/// structural gates accept either numbering.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TvNamingView<'a> {
+    pub xem_show_map: Option<&'a XemShowMap>,
+    /// Sonarr scene-mapping and XEM titles that apply to the want's season.
+    pub show_aliases: &'a [String],
+}
+
+fn scene_numbered(tv: &nats_jobs::TvParsed, scene: Option<&SceneNumbering>) -> bool {
+    scene.is_some_and(|scene| {
+        tv.season == Some(scene.season) && scene.episode.is_none_or(|e| tv.episodes.contains(&e))
+    })
 }
 
 /// Check if a parsed season number matches a string season identifier.
@@ -798,6 +814,7 @@ pub struct ScoringConfig<'a> {
 
     // Bonus config
     pub xem_show_map: Option<&'a XemShowMap>,
+    pub show_aliases: &'a [String],
     pub preferred_protocol: Option<&'a str>,
 
     prepared_targets: std::sync::OnceLock<Vec<PreparedTarget<'a>>>,
@@ -828,6 +845,7 @@ impl<'a> ScoringConfig<'a> {
             episodes_needed: None,
             media_want_json: None,
             xem_show_map: None,
+            show_aliases: &[],
             preferred_protocol: None,
             prepared_targets: std::sync::OnceLock::new(),
             sport_vocab: std::sync::OnceLock::new(),
@@ -867,6 +885,18 @@ impl<'a> ScoringConfig<'a> {
     pub fn with_xem_show_map(mut self, xem: &'a XemShowMap) -> Self {
         self.xem_show_map = Some(xem);
         self
+    }
+
+    pub fn with_show_aliases(mut self, aliases: &'a [String]) -> Self {
+        self.show_aliases = aliases;
+        self
+    }
+
+    pub fn tv_naming(&self) -> TvNamingView<'a> {
+        TvNamingView {
+            xem_show_map: self.xem_show_map,
+            show_aliases: self.show_aliases,
+        }
     }
 
     pub fn with_preferred_protocol(mut self, proto: &'a str) -> Self {
@@ -1071,6 +1101,7 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
             &facts.parsed(reject_kind),
             config.media_want,
             config.search_context,
+            config.tv_naming(),
             sport.as_ref(),
         )
     });
@@ -1305,7 +1336,13 @@ pub fn structural_reject(
     let mw = media_want?;
     let (reject_kind, _) = structural_media_kinds(mw);
     let parsed = parse_release(&release.title, reject_kind);
-    structural_reject_with_parsed(release, &parsed, media_want, search_context)
+    structural_reject_with_parsed(
+        release,
+        &parsed,
+        media_want,
+        search_context,
+        TvNamingView::default(),
+    )
 }
 
 /// Same as [`structural_reject`] but takes an already-parsed release to avoid
@@ -1316,6 +1353,7 @@ pub fn structural_reject_with_parsed(
     parsed: &ParsedRelease,
     media_want: Option<&MediaWant>,
     search_context: SearchContext,
+    naming: TvNamingView<'_>,
 ) -> Option<nats_jobs::StructuralRejectReason> {
     let sport = media_want.and_then(sport::SportVocab::from_want).map(|v| {
         sport::judge(
@@ -1326,7 +1364,14 @@ pub fn structural_reject_with_parsed(
             sport::publish_date(&release.publish_date),
         )
     });
-    structural_reject_judged(release, parsed, media_want, search_context, sport.as_ref())
+    structural_reject_judged(
+        release,
+        parsed,
+        media_want,
+        search_context,
+        naming,
+        sport.as_ref(),
+    )
 }
 
 fn structural_reject_judged(
@@ -1334,6 +1379,7 @@ fn structural_reject_judged(
     parsed: &ParsedRelease,
     media_want: Option<&MediaWant>,
     search_context: SearchContext,
+    naming: TvNamingView<'_>,
     sport: Option<&sport::SportVerdict>,
 ) -> Option<nats_jobs::StructuralRejectReason> {
     use nats_jobs::StructuralRejectReason;
@@ -1349,7 +1395,10 @@ fn structural_reject_judged(
         _ => None,
     } && let ParsedMedia::Tv(tv) = &parsed.media
         && !tv.show_name.is_empty()
-        && !titles_similar(wanted_name, &tv.show_name)
+        && !std::iter::once(wanted_name)
+            .chain(alternate_titles_of(media_want).iter().map(String::as_str))
+            .chain(naming.show_aliases.iter().map(String::as_str))
+            .any(|name| titles_similar(name, &tv.show_name))
     {
         return Some(StructuralRejectReason::TitleMismatch);
     }
@@ -1728,6 +1777,9 @@ fn structural_reject_judged(
         return verdict.reject;
     }
 
+    let scene = naming
+        .xem_show_map
+        .and_then(|xem| scene_numbering(media_want, xem));
     match (media_want, &parsed.media) {
         // Movie: yearless releases are allowed — fuzzy scoring already penalises
         // the missing year token, and RSS watermark advancement means a hard reject
@@ -1792,7 +1844,7 @@ fn structural_reject_judged(
 
         // TV Season: reject if parsed to different season
         (MediaWant::TvSeason { season, .. }, ParsedMedia::Tv(tv))
-            if !season_matches(tv.season, season) =>
+            if !season_matches(tv.season, season) && !scene_numbered(tv, scene.as_ref()) =>
         {
             Some(StructuralRejectReason::SeasonMismatch)
         }
@@ -1809,7 +1861,10 @@ fn structural_reject_judged(
         // Keep tv.season.is_some() guard: anime absolute numbering and daily shows
         // have no parsed season and should not be rejected here.
         (MediaWant::TvEpisode { season, .. }, ParsedMedia::Tv(tv))
-            if !tv.is_pack && tv.season.is_some() && !season_matches(tv.season, season) =>
+            if !tv.is_pack
+                && tv.season.is_some()
+                && !season_matches(tv.season, season)
+                && !scene_numbered(tv, scene.as_ref()) =>
         {
             Some(StructuralRejectReason::SeasonMismatch)
         }
@@ -1822,7 +1877,8 @@ fn structural_reject_judged(
                 && !tv.episodes.is_empty()
                 && episode
                     .parse::<u32>()
-                    .is_ok_and(|e| !tv.episodes.contains(&e)) =>
+                    .is_ok_and(|e| !tv.episodes.contains(&e))
+                && !scene_numbered(tv, scene.as_ref()) =>
         {
             Some(StructuralRejectReason::EpisodeMismatch)
         }
@@ -1964,13 +2020,15 @@ fn structural_reject_judged(
     }
 }
 
-/// Public wrapper for structural_reject, for use by watch/service.rs handle_match().
 pub fn structural_reject_from_want(
     release: &Release,
     media_want: &MediaWant,
     search_context: SearchContext,
+    naming: TvNamingView<'_>,
 ) -> Option<nats_jobs::StructuralRejectReason> {
-    structural_reject(release, Some(media_want), search_context)
+    let (reject_kind, _) = structural_media_kinds(media_want);
+    let parsed = parse_release(&release.title, reject_kind);
+    structural_reject_with_parsed(release, &parsed, Some(media_want), search_context, naming)
 }
 
 pub fn group_by_target_id(
@@ -5390,7 +5448,7 @@ mod tests {
         let release = make_release("Show.S01.MULTi.FRENCH.1080p.WEB.H264-SCENE");
         let mw = make_tv_season_want("auto", Some(8), Some(make_episode_refs_with_library(8, 7)));
         assert_eq!(
-            structural_reject_from_want(&release, &mw, SearchContext::Rss),
+            structural_reject_from_want(&release, &mw, SearchContext::Rss, TvNamingView::default()),
             Some(StructuralRejectReason::PackRejectedLowEpisodeRatio),
             "Matcher path should reject: 7/8 already in library"
         );

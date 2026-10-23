@@ -79,9 +79,13 @@ pub fn score_release(release: &Release, config: &ScoringConfig) -> ProcessedRele
 
     // Gate 3: Structural rejection
     let structural_result = match &prep {
-        Some(parsed) => {
-            structural_reject_with_parsed(release, parsed, config.media_want, config.search_context)
-        }
+        Some(parsed) => structural_reject_with_parsed(
+            release,
+            parsed,
+            config.media_want,
+            config.search_context,
+            config.tv_naming(),
+        ),
         None => structural_reject(release, config.media_want, config.search_context),
     };
     let structural_rejected = structural_result.is_some();

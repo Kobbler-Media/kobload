@@ -592,6 +592,10 @@ pub async fn backlog_search_pattern(
         // we find a release that passes structural validation AND quality profile.
         let mw_for_check = parsed_media_want.as_ref();
         let profile_for_check = resolved_profile.as_ref();
+        let naming_for_check = crate::services::want::scoring::TvNamingView {
+            xem_show_map: xem_show_map.as_ref(),
+            show_aliases: &match_config.show_aliases,
+        };
         let check_fn = |results: &[crate::types::SearchResult]| -> bool {
             let Some(mw) = mw_for_check else {
                 return false;
@@ -629,6 +633,7 @@ pub async fn backlog_search_pattern(
                     &release,
                     mw,
                     crate::services::want::SearchContext::TextFallback,
+                    naming_for_check,
                 )
                 .is_some()
                 {
@@ -875,6 +880,7 @@ pub async fn backlog_search_pattern(
     if let Some(ref xem) = xem_show_map {
         scoring_config = scoring_config.with_xem_show_map(xem);
     }
+    scoring_config = scoring_config.with_show_aliases(&match_config.show_aliases);
     if let Some(ref eps) = episodes_needed
         && let Some(ref mw_json) = pattern.media_want
     {
@@ -1211,6 +1217,7 @@ pub async fn backlog_search_pattern(
                 if let Some(ref xem) = xem_show_map {
                     ep_scoring_config = ep_scoring_config.with_xem_show_map(xem);
                 }
+                ep_scoring_config = ep_scoring_config.with_show_aliases(&match_config.show_aliases);
                 if let Some(ref eps) = episodes_needed
                     && let Some(ref mw_json) = pattern.media_want
                 {

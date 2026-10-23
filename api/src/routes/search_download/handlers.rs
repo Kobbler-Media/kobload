@@ -16,6 +16,7 @@ use crate::media::{
 };
 use crate::repositories::media_types as media_types_repo;
 use crate::repositories::quality_profiles as quality_repo;
+use crate::scene_titles::TvNaming;
 use crate::services::search::{SearchIndexersParams, search_indexers};
 use crate::services::want::scoring::{
     ScoringConfig, SearchContext as ScoringSearchContext, score_batch,
@@ -70,19 +71,24 @@ async fn search_and_download(
     let mut match_targets = request.match_targets.clone();
     let mut quality_profile = None;
     let mut quality_overrides = None;
-    let mut xem_show_map = None;
+    let mut naming = TvNaming::default();
 
     if let Some(media_want) = request.media_want.as_ref() {
-        xem_show_map = state
-            .xem_cache
-            .show_map_for_want(&state.http_client, &state.pool, media_want)
-            .await;
         if patterns.is_empty() {
             patterns = search_terms_from_media_want(media_want);
         }
         if match_targets.is_empty() {
             match_targets = match_targets_from_media_want(media_want);
         }
+        naming = TvNaming::resolve(
+            &state.scene_mappings,
+            &state.xem_cache,
+            &state.http_client,
+            &state.pool,
+            media_want,
+        )
+        .await;
+        naming.augment(media_want, &mut patterns, &mut match_targets);
         if let Some(profile_id) = media_quality_profile_id(media_want) {
             quality_profile = quality_repo::get_quality_profile_by_id(&state.pool, profile_id)
                 .await
@@ -216,9 +222,7 @@ async fn search_and_download(
     if let Some(ref mw) = request.media_want {
         config = config.with_media_want(mw);
     }
-    if let Some(ref xem) = xem_show_map {
-        config = config.with_xem_show_map(xem);
-    }
+    config = naming.configure(config);
     if !use_match_targets {
         config = config.with_match_mode("fuzzy");
     }

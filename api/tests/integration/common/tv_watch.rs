@@ -8,7 +8,9 @@ use super::{
     TestServerOptions,
 };
 use kobload_api::repositories::{clients as clients_repo, watch as watch_repo};
+use kobload_api::services::stream::{StreamSearchContext, stream_search};
 use kobload_api::watch::Release;
+use nats_jobs::types::StreamSearchRequest;
 
 pub struct TvWatch {
     pub server: TestServer,
@@ -108,6 +110,48 @@ impl TvWatch {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    /// Stream-searches through a debrid-enabled source, returning the offered
+    /// release titles in ranked order.
+    pub async fn stream_titles(&self, want: &nats_jobs::MediaWant) -> Vec<String> {
+        let pool = &self.server.pool;
+        super::stream_fixtures::create_provider(pool, "real_debrid").await;
+        sqlx::query("UPDATE indexer_sources SET debrid_mode = 'both' WHERE id = $1")
+            .bind(self.source.id)
+            .execute(pool)
+            .await
+            .unwrap();
+        let state = &self.server.app_state;
+        let ctx = StreamSearchContext {
+            pool,
+            http_client: &state.http_client,
+            indexers: state.indexers.as_ref(),
+            debrid_providers: state.debrid_providers.as_ref(),
+            definitions: &state.definitions,
+            xem_cache: state.xem_cache.as_ref(),
+            scene_mappings: state.scene_mappings.as_ref(),
+            trash_filters: state.trash_filters.as_ref(),
+            download_events: &state.download_events,
+            debrid_providers_arc: state.debrid_providers.clone(),
+        };
+        let request = StreamSearchRequest {
+            media_want: Some(want.clone()),
+            query: String::new(),
+            media_type: Some("tv".to_string()),
+            quality_profile_id: None,
+            limit: None,
+            include_uncached: Some(true),
+            prefer: None,
+            audio_languages: Vec::new(),
+        };
+        stream_search(&ctx, &request)
+            .await
+            .unwrap()
+            .options
+            .into_iter()
+            .map(|o| o.release_title)
+            .collect()
     }
 
     pub async fn grabbed(&self, pattern_id: Uuid) -> Vec<String> {
