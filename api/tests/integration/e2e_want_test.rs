@@ -709,7 +709,7 @@ async fn test_want_handler_processes_nats_payload() {
     let handler = WantRequestHandler::new(
         server.pool.clone(),
         NatsState::new(None),
-        reqwest::Client::new(),
+        crate::common::local_only_http_client(),
         server.app_state.download_events.clone(),
         server.app_state.download_clients.clone(),
         server.app_state.indexers.clone(),
@@ -757,7 +757,7 @@ async fn test_want_handler_rejects_invalid_payload() {
     let handler = WantRequestHandler::new(
         server.pool.clone(),
         NatsState::new(None),
-        reqwest::Client::new(),
+        crate::common::local_only_http_client(),
         server.app_state.download_events.clone(),
         server.app_state.download_clients.clone(),
         server.app_state.indexers.clone(),

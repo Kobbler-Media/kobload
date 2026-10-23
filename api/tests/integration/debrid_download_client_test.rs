@@ -34,7 +34,7 @@ impl Fixture {
         let mock = MockDebrid::new(Duration::ZERO);
         let handler = Arc::new(DebridHandler::new(
             server.pool.clone(),
-            reqwest::Client::new(),
+            crate::common::local_only_http_client(),
             mock.resolver(),
         ));
         let now = time::OffsetDateTime::now_utc();
@@ -68,7 +68,7 @@ impl Fixture {
     async fn grab(&self, h: &str) -> String {
         self.handler
             .add_url(
-                &reqwest::Client::new(),
+                &crate::common::local_only_http_client(),
                 &self.config,
                 &format!("magnet:?xt=urn:btih:{h}"),
             )
@@ -89,7 +89,7 @@ async fn test_download_grabs_share_the_account_limiter() {
             tokio::spawn(async move {
                 handler
                     .add_url(
-                        &reqwest::Client::new(),
+                        &crate::common::local_only_http_client(),
                         &config,
                         &format!("magnet:?xt=urn:btih:{}", hash(c)),
                     )

@@ -546,6 +546,12 @@ async fn test_reject_match_keeps_upgrade_until_with_other_imports() {
         std::slice::from_ref(&pattern),
     )
     .await;
+    // An active first download would block the second grab; failing it lets
+    // the pattern grab again, as it does after a failed fetch.
+    sqlx::query("UPDATE downloads SET status = 'failed'")
+        .execute(pool)
+        .await
+        .unwrap();
 
     // Second match (different guid)
     let release2 = make_release(

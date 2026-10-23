@@ -321,7 +321,7 @@ async fn test_want_handler_search_finds_and_downloads() {
     let handler = WantRequestHandler::new(
         server.pool.clone(),
         NatsState::new(None),
-        reqwest::Client::new(),
+        crate::common::local_only_http_client(),
         server.app_state.download_events.clone(),
         server.app_state.download_clients.clone(),
         server.app_state.indexers.clone(),
@@ -404,7 +404,7 @@ async fn test_want_handler_search_results_no_download() {
     let handler = WantRequestHandler::new(
         server.pool.clone(),
         NatsState::new(None),
-        reqwest::Client::new(),
+        crate::common::local_only_http_client(),
         server.app_state.download_events.clone(),
         server.app_state.download_clients.clone(),
         server.app_state.indexers.clone(),

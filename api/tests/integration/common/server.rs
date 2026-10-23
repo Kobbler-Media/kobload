@@ -206,12 +206,26 @@ pub struct TestServerOptions {
     pub indexers: Arc<dyn IndexerResolver>,
 }
 
+/// Third-party feeds (XEM, Sonarr scene mappings, TRaSH) fail fast and fall
+/// back to the database, so tests seed what they need there and never depend
+/// on the network.
+pub fn local_only_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .proxy(
+            reqwest::Proxy::all("http://127.0.0.1:9")
+                .unwrap()
+                .no_proxy(reqwest::NoProxy::from_string("127.0.0.1,localhost")),
+        )
+        .build()
+        .unwrap()
+}
+
 impl TestServerOptions {
     pub fn with_pool(pool: &sqlx::PgPool) -> Self {
         Self {
             download_clients: Arc::new(DefaultDownloadClientResolver::new(
                 pool.clone(),
-                reqwest::Client::new(),
+                local_only_http_client(),
                 std::sync::Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
             )),
             indexers: Arc::new(DefaultIndexerResolver::new(Default::default())),
@@ -226,7 +240,7 @@ impl Default for TestServerOptions {
         Self {
             download_clients: Arc::new(DefaultDownloadClientResolver::new(
                 sqlx::PgPool::connect_lazy("postgres://dummy").unwrap(),
-                reqwest::Client::new(),
+                local_only_http_client(),
                 std::sync::Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
             )),
             indexers: Arc::new(DefaultIndexerResolver::new(Default::default())),
@@ -302,7 +316,7 @@ impl TestServer {
             watch_events,
             watch_pattern_events,
             nats: NatsState::new(None),
-            http_client: reqwest::Client::new(),
+            http_client: local_only_http_client(),
             debrid_providers: std::sync::Arc::new(
                 kobload_api::debrid::DefaultDebridProviderResolver,
             ),
