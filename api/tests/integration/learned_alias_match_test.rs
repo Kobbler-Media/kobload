@@ -3,17 +3,16 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::json;
-
 use crate::common::entry_points::{Grabber, grab_alone, searched, torrent};
 use crate::common::sport::motogp_race_want;
 use crate::common::tv_watch::{TvWatch, episode_want, usenet_release};
+use kobload_api::learned_aliases::{AliasScope, remember};
 use kobload_api::watch::Release;
 
 struct Case {
     want: fn() -> nats_jobs::MediaWant,
     title: &'static str,
-    scope: &'static str,
+    scope: AliasScope,
     alias: &'static str,
 }
 
@@ -25,13 +24,13 @@ const CASES: [Case; 2] = [
     Case {
         want: tv_want,
         title: "Renard.Days.S01E13.1080p.WEB-DL.x264-GRP",
-        scope: "tv_show",
+        scope: AliasScope::TvShow,
         alias: "Renard Days",
     },
     Case {
         want: motogp_race_want,
         title: "MotoGP.2026.Nippon.Race.1080p.WEB.h264-VERUM",
-        scope: "sport_location",
+        scope: AliasScope::SportLocation,
         alias: "Nippon",
     },
 ];
@@ -46,16 +45,10 @@ fn release(case: &Case, hash_char: Option<char>) -> Release {
     release
 }
 
-async fn remember(tv: &TvWatch, case: &Case) {
-    let pattern = tv.pattern(&(case.want)()).await;
-    tv.server
-        .admin_client()
-        .post_json(
-            "/api/v1/learned-aliases",
-            &json!({"watch_pattern_id": pattern.id, "scope": case.scope, "alias": case.alias}),
-        )
+async fn remember_alias(tv: &TvWatch, case: &Case) {
+    remember(&tv.server.pool, &(case.want)(), case.scope, case.alias)
         .await
-        .assert_ok();
+        .unwrap();
 }
 
 type Accepted = Vec<(&'static str, BTreeSet<String>)>;
@@ -89,7 +82,7 @@ async fn accepted_by(grabber: Option<Grabber>) -> (Accepted, Accepted) {
     };
     let before = run(&tv).await;
     for case in &CASES {
-        remember(&tv, case).await;
+        remember_alias(&tv, case).await;
     }
     let after = run(&tv).await;
     tv.server.cleanup().await;

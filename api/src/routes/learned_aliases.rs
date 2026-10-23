@@ -4,23 +4,17 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{delete, get},
 };
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::require_auth;
-use crate::learned_aliases::{AliasScope, RememberError, remember};
 use crate::repositories::learned_aliases::{self as repo, LearnedAliasRow};
-use crate::repositories::watch as watch_repo;
 use crate::state::AppState;
 
 type ApiError = (StatusCode, String);
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/v1/learned-aliases",
-            get(list_aliases).post(create_alias),
-        )
+        .route("/api/v1/learned-aliases", get(list_aliases))
         .route("/api/v1/learned-aliases/{id}", delete(delete_alias))
 }
 
@@ -40,37 +34,6 @@ async fn list_aliases(
 ) -> Result<Json<Vec<LearnedAliasRow>>, ApiError> {
     authorize(&state, &headers).await?;
     repo::list(&state.pool).await.map(Json).map_err(internal)
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateAliasRequest {
-    pub watch_pattern_id: Uuid,
-    pub scope: AliasScope,
-    pub alias: String,
-}
-
-async fn create_alias(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<CreateAliasRequest>,
-) -> Result<Json<LearnedAliasRow>, ApiError> {
-    authorize(&state, &headers).await?;
-    let want = watch_repo::get_pattern_by_id(&state.pool, request.watch_pattern_id)
-        .await
-        .map_err(internal)?
-        .and_then(|p| p.media_want)
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v).ok())
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            "No want for this pattern".to_string(),
-        ))?;
-    remember(&state.pool, &want, request.scope, &request.alias)
-        .await
-        .map(Json)
-        .map_err(|e| match e {
-            RememberError::Repository(e) => internal(e),
-            e => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
-        })
 }
 
 async fn delete_alias(
