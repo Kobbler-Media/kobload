@@ -11,6 +11,7 @@ mod indexer_sync;
 mod job_cleanup;
 mod metadata_extraction;
 mod refresh_indexer_caps;
+mod review_queue;
 mod search_pattern_now;
 mod search_request;
 mod trash_filter_sync;
@@ -37,6 +38,7 @@ pub use metadata_extraction::{
     release_info_from_payload,
 };
 pub use refresh_indexer_caps::RefreshIndexerCapsHandler;
+pub use review_queue::ReviewQueueHandler;
 pub use search_pattern_now::SearchPatternNowHandler;
 pub(crate) use search_pattern_now::search_pattern_now_core;
 pub use search_request::SearchRequestHandler;

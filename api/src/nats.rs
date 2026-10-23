@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::jobs::handlers::{
     BacklogSearchHandler, BitmagnetSyncHandler, CacheCleanupHandler, DefinitionUpdateHandler,
     GrabHeldMatchHandler, HashIndexBootstrapHandler, HashIndexImportHandler, IndexerSyncHandler,
-    JobCleanupHandler, MetadataExtractionHandler, RefreshIndexerCapsHandler,
+    JobCleanupHandler, MetadataExtractionHandler, RefreshIndexerCapsHandler, ReviewQueueHandler,
     SearchPatternNowHandler, SearchRequestHandler, TrashFilterSyncHandler, UpgradeCleanupHandler,
     WantRequestHandler, WatchDirectoryNotifyHandler, WatchDirectoryScanCheckHandler,
     WatchDirectoryScanHandler, WatchPatternDeleteHandler,
@@ -174,6 +174,7 @@ pub async fn start_nats_worker(
     worker.register_handler(HandlerAdapter::new(UpgradeCleanupHandler::new(
         state.pool.clone(),
     )));
+    worker.register_handler(HandlerAdapter::new(ReviewQueueHandler::new(state.clone())));
     worker.register_handler(HandlerAdapter::new(RefreshIndexerCapsHandler::new(
         state.pool.clone(),
         state.http_client.clone(),
@@ -265,6 +266,13 @@ pub async fn start_scheduler(nats: NatsClient, shutdown_rx: watch::Receiver<bool
         "upgrade-cleanup",
         "kobload",
         "upgrade_cleanup",
+        std::time::Duration::from_secs(3600), // hourly
+    ));
+
+    scheduler.register(ScheduledJob::new(
+        "review-queue",
+        "kobload",
+        "review_queue",
         std::time::Duration::from_secs(3600), // hourly
     ));
 

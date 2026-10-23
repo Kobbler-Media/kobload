@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE review_items SET status = $2, resolved_at = NOW()\n        WHERE id = $1 AND status = 'open'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9e13c5a87387e48a57dc1bff1e3666ac60db3333d527708b687e0efc092e60e"
+}

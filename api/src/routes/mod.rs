@@ -17,6 +17,7 @@ pub mod learned_aliases;
 pub mod media_types;
 pub mod providers;
 pub mod quality_profiles;
+pub mod review;
 pub mod search;
 pub mod search_download;
 pub mod stream;

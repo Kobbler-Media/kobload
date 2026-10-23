@@ -757,3 +757,45 @@ pub async fn recreate_secondary_indexes(pool: &PgPool) -> std::result::Result<()
     .await?;
     Ok(())
 }
+
+#[derive(Debug, Clone)]
+pub struct RecentEntry {
+    pub info_hash: String,
+    pub original_title: String,
+    pub size: Option<i64>,
+    pub magnet_url: Option<String>,
+    pub first_seen: time::OffsetDateTime,
+}
+
+/// Entries first seen since `since` whose title has any of `words`, for the
+/// review queue. `words` must be plain alphanumeric terms.
+pub async fn recent_with_any_word<'e, E>(
+    exec: E,
+    since: time::OffsetDateTime,
+    words: &[String],
+    limit: i64,
+) -> Result<Vec<RecentEntry>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query_as!(
+        RecentEntry,
+        r#"
+        SELECT info_hash, original_title, size, magnet_url, first_seen
+        FROM torrent_hash_index
+        WHERE to_tsvector('english', original_title) @@ to_tsquery('english', $1)
+          AND first_seen >= $2
+        ORDER BY first_seen DESC
+        LIMIT $3
+        "#,
+        words.join(" | "),
+        since,
+        limit,
+    )
+    .fetch_all(exec)
+    .await?;
+    Ok(rows)
+}

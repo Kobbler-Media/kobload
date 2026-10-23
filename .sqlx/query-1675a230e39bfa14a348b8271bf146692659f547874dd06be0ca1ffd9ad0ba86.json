@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT watch_pattern_id AS \"id!\" FROM watch_matches\n        WHERE action IN ('downloaded', 'upgrade', 'held') AND NOT rejected\n          AND watch_pattern_id IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "watch_matches",
+            "name": "watch_pattern_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1675a230e39bfa14a348b8271bf146692659f547874dd06be0ca1ffd9ad0ba86"
+}

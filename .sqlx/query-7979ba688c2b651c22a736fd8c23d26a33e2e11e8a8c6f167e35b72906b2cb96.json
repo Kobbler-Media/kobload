@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT watch_pattern_id, kind FROM review_items",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "watch_pattern_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "review_items",
+            "name": "watch_pattern_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_items",
+            "name": "kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7979ba688c2b651c22a736fd8c23d26a33e2e11e8a8c6f167e35b72906b2cb96"
+}

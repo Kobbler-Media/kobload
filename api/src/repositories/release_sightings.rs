@@ -102,24 +102,27 @@ where
     Ok(result.rows_affected())
 }
 
-pub async fn seen_between<'e, E>(
+/// Sightings since `since` whose title has any of `words`, for the review
+/// queue. `words` must be plain alphanumeric terms.
+pub async fn seen_with_any_word<'e, E>(
     exec: E,
-    from: OffsetDateTime,
-    until: OffsetDateTime,
+    since: OffsetDateTime,
+    words: &[String],
 ) -> Result<Vec<Sighting>>
 where
     E: Executor<'e, Database = Postgres>,
 {
+    let patterns: Vec<String> = words.iter().map(|w| format!("%{w}%")).collect();
     let rows = sqlx::query_as!(
         Sighting,
         r#"
         SELECT release_key, title, size, published_at, indexer_source_id, indexer, protocol,
                download_url, magnet_url, info_hash
         FROM release_sightings
-        WHERE seen_at BETWEEN $1 AND $2
+        WHERE seen_at >= $1 AND title ILIKE ANY($2)
         "#,
-        from,
-        until,
+        since,
+        &patterns,
     )
     .fetch_all(exec)
     .await?;

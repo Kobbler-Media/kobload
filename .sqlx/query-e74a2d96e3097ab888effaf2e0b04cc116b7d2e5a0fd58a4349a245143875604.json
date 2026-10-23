@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT release_key FROM review_rejections WHERE watch_pattern_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "release_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_rejections",
+            "name": "release_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e74a2d96e3097ab888effaf2e0b04cc116b7d2e5a0fd58a4349a245143875604"
+}

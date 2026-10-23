@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT release_key, title, size, published_at, indexer_source_id, indexer, protocol,\n               download_url, magnet_url, info_hash\n        FROM release_sightings\n        WHERE seen_at BETWEEN $1 AND $2\n        ",
+  "query": "\n        SELECT release_key, title, size, published_at, indexer_source_id, indexer, protocol,\n               download_url, magnet_url, info_hash\n        FROM release_sightings\n        WHERE seen_at >= $1 AND title ILIKE ANY($2)\n        ",
   "describe": {
     "columns": [
       {
@@ -117,7 +117,7 @@
     "parameters": {
       "Left": [
         "Timestamptz",
-        "Timestamptz"
+        "TextArray"
       ]
     },
     "nullable": [
@@ -133,5 +133,5 @@
       true
     ]
   },
-  "hash": "1612430b7de450adf8ec6e7e2f84a88415e1b1f5b21e4e252b1084f7e0da2bcb"
+  "hash": "5b0cf5add6b251327cc12e1a3e7bed71756013328eb9461893f2fcc638dcfc8d"
 }

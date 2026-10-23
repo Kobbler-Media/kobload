@@ -34,6 +34,7 @@ mod quality_default_test;
 mod quality_profiles_test;
 mod quality_word_match_test;
 mod release_sightings_test;
+mod review_queue_test;
 mod rss_gate_memo_test;
 mod rss_match_prefilter_test;
 mod rss_poll_schedule_test;

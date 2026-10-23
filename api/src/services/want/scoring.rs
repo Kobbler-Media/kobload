@@ -933,6 +933,21 @@ pub(crate) fn sport_title_match(want: &MediaWant, title: &str) -> Option<Option<
     )
 }
 
+/// How the sport matcher read a release for `want`, matched or not.
+pub(crate) fn sport_explanation(want: &MediaWant, release: &Release) -> Option<MatchExplanation> {
+    let vocab = sport::SportVocab::from_want(want)?;
+    Some(
+        sport::judge(
+            &vocab,
+            &sport::tokenize(&release.title),
+            release.size,
+            None,
+            sport::publish_date(&release.publish_date),
+        )
+        .explanation,
+    )
+}
+
 fn judge_sport(
     vocab: &sport::SportVocab,
     release: &Release,
@@ -2050,7 +2065,7 @@ pub fn group_by_target_id(
 #[cfg(test)]
 mod reference;
 mod sport;
-pub use sport::MatchExplanation;
+pub use sport::{ExplainedSlot, MatchExplanation};
 
 pub(crate) use sport::{Token as SportToken, tokenize as tokenize_sport};
 

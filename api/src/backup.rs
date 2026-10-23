@@ -71,6 +71,9 @@ pub const TABLES_IN_ORDER: &[&str] = &[
     "indexer_category_mappings",
     "watch_patterns",
     "learned_aliases",
+    // Depends on watch_patterns
+    "review_items",
+    "review_rejections",
     // Independent
     "status_webhooks",
     "app_settings",

@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT info_hash, original_title, size, magnet_url, first_seen\n        FROM torrent_hash_index\n        WHERE to_tsvector('english', original_title) @@ to_tsquery('english', $1)\n          AND first_seen >= $2\n        ORDER BY first_seen DESC\n        LIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "info_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "info_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "original_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "original_title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "size",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "magnet_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "magnet_url"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "first_seen",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "torrent_hash_index",
+            "name": "first_seen"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "8b6e525e5edf2a4db73f59d531f85f2d590ac37ca8317a85f3251ff6e8b649e6"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE review_items r SET status = 'resolved', resolved_at = NOW()\n        WHERE r.status = 'open' AND r.kind = 'missed'\n          AND EXISTS (\n              SELECT 1 FROM watch_matches m\n              WHERE m.watch_pattern_id = r.watch_pattern_id\n                AND m.action IN ('downloaded', 'upgrade', 'held')\n                AND NOT m.rejected\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "8648be8d7ade09ac6a7b676837dacb67bce8597add508be5159e6899c5bafb68"
+}

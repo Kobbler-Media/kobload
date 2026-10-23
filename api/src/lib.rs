@@ -27,6 +27,7 @@ pub mod prowlarr;
 pub mod quality;
 pub mod rate_limit;
 pub mod repositories;
+pub mod review;
 pub mod routes;
 pub mod scene_mappings;
 pub mod scene_titles;

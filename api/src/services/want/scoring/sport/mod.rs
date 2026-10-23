@@ -8,8 +8,8 @@ use nats_jobs::{MediaWant, StructuralRejectReason};
 use time::Date;
 
 use crate::parsing::{canonical_sport_text, country_for_code, country_names};
-pub use explain::MatchExplanation;
-use explain::{Contradiction, ExplainedSlot, SlotMatch};
+use explain::{Contradiction, SlotMatch};
+pub use explain::{ExplainedSlot, MatchExplanation};
 pub(crate) use tokens::{Token, tokenize};
 use tokens::{normalize_phrase, parse_date_marker};
 use vocab::{Phrase, Slot, UMBRELLA, class_of, closed_vocab, session_of};

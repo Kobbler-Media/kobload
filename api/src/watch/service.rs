@@ -228,8 +228,68 @@ pub async fn handle_match_locked(
         return None;
     }
 
+    dispatch_match_locked(
+        state,
+        pattern,
+        release,
+        match_score,
+        matched_pattern,
+        source_id,
+        quality_score,
+        is_upgrade,
+        replaces_download_id,
+        episode_key,
+        true,
+    )
+    .await
+}
+
+/// Grab a release the user picked from the review queue for this pattern.
+/// The matcher turned it down, so it skips the structural check, and the
+/// user asked for it now, so it is never held for a better protocol.
+pub async fn grab_reviewed_release(
+    state: &AppState,
+    pattern: &watch_repo::WatchPatternRow,
+    release: &Release,
+) -> Option<Uuid> {
+    let _lock = state.pattern_search_locks.acquire(pattern.id).await;
+    let episode_key = pattern
+        .media_want
+        .as_ref()
+        .filter(|mw| super::episode_key::is_tv_season(mw))
+        .and_then(|mw| super::episode_key::extract_episode_key(&release.title, mw));
+    dispatch_match_locked(
+        state,
+        pattern,
+        release,
+        1.0,
+        crate::repositories::review::REVIEW_GRAB,
+        release.indexer_source_id,
+        None,
+        false,
+        None,
+        episode_key.as_deref(),
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_match_locked(
+    state: &AppState,
+    pattern: &watch_repo::WatchPatternRow,
+    release: &Release,
+    match_score: f64,
+    matched_pattern: &str,
+    source_id: Option<Uuid>,
+    quality_score: Option<f64>,
+    is_upgrade: bool,
+    replaces_download_id: Option<Uuid>,
+    episode_key: Option<&str>,
+    allow_hold: bool,
+) -> Option<Uuid> {
     // Check if this release should be held due to protocol priority
-    if pattern.auto_download {
+    if allow_hold && pattern.auto_download {
         if let Some(hold_until) = should_hold_for_protocol(state, pattern, release).await {
             // Check if any existing held matches for this pattern should be superseded
             let _ = check_and_supersede_holds(state, pattern, release).await;
@@ -552,6 +612,46 @@ pub async fn resolve_pattern_match_inputs(
         xem_show_map: naming.xem_show_map,
         media_want,
     }
+}
+
+/// Score releases against one pattern the way the RSS path would, outside a
+/// poll: for the review queue, which re-reads past grabs.
+pub async fn score_for_pattern(
+    state: &AppState,
+    pattern: &watch_repo::WatchPatternRow,
+    releases: &[Release],
+) -> Vec<crate::watch::ProcessedRelease> {
+    let inputs = resolve_pattern_match_inputs(state, pattern).await;
+    let quality_profile = match pattern.media_type_id {
+        Some(id) => resolve_quality_profile(&state.pool, id, &mut HashMap::new()).await,
+        None => None,
+    };
+    let trash_filters = state.trash_filters.get_filters();
+    let episodes_needed = pattern
+        .media_want
+        .as_ref()
+        .and_then(super::episode_key::get_episodes_needed);
+    let match_config = &inputs.match_config;
+    let mut config = crate::services::want::scoring::ScoringConfig::new(
+        &match_config.match_targets,
+        &match_config.patterns,
+        match_config.min_score,
+        quality_profile.as_ref(),
+        trash_filters.as_deref(),
+    )
+    .with_match_mode(&match_config.match_mode)
+    .with_search_context(crate::services::want::scoring::SearchContext::Rss)
+    .with_show_aliases(&match_config.show_aliases);
+    if let Some(mw) = &inputs.media_want {
+        config = config.with_media_want(mw);
+    }
+    if let Some(xem) = &inputs.xem_show_map {
+        config = config.with_xem_show_map(xem);
+    }
+    if let (Some(eps), Some(json)) = (&episodes_needed, &pattern.media_want) {
+        config = config.with_episodes_needed(eps, json);
+    }
+    crate::services::want::scoring::score_batch(releases, &config)
 }
 
 /// Grouping key for batch selection: (pattern_id, episode_key).

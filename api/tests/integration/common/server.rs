@@ -360,6 +360,7 @@ impl TestServer {
             .merge(routes::media_types::routes())
             .merge(routes::providers::routes())
             .merge(routes::quality_profiles::routes())
+            .merge(routes::review::routes())
             .merge(routes::indexer_category_mappings::routes())
             .merge(routes::indexer_rss_cache::routes())
             .merge(routes::learned_aliases::routes())
