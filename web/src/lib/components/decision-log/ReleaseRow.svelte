@@ -1,16 +1,20 @@
 <script lang="ts">
   import type { DecisionLogRelease } from '$lib/types';
+  import { learnedIn } from '$lib/learnedAliases';
+  import MatchExplanationView from './MatchExplanationView.svelte';
 
   let {
     release,
     compareMode = false,
     compareSelected = false,
-    onToggleCompare
+    onToggleCompare,
+    learned = []
   }: {
     release: DecisionLogRelease;
     compareMode?: boolean;
     compareSelected?: boolean;
     onToggleCompare?: (release: DecisionLogRelease) => void;
+    learned?: string[];
   } = $props();
 
   let expanded = $state(false);
@@ -273,27 +277,7 @@
       {/if}
 
       {#if release.match_explanation}
-        {@const ex = release.match_explanation}
-        <div class="detail-section">
-          <h4 class="section-title">Match Explanation</h4>
-          <div class="kv-grid">
-            {#each ex.matched as hit, i (i)}
-              <span class="kv-key">{hit.slot}</span>
-              <span class="kv-val">
-                {hit.value}{#if hit.alias && hit.alias !== hit.value}
-                  <span class="alias">on "{hit.alias}"</span>{/if}{#if hit.weak}
-                  <span class="alias">(weak)</span>{/if}
-              </span>
-            {/each}
-            {#if ex.unexplained.length > 0}
-              <span class="kv-key">unexplained</span>
-              <span class="kv-val">{ex.unexplained.join(' ')}</span>
-            {/if}
-          </div>
-          {#each ex.contradictions as c, i (i)}
-            <div class="rejection-reason">other {c.slot}: {c.value}</div>
-          {/each}
-        </div>
+        <MatchExplanationView explanation={release.match_explanation} {learned} />
       {/if}
 
       <!-- Match Details -->
@@ -307,7 +291,11 @@
             {/if}
             {#if release.matched_pattern}
               <span class="kv-key">pattern matched</span>
-              <span class="kv-val"><code>{release.matched_pattern}</code></span>
+              <span class="kv-val"
+                ><code>{release.matched_pattern}</code
+                >{#if learnedIn(release.matched_pattern, learned)}
+                  <span class="learned">learned alias</span>{/if}</span
+              >
             {/if}
             {#if release.match_score !== null}
               <span class="kv-key">raw score</span>
@@ -344,8 +332,13 @@
 </button>
 
 <style>
-  .alias {
-    color: var(--muted);
+  .learned {
+    margin-left: 4px;
+    padding: 0 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    background: rgba(59, 130, 246, 0.15);
+    color: #3b82f6;
   }
 
   .release-row {

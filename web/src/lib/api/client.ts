@@ -1328,3 +1328,52 @@ export async function confirmProwlarrMigration(
     body: JSON.stringify({ prowlarr_source_id: prowlarrSourceId, items })
   });
 }
+
+// Review queue and learned aliases
+export async function listReviewItems(): Promise<{ items: import('$lib/types').ReviewItem[] }> {
+  return request('/api/v1/review');
+}
+
+export async function getReviewCount(): Promise<{ open: number }> {
+  return request('/api/v1/review/count');
+}
+
+export async function grabReviewRelease(
+  id: string,
+  releaseKey: string
+): Promise<{ download_id: string }> {
+  return request(`/api/v1/review/${id}/grab`, {
+    method: 'POST',
+    body: JSON.stringify({ release_key: releaseKey })
+  });
+}
+
+export async function rejectReviewRelease(id: string, releaseKey: string): Promise<void> {
+  await request(`/api/v1/review/${id}/not-it`, {
+    method: 'POST',
+    body: JSON.stringify({ release_key: releaseKey })
+  });
+}
+
+export async function rememberReviewName(
+  id: string,
+  scope: import('$lib/types').AliasScope,
+  alias: string
+): Promise<import('$lib/types').LearnedAlias> {
+  return request(`/api/v1/review/${id}/remember`, {
+    method: 'POST',
+    body: JSON.stringify({ scope, alias })
+  });
+}
+
+export async function dismissReviewItem(id: string): Promise<void> {
+  await request(`/api/v1/review/${id}/dismiss`, { method: 'POST' });
+}
+
+export async function listLearnedAliases(): Promise<import('$lib/types').LearnedAlias[]> {
+  return request('/api/v1/learned-aliases');
+}
+
+export async function deleteLearnedAlias(id: string): Promise<void> {
+  await request(`/api/v1/learned-aliases/${id}`, { method: 'DELETE' });
+}

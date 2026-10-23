@@ -5,6 +5,7 @@
     href: string;
     label: string;
     icon: string;
+    badge?: number;
   }
 
   interface Props {
@@ -56,6 +57,9 @@
           </svg>
           {#if !collapsed}
             <span class="nav-label">{item.label}</span>
+          {/if}
+          {#if item.badge}
+            <span class="nav-badge" class:dot={collapsed}>{collapsed ? '' : item.badge}</span>
           {/if}
         </a>
       {/each}
@@ -171,6 +175,24 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .nav-badge {
+    min-width: 18px;
+    padding: 0 6px;
+    border-radius: 9px;
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    background: rgba(211, 140, 90, 0.2);
+    color: var(--accent);
+  }
+
+  .nav-badge.dot {
+    min-width: 8px;
+    height: 8px;
+    padding: 0;
+    background: var(--accent);
   }
 
   .collapsed .nav-item {

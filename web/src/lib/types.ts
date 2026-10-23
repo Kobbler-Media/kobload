@@ -666,3 +666,59 @@ export type DecisionLogSettings = {
   feed_logging_enabled: boolean;
   debrid_logging_enabled: boolean;
 };
+
+export type AliasScope = 'tv_show' | 'title' | 'sport_want' | 'sport_league' | 'sport_location';
+
+export type LearnedAlias = {
+  id: string;
+  scope: AliasScope;
+  scope_key: string;
+  scope_label: string;
+  alias: string;
+  created_at: string;
+};
+
+export type ReviewCandidate = {
+  release_key: string;
+  title: string;
+  size: number | null;
+  published_at: string | null;
+  indexer_source_id: string | null;
+  indexer: string;
+  protocol: string;
+  download_url: string | null;
+  magnet_url: string | null;
+  info_hash: string | null;
+  similarity: number;
+  explanation: MatchExplanation | null;
+  suggested_alias: string | null;
+};
+
+export type ReviewGrab = {
+  watch_match_id: string;
+  release_key: string;
+  title: string;
+  match_score: number;
+  matched_pattern: string | null;
+  explanation: MatchExplanation | null;
+  unexplained: string[];
+  runner_up: { watch_pattern_id: string; want: string; match_score: number } | null;
+  suggested_alias: string | null;
+};
+
+export type ReviewItem = {
+  id: string;
+  kind: 'missed' | 'doubtful';
+  watch_pattern_id: string;
+  source_system: string;
+  source_id: string;
+  created_at: string;
+  detail: {
+    want: string;
+    media_kind: string;
+    due_at: string | null;
+    candidates: ReviewCandidate[];
+    grab: ReviewGrab | null;
+  };
+  scopes: { scope: AliasScope; label: string }[];
+};

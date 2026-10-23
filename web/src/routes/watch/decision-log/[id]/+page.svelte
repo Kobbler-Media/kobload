@@ -7,8 +7,10 @@
     getDecisionLogSession,
     exportDecisionLogSession,
     deleteDecisionLogSession,
-    testWatchPattern
+    testWatchPattern,
+    listLearnedAliases
   } from '$lib/api/client';
+  import { learnedNames } from '$lib/learnedAliases';
   import type { DecisionLogSessionDetail } from '$lib/types';
   import { showToast } from '$lib/stores/toast.svelte';
   import ProviderCallCard from '$lib/components/decision-log/ProviderCallCard.svelte';
@@ -16,6 +18,7 @@
 
   let loading = $state(true);
   let error = $state('');
+  let learned = $state<string[]>([]);
   let session = $state<DecisionLogSessionDetail | null>(null);
   let showDeleteConfirm = $state(false);
   let deleting = $state(false);
@@ -227,6 +230,9 @@
 
   onMount(() => {
     loadSession();
+    listLearnedAliases()
+      .then((aliases) => (learned = learnedNames(aliases)))
+      .catch(() => (learned = []));
   });
 </script>
 
@@ -481,6 +487,7 @@
             {compareMode}
             compareSelected={compareIds.has(release.id)}
             onToggleCompare={toggleCompare}
+            {learned}
           />
         {/each}
       {/if}

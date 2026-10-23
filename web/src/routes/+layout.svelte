@@ -20,6 +20,9 @@
     closeTopOverlay
   } from '$lib/stores/ui.svelte';
   import { showToast, getToastMessage } from '$lib/stores/toast.svelte';
+  import { refreshReviewCount } from '$lib/stores/review.svelte';
+
+  const REVIEW_COUNT_INTERVAL_MS = 5 * 60 * 1000;
 
   let { children } = $props();
 
@@ -79,6 +82,13 @@
       cancel();
       closeTopOverlay();
     }
+  });
+
+  $effect(() => {
+    if (!isAuthed) return;
+    refreshReviewCount();
+    const timer = setInterval(refreshReviewCount, REVIEW_COUNT_INTERVAL_MS);
+    return () => clearInterval(timer);
   });
 
   $effect(() => {

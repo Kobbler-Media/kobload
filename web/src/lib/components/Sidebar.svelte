@@ -2,6 +2,7 @@
   import { page } from '$app/stores';
   import NavGroup from './NavGroup.svelte';
   import { toggleGroup, isGroupExpanded } from '$lib/stores/sidebar.svelte';
+  import { getReviewState } from '$lib/stores/review.svelte';
 
   interface Props {
     devMode?: boolean;
@@ -31,6 +32,7 @@
     'koblem (llm)': ['llm', 'ai', 'review', 'koblem', 'local model'],
     'dev tools': ['development', 'debug', 'snapshot'],
     patterns: ['watch', 'wanted', 'monitor'],
+    review: ['missed', 'doubtful', 'queue', 'alias', 'learned', 'names'],
     'match history': ['matches', 'found', 'results'],
     'search log': ['decision', 'log', 'search decisions', 'backlog'],
     'feed log': ['rss', 'feed', 'sync', 'feed decisions'],
@@ -61,8 +63,8 @@
 
   // Filter items based on query
   function filterItems(
-    items: { href: string; label: string; icon: string }[]
-  ): { href: string; label: string; icon: string }[] {
+    items: { href: string; label: string; icon: string; badge?: number }[]
+  ): { href: string; label: string; icon: string; badge?: number }[] {
     if (!filterQuery.trim()) return items;
     return items.filter((item) => matchesFilter(item.label, filterQuery));
   }
@@ -81,7 +83,9 @@
     }
   ];
 
-  const watchItems = [
+  const review = getReviewState();
+
+  const watchItems = $derived([
     {
       href: '/watch/patterns',
       label: 'Patterns',
@@ -91,8 +95,14 @@
       href: '/watch/history',
       label: 'Match History',
       icon: 'M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z'
+    },
+    {
+      href: '/watch/review',
+      label: 'Review',
+      icon: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14h-2v-2h2v2zm0-4h-2V7h2v6z',
+      badge: review.openCount
     }
-  ];
+  ]);
 
   const debugItems = [
     {
