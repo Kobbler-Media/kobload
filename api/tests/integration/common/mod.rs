@@ -10,6 +10,7 @@ pub mod debrid_mock;
 pub mod mocks;
 pub mod resolve_fixture;
 pub mod server;
+pub mod sport;
 pub mod stream_fixtures;
 pub mod tv_watch;
 

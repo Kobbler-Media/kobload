@@ -21,6 +21,28 @@ use crate::types::{DownloadRequest, DownloadResponse};
 
 use super::DeleteDownloadQuery;
 
+/// A grab made from a pattern's manual search names the pattern, not the kind;
+/// the release has to be parsed as what the pattern wants.
+async fn media_kind_of_grabbed_want(
+    state: &AppState,
+    metadata: &serde_json::Value,
+) -> Option<String> {
+    let want = match metadata
+        .get("pattern_id")
+        .and_then(|v| v.as_str())
+        .and_then(|id| id.parse::<Uuid>().ok())
+    {
+        Some(pattern_id) => crate::repositories::watch::get_pattern_by_id(&state.pool, pattern_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| p.media_want),
+        None => metadata.get("media_want").cloned(),
+    }?;
+    let want = serde_json::from_value::<nats_jobs::MediaWant>(want).ok()?;
+    Some(crate::media::parse_media_kind(&want).to_string())
+}
+
 pub async fn create_download(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -66,6 +88,11 @@ pub async fn create_download(
     // Try to get the API key ID for tracking purposes
     let api_key_id = get_api_key_id(&state, &headers).await;
 
+    let media_kind = match payload.media_kind.clone() {
+        Some(kind) => Some(kind),
+        None => media_kind_of_grabbed_want(&state, &payload.metadata).await,
+    };
+
     let input = DownloadSubmission {
         source: payload.source.clone(),
         protocol: protocol.clone(),
@@ -80,7 +107,7 @@ pub async fn create_download(
         url_context,
         indexer_source_id: resolved_source_id,
         quality_profile_id: payload.quality_profile_id,
-        media_kind: payload.media_kind.clone(),
+        media_kind,
         skip_duplicate_url: false,
     };
 

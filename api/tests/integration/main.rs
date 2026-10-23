@@ -25,6 +25,7 @@ mod indexer_auth_failure_test;
 mod indexer_rss_cache_test;
 mod koblem_review_filter_test;
 mod koblem_ui_flag_test;
+mod manual_grab_media_kind_test;
 mod newznab_proxy_test;
 mod parsing_callback_test;
 mod prerelease_source_test;
