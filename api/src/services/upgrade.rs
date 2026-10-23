@@ -504,7 +504,7 @@ fn should_wait_for_target_tier(
 }
 
 /// Parse a release publish_date (RFC3339, then RFC2822, then plain ISO date).
-fn parse_publish_date(s: &str) -> Option<time::OffsetDateTime> {
+pub(crate) fn parse_publish_date(s: &str) -> Option<time::OffsetDateTime> {
     use time::format_description::well_known::{Rfc2822, Rfc3339};
     time::OffsetDateTime::parse(s, &Rfc3339)
         .or_else(|_| time::OffsetDateTime::parse(s, &Rfc2822))

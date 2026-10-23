@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM release_sightings WHERE seen_at < NOW() - make_interval(days => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "23642b6b448df056a896fe84b9573cc19f757cc78bb1fd761e65db83368dee16"
+}

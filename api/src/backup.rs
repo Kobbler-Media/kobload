@@ -87,6 +87,8 @@ pub const TABLES_IN_ORDER: &[&str] = &[
     "debrid_availability_cache",
     "stream_release_outcomes",
     "stream_trait_outcomes",
+    // Two weeks of what the RSS poll saw (independent)
+    "release_sightings",
     // Torrent hash index (independent, large — may be slow to backup)
     "torrent_hash_index",
     // Per-file metadata for multi-file torrents (depends on torrent_hash_index)

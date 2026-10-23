@@ -23,6 +23,7 @@ use crate::nats;
 use crate::repositories::app_settings;
 use crate::repositories::media_types;
 use crate::repositories::quality_profiles::{self, QualityProfileRow};
+use crate::repositories::release_sightings::{self, Sighting};
 use crate::repositories::watch as watch_repo;
 use crate::scene_titles::TvNaming;
 use crate::services::upgrade;
@@ -1520,6 +1521,22 @@ pub async fn process_releases(
     if !candidates.is_empty() {
         select_and_execute_winners(state, candidates, &pattern_map).await;
     }
+
+    if !source.id.is_nil() {
+        let sightings: Vec<Sighting> = releases
+            .iter()
+            .map(|r| Sighting::of(r, source.id))
+            .collect();
+        record_sightings(&state.pool, &sightings).await;
+    }
+}
+
+/// One batched write per poll, after scoring and dispatch so it never delays
+/// a grab.
+async fn record_sightings(pool: &PgPool, sightings: &[Sighting]) {
+    if let Err(e) = release_sightings::record(pool, sightings).await {
+        warn!(error = %e, count = sightings.len(), "Failed to record release sightings");
+    }
 }
 
 /// Auto-index releases from RSS/search into the hash index (background).
@@ -1801,6 +1818,7 @@ pub async fn run_watch_service(state: AppState) {
         let sources = get_sources_to_check(&state.pool).await;
         let mut candidates: HashMap<CandidateKey, CandidateEntry> = HashMap::new();
         let mut cycle = CyclePreparation::default();
+        let mut sightings: Vec<Sighting> = Vec::new();
         let mut all_patterns: HashMap<Uuid, watch_repo::WatchPatternRow> = HashMap::new();
         // Holds releases for koblem until the end of the cycle, so it spans every
         // source; only the ones koblem would actually be sent are kept.
@@ -1894,6 +1912,7 @@ pub async fn run_watch_service(state: AppState) {
                         Some(&mut gate_memo),
                     )
                     .await;
+                    sightings.extend(releases.iter().map(|r| Sighting::of(r, source.id)));
                     // Collect patterns for the selection phase
                     for p in patterns {
                         all_patterns.entry(p.id).or_insert(p);
@@ -2012,6 +2031,8 @@ pub async fn run_watch_service(state: AppState) {
             });
             decision_log::spawn_flush(state.pool.clone(), coll.into_flush_payload());
         }
+
+        record_sightings(&state.pool, &sightings).await;
 
         // Process expired holds (grab them now)
         process_expired_holds(&state).await;

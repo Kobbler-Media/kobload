@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod learned_aliases;
 pub mod media_types;
 pub mod quality_profiles;
+pub mod release_sightings;
 pub mod scene_mappings;
 pub mod search_cache;
 pub mod stream_outcomes;

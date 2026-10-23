@@ -1,10 +1,11 @@
 //! Handler for cleaning up expired search cache entries.
 //!
-//! Runs periodically to prune expired search cache, XEM and stream outcome rows.
+//! Runs periodically to prune expired search cache, XEM, stream outcome and
+//! release sighting rows.
 
 use crate::jobs::JobError;
 use crate::jobs::worker::JobHandler;
-use crate::repositories::{search_cache, xem_cache};
+use crate::repositories::{release_sightings, search_cache, xem_cache};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -70,6 +71,13 @@ impl JobHandler for CacheCleanupHandler {
             );
         }
 
+        let sightings_deleted = release_sightings::prune(&self.pool)
+            .await
+            .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+        if sightings_deleted > 0 {
+            info!(deleted = sightings_deleted, "Pruned old release sightings");
+        }
+
         let probes_ingested = crate::services::stream::outcomes::ingest_past_probes(&self.pool)
             .await
             .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
@@ -85,6 +93,7 @@ impl JobHandler for CacheCleanupHandler {
             "xem_cache_deleted": xem_deleted,
             "stream_release_outcomes_deleted": releases_deleted,
             "stream_trait_outcomes_deleted": traits_deleted,
+            "release_sightings_deleted": sightings_deleted,
             "stream_probes_ingested": probes_ingested
         }))
     }

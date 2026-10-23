@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO release_sightings\n            (release_key, title, size, published_at, indexer_source_id, indexer, protocol,\n             download_url, magnet_url, info_hash)\n        SELECT * FROM UNNEST(\n            $1::text[], $2::text[], $3::bigint[], $4::timestamptz[], $5::uuid[], $6::text[],\n            $7::text[], $8::text[], $9::text[], $10::text[]\n        )\n        ON CONFLICT (release_key) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "Int8Array",
+        "TimestamptzArray",
+        "UuidArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1780108709154f73db240c972c30f3f46a25feecab0f34cb012f7da8bdfce7a9"
+}
