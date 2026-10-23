@@ -144,12 +144,13 @@ async fn search_releases(
     }
 
     // Deserialize the opaque media_want JSON into the typed MediaWant
-    let media_want: MediaWant = serde_json::from_value(request.media_want).map_err(|e| {
+    let mut media_want: MediaWant = serde_json::from_value(request.media_want).map_err(|e| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
             format!("invalid media_want: {e}"),
         )
     })?;
+    crate::learned_aliases::apply(&state.pool, &mut media_want).await;
     let media_want = &media_want;
 
     // Resolve media_type_id for category filtering

@@ -362,6 +362,7 @@ impl TestServer {
             .merge(routes::quality_profiles::routes())
             .merge(routes::indexer_category_mappings::routes())
             .merge(routes::indexer_rss_cache::routes())
+            .merge(routes::learned_aliases::routes())
             .merge(routes::search::routes())
             .merge(routes::search_download::routes())
             .merge(routes::stream::routes())

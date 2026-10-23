@@ -323,6 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::indexer_category_mappings::routes())
         .merge(routes::indexer_rss_cache::routes())
         .merge(routes::interpret::routes())
+        .merge(routes::learned_aliases::routes())
         .merge(routes::media_types::routes())
         .merge(routes::providers::routes())
         .merge(routes::quality_profiles::routes())

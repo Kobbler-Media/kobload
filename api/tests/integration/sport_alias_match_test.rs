@@ -384,13 +384,14 @@ fn an_old_shape_want_keeps_the_old_matching() {
 #[test]
 fn the_pattern_title_check_reads_the_aliases_too() {
     let now = time::OffsetDateTime::now_utc();
+    let want = americas("Race", "2026-03-29");
     let pattern = kobload_api::repositories::watch::WatchPatternRow {
         id: uuid::Uuid::nil(),
         source_system: "kobbler".into(),
         source_id: "americas-race".into(),
         callback_url: String::new(),
         patterns: Vec::new(),
-        media_want: Some(serde_json::to_value(americas("Race", "2026-03-29")).unwrap()),
+        media_want: Some(serde_json::to_value(&want).unwrap()),
         match_targets: None,
         match_mode: None,
         min_score: None,
@@ -410,6 +411,7 @@ fn the_pattern_title_check_reads_the_aliases_too() {
     let check = |title: &str| {
         kobload_api::watch::service::match_release_with_pattern(
             &pattern,
+            Some(&want),
             title,
             &Default::default(),
         )

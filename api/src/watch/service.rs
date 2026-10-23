@@ -202,9 +202,7 @@ pub async fn handle_match_locked(
     episode_key: Option<&str>,
 ) -> Option<Uuid> {
     // Structural validation: parse release and check against MediaWant
-    if let Some(media_want_json) = pattern.media_want.as_ref()
-        && let Ok(media_want) =
-            serde_json::from_value::<nats_jobs::MediaWant>(media_want_json.clone())
+    if let Some(media_want) = pattern_media_want(&state.pool, pattern).await
         && let naming = TvNaming::resolve(
             &state.scene_mappings,
             &state.xem_cache,
@@ -511,14 +509,29 @@ pub async fn resolve_quality_profile(
     profile
 }
 
+/// The pattern's want with its learned aliases merged in: what every
+/// pattern-driven path derives its targets and gates from.
+pub async fn pattern_media_want(
+    pool: &PgPool,
+    pattern: &watch_repo::WatchPatternRow,
+) -> Option<nats_jobs::MediaWant> {
+    let mut want =
+        serde_json::from_value::<nats_jobs::MediaWant>(pattern.media_want.clone()?).ok()?;
+    crate::learned_aliases::apply(pool, &mut want).await;
+    Some(want)
+}
+
+pub struct PatternMatchInputs {
+    pub match_config: ResolvedMatchConfig,
+    pub xem_show_map: Option<XemShowMap>,
+    pub media_want: Option<nats_jobs::MediaWant>,
+}
+
 pub async fn resolve_pattern_match_inputs(
     state: &AppState,
     pattern: &watch_repo::WatchPatternRow,
-) -> (ResolvedMatchConfig, Option<XemShowMap>) {
-    let media_want = pattern
-        .media_want
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
+) -> PatternMatchInputs {
+    let media_want = pattern_media_want(&state.pool, pattern).await;
     let naming = match &media_want {
         Some(mw) => {
             TvNaming::resolve(
@@ -532,8 +545,12 @@ pub async fn resolve_pattern_match_inputs(
         }
         None => TvNaming::default(),
     };
-    let match_config = resolve_pattern_match_config(pattern, &naming);
-    (match_config, naming.xem_show_map)
+    let match_config = resolve_pattern_match_config(pattern, media_want.as_ref(), &naming);
+    PatternMatchInputs {
+        match_config,
+        xem_show_map: naming.xem_show_map,
+        media_want,
+    }
 }
 
 /// Grouping key for batch selection: (pattern_id, episode_key).
@@ -647,7 +664,11 @@ async fn prepare_pattern(
         None
     };
 
-    let (match_config, xem_show_map) = resolve_pattern_match_inputs(state, pattern).await;
+    let PatternMatchInputs {
+        match_config,
+        xem_show_map,
+        media_want: parsed_media_want,
+    } = resolve_pattern_match_inputs(state, pattern).await;
 
     let matched_guids = watch_repo::matched_guids_for_pattern(&state.pool, pattern.id)
         .await
@@ -659,11 +680,6 @@ async fn prepare_pattern(
         .media_want
         .as_ref()
         .is_some_and(super::episode_key::is_tv_season);
-
-    let parsed_media_want = pattern
-        .media_want
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
 
     let episodes_needed = if is_season {
         pattern
@@ -1602,6 +1618,7 @@ pub struct ResolvedMatchConfig {
 /// media_want fields and augmenting with the want's scene naming.
 pub fn resolve_pattern_match_config(
     pattern: &watch_repo::WatchPatternRow,
+    media_want: Option<&nats_jobs::MediaWant>,
     naming: &TvNaming,
 ) -> ResolvedMatchConfig {
     let match_mode = pattern.match_mode.as_deref().unwrap_or("fuzzy").to_string();
@@ -1615,18 +1632,15 @@ pub fn resolve_pattern_match_config(
         .unwrap_or_default();
 
     if (patterns.is_empty() || match_targets.is_empty())
-        && let Some(media_want) = pattern
-            .media_want
-            .as_ref()
-            .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())
+        && let Some(media_want) = media_want
     {
         if patterns.is_empty() {
-            patterns = search_terms_from_media_want(&media_want);
+            patterns = search_terms_from_media_want(media_want);
         }
         if match_targets.is_empty() {
-            match_targets = match_targets_from_media_want(&media_want);
+            match_targets = match_targets_from_media_want(media_want);
         }
-        naming.augment(&media_want, &mut patterns, &mut match_targets);
+        naming.augment(media_want, &mut patterns, &mut match_targets);
     }
 
     ResolvedMatchConfig {
@@ -1641,14 +1655,12 @@ pub fn resolve_pattern_match_config(
 /// Match a release against a pattern from the repository
 pub fn match_release_with_pattern(
     pattern: &watch_repo::WatchPatternRow,
+    media_want: Option<&nats_jobs::MediaWant>,
     release_title: &str,
     naming: &TvNaming,
 ) -> Option<super::types::MatchResult> {
-    if let Some(want) = pattern
-        .media_want
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())
-        && let Some(sport) = crate::services::want::scoring::sport_title_match(&want, release_title)
+    if let Some(want) = media_want
+        && let Some(sport) = crate::services::want::scoring::sport_title_match(want, release_title)
     {
         return sport.map(|(score, matched_pattern)| super::types::MatchResult {
             score,
@@ -1656,7 +1668,7 @@ pub fn match_release_with_pattern(
         });
     }
 
-    let config = resolve_pattern_match_config(pattern, naming);
+    let config = resolve_pattern_match_config(pattern, media_want, naming);
 
     if !config.match_targets.is_empty() {
         if let Some(result) =

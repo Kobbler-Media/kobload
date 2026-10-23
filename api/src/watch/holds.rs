@@ -550,12 +550,13 @@ async fn final_search_for_hold(
         SearchContext, SearchServiceContext, SearchServiceRequest, search,
     };
 
-    // Parse the pattern's MediaWant once — it drives both the search terms and
-    // the structural gating below.
-    let parsed_media_want = pattern
-        .media_want
-        .as_ref()
-        .and_then(|mw| serde_json::from_value::<nats_jobs::MediaWant>(mw.clone()).ok());
+    // The pattern's want drives both the search terms and the structural
+    // gating below.
+    let crate::watch::PatternMatchInputs {
+        match_config,
+        xem_show_map,
+        media_want: parsed_media_want,
+    } = crate::watch::resolve_pattern_match_inputs(state, pattern).await;
 
     // Build search terms from the pattern
     let search_terms = if !pattern.patterns.is_empty() {
@@ -618,9 +619,6 @@ async fn final_search_for_hold(
     // Resolve protocol preference
     let config = resolve_protocol_config(&state.pool, pattern.media_type_id).await?;
     let preferred = config.preferred()?;
-
-    let (match_config, xem_show_map) =
-        crate::watch::resolve_pattern_match_inputs(state, pattern).await;
 
     // Resolve allowed categories for post-filtering
     let allowed_categories = if let Some(mt_id) = pattern.media_type_id {

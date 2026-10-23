@@ -70,6 +70,7 @@ pub const TABLES_IN_ORDER: &[&str] = &[
     // Depends on indexer_sources
     "indexer_category_mappings",
     "watch_patterns",
+    "learned_aliases",
     // Independent
     "status_webhooks",
     "app_settings",

@@ -16,6 +16,7 @@ pub mod http;
 pub mod indexers;
 pub mod jobs;
 pub mod language;
+pub mod learned_aliases;
 pub mod media;
 pub mod nats;
 pub mod newznab;

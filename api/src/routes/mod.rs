@@ -13,6 +13,7 @@ pub mod filesystem;
 pub mod indexer_category_mappings;
 pub mod indexer_rss_cache;
 pub mod interpret;
+pub mod learned_aliases;
 pub mod media_types;
 pub mod providers;
 pub mod quality_profiles;

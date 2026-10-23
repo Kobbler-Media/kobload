@@ -398,8 +398,11 @@ pub async fn backlog_search_pattern(
     // against. Alternate show titles (Sonarr scene mappings, XEM aliases,
     // provider alternate titles) have to reach both — a show whose releases use
     // a regional name ("The Block" → "The Block AU") matches nothing without them.
-    let (match_config, xem_show_map) =
-        crate::watch::resolve_pattern_match_inputs(state, pattern).await;
+    let crate::watch::PatternMatchInputs {
+        match_config,
+        xem_show_map,
+        media_want: parsed_media_want,
+    } = crate::watch::resolve_pattern_match_inputs(state, pattern).await;
     let min_score = match_config.min_score;
 
     // Custom patterns require per-term search; media_want uses a single cascaded call
@@ -410,12 +413,6 @@ pub async fn backlog_search_pattern(
     if search_terms.is_empty() {
         return false;
     }
-
-    // Deserialize media_want for structured Prowlarr metadata and external IDs
-    let parsed_media_want = pattern
-        .media_want
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok());
 
     let external_ids = parsed_media_want
         .as_ref()

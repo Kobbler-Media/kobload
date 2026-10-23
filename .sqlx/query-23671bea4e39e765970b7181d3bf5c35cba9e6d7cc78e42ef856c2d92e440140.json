@@ -1,0 +1,91 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO learned_aliases (scope, scope_key, scope_label, alias)\n        VALUES ($1, $2, $3, btrim($4))\n        ON CONFLICT (scope, scope_key, lower(alias)) DO UPDATE SET scope_label = EXCLUDED.scope_label\n        RETURNING id, scope, scope_key, scope_label, alias, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "scope",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "scope_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "scope_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "scope_label"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "23671bea4e39e765970b7181d3bf5c35cba9e6d7cc78e42ef856c2d92e440140"
+}

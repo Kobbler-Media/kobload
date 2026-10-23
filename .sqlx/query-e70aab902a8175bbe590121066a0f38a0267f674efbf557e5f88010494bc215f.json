@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, scope, scope_key, scope_label, alias, created_at\n        FROM learned_aliases\n        WHERE scope_key = ANY($1)\n        ORDER BY created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "scope",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "scope_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "scope_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "scope_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "scope_label"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "learned_aliases",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e70aab902a8175bbe590121066a0f38a0267f674efbf557e5f88010494bc215f"
+}

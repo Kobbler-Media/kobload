@@ -37,10 +37,13 @@ pub fn routes() -> Router<AppState> {
 async fn search_and_download(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<SearchAndDownloadRequest>,
+    Json(mut request): Json<SearchAndDownloadRequest>,
 ) -> Result<Json<SearchAndDownloadResponse>, (StatusCode, String)> {
     if require_auth(&state, &headers).await.is_err() {
         return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
+    }
+    if let Some(want) = request.media_want.as_mut() {
+        crate::learned_aliases::apply(&state.pool, want).await;
     }
 
     // If auto_download, require callback_url

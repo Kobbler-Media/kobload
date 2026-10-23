@@ -384,18 +384,15 @@ pub(super) async fn test_watch_pattern(
         None
     };
 
-    let naming = match pattern
-        .media_want
-        .as_ref()
-        .and_then(|v| serde_json::from_value::<nats_jobs::MediaWant>(v.clone()).ok())
-    {
+    let media_want = crate::watch::pattern_media_want(&state.pool, &pattern).await;
+    let naming = match &media_want {
         Some(mw) => {
             TvNaming::resolve(
                 &state.scene_mappings,
                 &state.xem_cache,
                 &state.http_client,
                 &state.pool,
-                &mw,
+                mw,
             )
             .await
         }
@@ -422,8 +419,12 @@ pub(super) async fn test_watch_pattern(
             duration_ms: Some(0),
         });
 
-        let match_result =
-            crate::watch::service::match_release_with_pattern(&pattern, title, &naming);
+        let match_result = crate::watch::service::match_release_with_pattern(
+            &pattern,
+            media_want.as_ref(),
+            title,
+            &naming,
+        );
         let parsed = parse_quality(title);
         let quality_result = quality_profile
             .as_ref()
@@ -518,8 +519,12 @@ pub(super) async fn test_watch_pattern(
 
             for release in &releases {
                 let title = &release.title;
-                let match_result =
-                    crate::watch::service::match_release_with_pattern(&pattern, title, &naming);
+                let match_result = crate::watch::service::match_release_with_pattern(
+                    &pattern,
+                    media_want.as_ref(),
+                    title,
+                    &naming,
+                );
 
                 let parsed = parse_quality(title);
                 let quality_result = quality_profile

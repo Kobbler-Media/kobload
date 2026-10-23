@@ -163,6 +163,11 @@ pub async fn stream_search(
     ctx: &StreamSearchContext<'_>,
     request: &StreamSearchRequest,
 ) -> Result<StreamSearchResponse, StreamSearchError> {
+    let mut request = request.clone();
+    if let Some(want) = request.media_want.as_mut() {
+        crate::learned_aliases::apply(ctx.pool, want).await;
+    }
+    let request = &request;
     let limit = request.limit.unwrap_or(DEFAULT_LIMIT);
 
     // Log incoming request details for debugging

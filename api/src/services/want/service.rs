@@ -21,6 +21,9 @@ pub async fn handle_want(
     let watch_pattern_id = pattern.id;
 
     request.watch_pattern_id = Some(watch_pattern_id);
+    if let Some(want) = request.media_want.as_mut() {
+        crate::learned_aliases::apply(ctx.pool, want).await;
+    }
     // The client only sends the exclusions it knows about; the pattern also holds
     // the releases Kobload watched fail, merged in by the upsert above.
     request.excluded_releases = pattern.excluded_releases;

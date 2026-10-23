@@ -10,6 +10,7 @@ pub mod hash_index;
 pub mod indexer_category_mappings;
 pub mod indexer_rss_cache;
 pub mod jobs;
+pub mod learned_aliases;
 pub mod media_types;
 pub mod quality_profiles;
 pub mod scene_mappings;

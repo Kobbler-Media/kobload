@@ -7,6 +7,7 @@
 
 pub mod client;
 pub mod debrid_mock;
+pub mod entry_points;
 pub mod mocks;
 pub mod resolve_fixture;
 pub mod server;
