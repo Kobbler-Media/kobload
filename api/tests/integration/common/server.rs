@@ -256,6 +256,23 @@ impl TestServer {
 
     /// Start a test server with custom resolvers (for mock injection).
     pub async fn start_with_options(options: TestServerOptions) -> Self {
+        Self::start_inner(
+            options,
+            Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
+        )
+        .await
+    }
+
+    pub async fn start_with_debrid(
+        debrid_providers: Arc<dyn kobload_api::debrid::DebridProviderResolver>,
+    ) -> Self {
+        Self::start_inner(TestServerOptions::default(), debrid_providers).await
+    }
+
+    async fn start_inner(
+        options: TestServerOptions,
+        debrid_providers: Arc<dyn kobload_api::debrid::DebridProviderResolver>,
+    ) -> Self {
         init_test_env().await;
 
         let base_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -317,9 +334,7 @@ impl TestServer {
             watch_pattern_events,
             nats: NatsState::new(None),
             http_client: local_only_http_client(),
-            debrid_providers: std::sync::Arc::new(
-                kobload_api::debrid::DefaultDebridProviderResolver,
-            ),
+            debrid_providers,
             download_clients: options.download_clients,
             indexers: options.indexers,
             definitions: Default::default(),
@@ -367,6 +382,7 @@ impl TestServer {
             .merge(routes::search::routes())
             .merge(routes::search_download::routes())
             .merge(routes::stream::routes())
+            .merge(routes::stream_attempts::routes())
             .merge(routes::want::routes())
             .merge(routes::watch::routes())
             .merge(routes::watch_directories::routes())

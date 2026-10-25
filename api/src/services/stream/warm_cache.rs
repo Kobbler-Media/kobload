@@ -24,11 +24,13 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use super::attempt_log::{AttemptLog, Origin, Started, Step};
 use super::flight::{self, Acquired, FlightContext, Job, ReadyLink};
 use crate::debrid::{
     DebridFile, DebridProvider, DebridProviderResolver, DebridProviderType, DebridTorrentStatus,
     Lane, Throttled,
 };
+use crate::repositories::stream_attempts::Change;
 use crate::services::stream::load_provider_config;
 use crate::types::DownloadStreamEvent;
 use nats_jobs::types::StreamOption;
@@ -123,6 +125,10 @@ pub fn lookup(key: &WarmCacheKey) -> Option<WarmCacheEntry> {
         return None;
     }
     Some(entry.clone())
+}
+
+pub fn forget(key: &WarmCacheKey) {
+    WARM_CACHE.remove(key);
 }
 
 /// Insert or update a warm cache entry.
@@ -361,17 +367,31 @@ async fn warm_one(
         return;
     }
 
+    let file_name = file.map(|f| f.path.clone()).filter(|p| !p.is_empty());
+    let log = AttemptLog::start(
+        &ctx.pool,
+        Started {
+            provider_id: option.debrid_provider_id,
+            origin: Origin::Warm,
+            info_hash: &info_hash,
+            file_id: key.file_id,
+            release_title: Some(&option.release_title),
+            file_name: file_name.as_deref(),
+        },
+    )
+    .await;
     let job = Job {
         provider_id: option.debrid_provider_id,
         info_hash: info_hash.clone(),
         file_id: key.file_id,
-        file_name: file.map(|f| f.path.clone()).filter(|p| !p.is_empty()),
+        file_name,
         magnet: option
             .magnet_url
             .clone()
             .unwrap_or_else(|| format!("magnet:?xt=urn:btih:{info_hash}")),
         release_title: Some(option.release_title.clone()),
         want_link: true,
+        log,
     };
 
     match flight::acquire(&ctx, job.clone(), Lane::background()).await {
@@ -402,6 +422,21 @@ async fn warm_one(
         }
         Acquired::Pending { torrent_id, reused } => {
             debug!(info_hash = %info_hash, idx, "Warm cache: not cached, releasing slot");
+            let message = if reused {
+                "Not cached; the torrent was already on the account, so it was left there"
+            } else {
+                "Not cached; probe deleted to free its slot"
+            };
+            job.log
+                .record(
+                    Step::Released,
+                    message,
+                    Change {
+                        status: Some("uncached"),
+                        ..Default::default()
+                    },
+                )
+                .await;
             super::outcomes::record_probe(
                 &ctx.pool,
                 job.provider_id,
@@ -448,13 +483,24 @@ async fn poll_warm_entry(
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
-        if Instant::now() > deadline {
-            info!(info_hash = %key.info_hash, "Warm poll: timed out");
-            record(Some(UnavailableReason::Dead)).await;
-            break;
-        }
-        if lookup(&key).is_none() {
-            debug!(info_hash = %key.info_hash, "Warm poll: entry expired, stopping");
+        let timed_out = Instant::now() > deadline;
+        if timed_out || lookup(&key).is_none() {
+            if timed_out {
+                info!(info_hash = %key.info_hash, "Warm poll: timed out");
+                record(Some(UnavailableReason::Dead)).await;
+            } else {
+                debug!(info_hash = %key.info_hash, "Warm poll: entry expired, stopping");
+            }
+            job.log
+                .record(
+                    Step::TimedOut,
+                    format!(
+                        "Gave up after {}s; the provider had not cached it",
+                        POLL_TIMEOUT.as_secs()
+                    ),
+                    Change::failed("Timed out waiting for the provider to cache it"),
+                )
+                .await;
             break;
         }
 
@@ -503,9 +549,24 @@ async fn poll_warm_entry(
                         );
                         emit_warm_ready(&download_events, &key, &debrid_provider_name);
                         record(None).await;
+                        job.log
+                            .record(
+                                Step::Ready,
+                                format!("Cached (100%); link unrestricted: {}", link.filename),
+                                Change {
+                                    status: Some("ready"),
+                                    progress: Some(1.0),
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
                     }
                     Err(e) => {
                         warn!(error = %e, "Warm poll: unrestrict failed");
+                        let message = format!("Failed to unrestrict link: {e}");
+                        job.log
+                            .record(Step::Failed, &message, Change::failed(&message))
+                            .await;
                         failed(key, e.to_string());
                     }
                 }
@@ -520,6 +581,21 @@ async fn poll_warm_entry(
                     ),
                 };
                 warn!(info_hash = %key.info_hash, error = %error, "Warm poll: provider gave up on torrent");
+                let (step, status) = match reason {
+                    UnavailableReason::Blocked => (Step::Refused, "refused"),
+                    UnavailableReason::Dead => (Step::Failed, "failed"),
+                };
+                job.log
+                    .record(
+                        step,
+                        &error,
+                        Change {
+                            status: Some(status),
+                            error: Some(error.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
                 record(Some(reason)).await;
                 flight::release_probe(&ctx, &job, &torrent_id).await;
                 failed(key, error);
@@ -535,6 +611,7 @@ async fn poll_warm_entry(
                     warn!(info_hash = %key.info_hash, error = %e, "Warm poll: select_files failed");
                 }
             }
+            DebridTorrentStatus::Downloading { progress } => job.log.progress(progress).await,
             _ => {}
         }
     }

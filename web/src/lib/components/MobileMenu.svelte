@@ -38,7 +38,7 @@
     'match history': ['matches', 'found', 'results'],
     'search log': ['decision', 'log', 'search decisions', 'backlog'],
     'feed log': ['rss', 'feed', 'sync', 'feed decisions'],
-    'debrid log': ['debrid', 'stream', 'debrid decisions']
+    'debrid log': ['debrid', 'stream', 'streams', 'cached', 'real-debrid', 'debrid decisions']
   };
 
   function matchesFilter(label: string, query: string): boolean {

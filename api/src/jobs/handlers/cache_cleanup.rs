@@ -1,11 +1,11 @@
 //! Handler for cleaning up expired search cache entries.
 //!
-//! Runs periodically to prune expired search cache, XEM, stream outcome and
-//! release sighting rows.
+//! Runs periodically to prune expired search cache, XEM, stream outcome, stream
+//! attempt and release sighting rows.
 
 use crate::jobs::JobError;
 use crate::jobs::worker::JobHandler;
-use crate::repositories::{release_sightings, search_cache, xem_cache};
+use crate::repositories::{release_sightings, search_cache, stream_attempts, xem_cache};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -78,6 +78,23 @@ impl JobHandler for CacheCleanupHandler {
             info!(deleted = sightings_deleted, "Pruned old release sightings");
         }
 
+        let attempts_abandoned = stream_attempts::abandon_stale(
+            &self.pool,
+            stream_attempts::STALE_MINUTES,
+            &format!(
+                "No activity for {} minutes; the client stopped waiting",
+                stream_attempts::STALE_MINUTES
+            ),
+        )
+        .await
+        .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+        let attempts_deleted = stream_attempts::prune(&self.pool, stream_attempts::RETENTION_HOURS)
+            .await
+            .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+        if attempts_deleted > 0 {
+            info!(deleted = attempts_deleted, "Pruned old stream attempts");
+        }
+
         let probes_ingested = crate::services::stream::outcomes::ingest_past_probes(&self.pool)
             .await
             .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
@@ -94,6 +111,8 @@ impl JobHandler for CacheCleanupHandler {
             "stream_release_outcomes_deleted": releases_deleted,
             "stream_trait_outcomes_deleted": traits_deleted,
             "release_sightings_deleted": sightings_deleted,
+            "stream_attempts_abandoned": attempts_abandoned,
+            "stream_attempts_deleted": attempts_deleted,
             "stream_probes_ingested": probes_ingested
         }))
     }

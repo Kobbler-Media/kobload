@@ -11,9 +11,11 @@ use crate::debrid::{
 };
 use nats_jobs::types::{StreamPriority, StreamResolveRequest, StreamResolveResponse};
 
+use super::attempt_log::{AttemptLog, Origin, Started, Step};
 use super::flight::{self, Acquired, FlightContext, Job, REFUSED_MESSAGE};
 use super::service::StreamSearchError;
 use super::warm_cache::{self, WarmCacheEntry, WarmCacheKey};
+use crate::repositories::stream_attempts::Change;
 
 /// Maximum time to wait for a torrent to become ready (120 seconds).
 /// Uncached content may take time to download on the debrid provider.
@@ -90,6 +92,18 @@ async fn resolve_torrent(
     info_hash: &str,
     request: &StreamResolveRequest,
 ) -> Result<StreamResolveResponse, StreamSearchError> {
+    let log = AttemptLog::start(
+        &ctx.pool,
+        Started {
+            provider_id: request.debrid_provider_id,
+            origin: Origin::Play,
+            info_hash,
+            file_id: request.file_id,
+            release_title: None,
+            file_name: None,
+        },
+    )
+    .await;
     let warm_key = WarmCacheKey {
         debrid_provider_id: request.debrid_provider_id,
         info_hash: info_hash.to_string(),
@@ -106,6 +120,18 @@ async fn resolve_torrent(
     }) = warm_cache::lookup(&warm_key)
     {
         info!(info_hash = %info_hash, "Warm cache hit (Ready) — returning pre-resolved stream URL");
+        log.record(
+            Step::WarmHit,
+            format!("Already resolved by cache warming: {filename}"),
+            Change {
+                status: Some("ready"),
+                cached: Some(true),
+                progress: Some(1.0),
+                torrent_id: Some(super::attempt_log::raw_torrent_id(&torrent_id)),
+                ..Default::default()
+            },
+        )
+        .await;
         return Ok(StreamResolveResponse {
             stream_url,
             filename,
@@ -126,6 +152,16 @@ async fn resolve_torrent(
     // ordered before that; this keeps walking into them free.
     if is_known_blocked(&ctx.pool, info_hash, request.debrid_provider_id).await {
         info!(info_hash = %info_hash, "Resolve: hash is known-blocked, refusing without calling provider");
+        log.record(
+            Step::KnownBlocked,
+            "Provider refused this hash within the last 30 days; not asked again",
+            Change {
+                status: Some("refused"),
+                error: Some(REFUSED_MESSAGE.to_string()),
+                ..Default::default()
+            },
+        )
+        .await;
         return Err(StreamSearchError::DebridError(REFUSED_MESSAGE.to_string()));
     }
 
@@ -141,6 +177,7 @@ async fn resolve_torrent(
             .unwrap_or_else(|| format!("magnet:?xt=urn:btih:{info_hash}")),
         release_title: None,
         want_link: true,
+        log,
     };
     match flight::acquire(ctx, job, lane).await {
         Acquired::Ready { link, torrent_id } => {

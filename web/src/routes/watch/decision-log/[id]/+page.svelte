@@ -218,7 +218,7 @@
 
   function getBackLink(): string {
     if (session?.trigger_type === 'feed_sync') return '/watch/feed-log';
-    if (session?.trigger_type === 'debrid_search') return '/watch/debrid-log';
+    if (session?.trigger_type === 'debrid_search') return '/watch/debrid-log?tab=searches';
     return '/watch/search-log';
   }
 

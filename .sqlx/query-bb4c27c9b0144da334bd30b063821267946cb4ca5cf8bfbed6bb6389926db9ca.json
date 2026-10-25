@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO stream_attempt_events (attempt_id, event_type, message) VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bb4c27c9b0144da334bd30b063821267946cb4ca5cf8bfbed6bb6389926db9ca"
+}

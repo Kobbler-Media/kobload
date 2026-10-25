@@ -10,11 +10,13 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::account_index;
+use super::attempt_log::{AttemptLog, Step};
 use super::warm_cache::{UnavailableReason, reason_for_error};
 use crate::debrid::{
     DebridError, DebridFile, DebridProvider, DebridProviderType, DebridTorrent,
     DebridTorrentStatus, ExistingTorrent, Lane, Throttled,
 };
+use crate::repositories::stream_attempts::Change;
 
 /// What kobbler's `classify` reads as `blocked`; keep "refused this" in it.
 pub const REFUSED_MESSAGE: &str = "Real-Debrid refused this release. Try a different source.";
@@ -62,6 +64,7 @@ pub struct Job {
     pub release_title: Option<String>,
     /// A download fetches every link itself; only a stream needs one unrestricted here.
     pub want_link: bool,
+    pub log: AttemptLog,
 }
 
 impl Job {
@@ -100,7 +103,7 @@ fn is_claimed(provider_id: Uuid, info_hash: &str) -> bool {
         .is_some_and(|at| at.elapsed() < CLAIM_TTL)
 }
 
-enum Step {
+enum Flow {
     Join(Shared<BoxFuture<'static, Acquired>>),
     Wait(Shared<BoxFuture<'static, Acquired>>),
     Lead(Shared<BoxFuture<'static, Acquired>>),
@@ -118,34 +121,43 @@ pub async fn acquire(ctx: &FlightContext, job: Job, lane: Lane) -> Acquired {
                 if e.get().started.elapsed() > STALE_FLIGHT {
                     let (flight, outcome) = launch(ctx, &job, &lane);
                     e.insert(flight);
-                    Step::Lead(outcome)
+                    Flow::Lead(outcome)
                 } else {
                     let flight = e.get();
                     if lane.is_user() {
                         flight.lane.promote();
                     }
                     if flight.file_id == job.file_id && flight.want_link == job.want_link {
-                        Step::Join(flight.outcome.clone())
+                        Flow::Join(flight.outcome.clone())
                     } else {
-                        Step::Wait(flight.outcome.clone())
+                        Flow::Wait(flight.outcome.clone())
                     }
                 }
             }
             dashmap::Entry::Vacant(v) => {
                 let (flight, outcome) = launch(ctx, &job, &lane);
                 v.insert(flight);
-                Step::Lead(outcome)
+                Flow::Lead(outcome)
             }
         };
         match step {
-            Step::Join(outcome) => {
+            Flow::Join(outcome) => {
                 debug!(info_hash = %job.info_hash, "Joining in-flight debrid work");
-                return outcome.await;
+                job.log
+                    .record(
+                        Step::Joined,
+                        "Joined work already in flight for this hash",
+                        Change::default(),
+                    )
+                    .await;
+                let out = outcome.await;
+                job.log.finish(&out).await;
+                return out;
             }
-            Step::Wait(outcome) => {
+            Flow::Wait(outcome) => {
                 outcome.await;
             }
-            Step::Lead(outcome) => return outcome.await,
+            Flow::Lead(outcome) => return outcome.await,
         }
     }
 }
@@ -186,7 +198,10 @@ struct Run {
 
 async fn run(ctx: FlightContext, job: Job, lane: Lane) -> Acquired {
     let handler = Throttled::new(ctx.provider.clone(), &ctx.api_key, lane);
-    Run { ctx, job, handler }.go().await
+    let run = Run { ctx, job, handler };
+    let out = run.go().await;
+    run.job.log.finish(&out).await;
+    out
 }
 
 struct Target {
@@ -207,6 +222,7 @@ impl Run {
             Ok(placed) => placed,
             Err(out) => return out,
         };
+        self.log_cache_check(&torrent).await;
 
         match torrent.status {
             DebridTorrentStatus::Blocked => {
@@ -266,6 +282,15 @@ impl Run {
         match self.get(&found.id).await {
             Ok(t) if t.serves(target.name.as_deref(), target.id) => {
                 debug!(info_hash = %self.job.info_hash, torrent_id = %found.id, "Reusing existing torrent");
+                self.log_placed(
+                    Step::Reused,
+                    format!(
+                        "Torrent {} already on the account serves this file",
+                        found.id
+                    ),
+                    &found.id,
+                )
+                .await;
                 Ok((found.id, true, t))
             }
             Ok(_) => {
@@ -308,6 +333,14 @@ impl Run {
             return Ok((torrent_id, reused, torrent));
         }
         info!(info_hash = %self.job.info_hash, "Pack is not wholly cached; selecting just the wanted file");
+        self.job
+            .log
+            .record(
+                Step::Readded,
+                "Pack is not wholly cached; re-adding with just the wanted file",
+                Change::default(),
+            )
+            .await;
         self.discard(&torrent_id, false).await;
         let (torrent_id, _, _) = self.add_and_get().await?;
         let torrent = self.select(&torrent_id, false, &single).await?;
@@ -334,6 +367,8 @@ impl Run {
             }
             Err(e) => return Err(self.failed(None, false, "Failed to add magnet", e).await),
         };
+        self.log_placed(Step::Added, format!("Magnet added as torrent {id}"), &id)
+            .await;
         account_index::record_added(
             self.job.provider_id,
             &self.job.info_hash,
@@ -358,11 +393,19 @@ impl Run {
         ids: &[i32],
     ) -> Result<DebridTorrent, Acquired> {
         info!(info_hash = %self.job.info_hash, select_ids = ?ids, "Selecting files");
-        if let Err(e) = self
+        let selected = self
             .handler
             .select_files(&self.ctx.http_client, &self.ctx.api_key, torrent_id, ids)
-            .await
-        {
+            .await;
+        let message = match &selected {
+            Ok(()) => format!("Selected files {ids:?}"),
+            Err(e) => format!("Selecting files {ids:?} failed: {e}"),
+        };
+        self.job
+            .log
+            .record(Step::Selected, message, Change::default())
+            .await;
+        if let Err(e) = selected {
             warn!(info_hash = %self.job.info_hash, error = %e, "select_files failed");
         }
         let mut torrent = self.get(torrent_id).await;
@@ -467,6 +510,52 @@ impl Run {
             unavailable,
         )
         .await;
+    }
+
+    async fn log_placed(&self, step: Step, message: String, torrent_id: &str) {
+        let change = Change {
+            torrent_id: Some(torrent_id.to_string()),
+            ..Default::default()
+        };
+        self.job.log.record(step, message, change).await;
+    }
+
+    async fn log_cache_check(&self, torrent: &DebridTorrent) {
+        let (cached, progress, message) = match &torrent.status {
+            DebridTorrentStatus::Cached | DebridTorrentStatus::Ready
+                if !torrent.links.is_empty() =>
+            {
+                (Some(true), Some(1.0), "Cached on the provider".to_string())
+            }
+            DebridTorrentStatus::Cached | DebridTorrentStatus::Ready => (
+                Some(true),
+                None,
+                "Provider says ready but has no links yet".to_string(),
+            ),
+            DebridTorrentStatus::Downloading { progress } => (
+                Some(false),
+                Some(*progress),
+                format!(
+                    "Not cached: provider is downloading ({:.0}%)",
+                    progress * 100.0
+                ),
+            ),
+            DebridTorrentStatus::WaitingFileSelection => {
+                (None, None, "Still waiting for file selection".to_string())
+            }
+            DebridTorrentStatus::Blocked => {
+                (None, None, "Provider refused the torrent".to_string())
+            }
+            DebridTorrentStatus::Error { message } => {
+                (None, None, format!("Provider reports an error: {message}"))
+            }
+        };
+        let change = Change {
+            cached,
+            progress,
+            ..Default::default()
+        };
+        self.job.log.record(Step::CacheCheck, message, change).await;
     }
 
     async fn indexed_file_name(&self) -> Option<String> {

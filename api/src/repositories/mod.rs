@@ -17,6 +17,7 @@ pub mod release_sightings;
 pub mod review;
 pub mod scene_mappings;
 pub mod search_cache;
+pub mod stream_attempts;
 pub mod stream_outcomes;
 pub mod trash_filters;
 pub mod watch;

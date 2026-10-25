@@ -38,6 +38,7 @@ struct MockState {
     next_id: u32,
     calls: Vec<MockCall>,
     rate_limited_adds: u32,
+    progress: HashMap<String, f32>,
 }
 
 /// A stateful in-memory debrid account. Every call is logged with the hash it concerns.
@@ -113,6 +114,22 @@ impl MockDebrid {
             .into_iter()
             .map(|(_, t)| t.selected.clone())
             .collect()
+    }
+
+    pub fn set_release(&self, hash: &str, release: MockRelease) {
+        self.state
+            .lock()
+            .unwrap()
+            .releases
+            .insert(hash.to_string(), release);
+    }
+
+    pub fn set_progress(&self, hash: &str, progress: f32) {
+        self.state
+            .lock()
+            .unwrap()
+            .progress
+            .insert(hash.to_string(), progress);
     }
 
     pub fn rate_limit_next_adds(&self, n: u32) {
@@ -303,7 +320,16 @@ impl DebridProvider for MockDebrid {
                     .collect(),
             ),
             (false, false) => (
-                DebridTorrentStatus::Downloading { progress: 0.0 },
+                DebridTorrentStatus::Downloading {
+                    progress: self
+                        .state
+                        .lock()
+                        .unwrap()
+                        .progress
+                        .get(&hash)
+                        .copied()
+                        .unwrap_or(0.0),
+                },
                 Vec::new(),
             ),
         };

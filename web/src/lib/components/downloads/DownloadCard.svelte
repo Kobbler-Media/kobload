@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { DownloadItem, DownloadEvent } from '$lib/api/client';
   import { rescanDownload } from '$lib/api/client';
-  import DownloadEvents from './DownloadEvents.svelte';
+  import EventTimeline from '../EventTimeline.svelte';
+  import { downloadEventTones } from '$lib/styles/eventTones';
 
   interface Props {
     item: DownloadItem;
@@ -347,7 +348,7 @@
         </details>
       {/if}
 
-      <DownloadEvents {events} {loadingEvents} />
+      <EventTimeline {events} {loadingEvents} tones={downloadEventTones} />
     </div>
   {/if}
 </div>

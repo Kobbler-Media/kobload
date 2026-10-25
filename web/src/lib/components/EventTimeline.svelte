@@ -1,12 +1,13 @@
 <script lang="ts">
-  import type { DownloadEvent } from '$lib/api/client';
+  import type { EventTone, TimelineEvent } from '$lib/styles/eventTones';
 
   interface Props {
-    events: DownloadEvent[] | undefined;
+    events: TimelineEvent[] | undefined;
     loadingEvents: boolean;
+    tones: Record<string, EventTone>;
   }
 
-  let { events, loadingEvents }: Props = $props();
+  let { events, loadingEvents, tones }: Props = $props();
 </script>
 
 <div class="details-section">
@@ -18,7 +19,7 @@
       {#each events as event (event.id)}
         <li class="event-item">
           <div class="event-header">
-            <span class={`event-type event-type-${event.event_type.replace(/_/g, '-')}`}>
+            <span class={`event-type tone-${tones[event.event_type] ?? 'none'}`}>
               {event.event_type.replace(/_/g, ' ')}
             </span>
             <span class="event-time">
@@ -97,40 +98,29 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .event-type-created,
-  .event-type-client-add-success {
+  .tone-good {
     background: rgba(46, 160, 67, 0.2);
     color: #3fb950;
   }
 
-  .event-type-status-changed {
+  .tone-info {
     background: rgba(59, 130, 246, 0.2);
     color: #3b82f6;
   }
 
-  .event-type-callback-sent,
-  .event-type-import-confirmed {
+  .tone-accent {
     background: rgba(139, 92, 246, 0.2);
     color: #a78bfa;
   }
 
-  .event-type-client-add-failed,
-  .event-type-poll-error,
-  .event-type-callback-failed,
-  .event-type-remove-failed {
+  .tone-bad {
     background: rgba(220, 53, 69, 0.2);
     color: #dc3545;
   }
 
-  .event-type-cancelled,
-  .event-type-removed {
+  .tone-warn {
     background: rgba(202, 138, 4, 0.2);
     color: #ca8a04;
-  }
-
-  .event-type-reingest-started {
-    background: rgba(139, 92, 246, 0.2);
-    color: #a78bfa;
   }
 
   .event-time {

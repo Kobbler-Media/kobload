@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use crate::auth::require_auth;
 use crate::debrid::{DebridProvider, DebridProviderType, DebridTorrentStatus, Lane, Throttled};
+use crate::repositories::stream_attempts::Change;
+use crate::services::stream::attempt_log::{AttemptLog, Step, raw_torrent_id};
 use crate::services::stream::{
     StreamResolveContext, StreamSearchContext, load_provider_config, stream_resolve, stream_search,
 };
@@ -97,7 +99,31 @@ async fn stream_outcome_handler(
     crate::services::stream::outcomes::record_report(&state.pool, &report)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    log_playback(&state, &report).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn log_playback(state: &AppState, report: &StreamOutcomeReport) {
+    let log = AttemptLog::for_release(
+        &state.pool,
+        report.debrid_provider_id,
+        &report.info_hash.to_lowercase(),
+        report.file_id,
+    )
+    .await;
+    if report.ok {
+        let change = Change {
+            status: Some("played"),
+            ..Default::default()
+        };
+        log.record(Step::Played, "Client reported playback working", change)
+            .await;
+    } else {
+        let reason = report.reason.as_deref().unwrap_or("no reason given");
+        let message = format!("Playback failed on the client: {reason}");
+        log.record(Step::PlaybackFailed, &message, Change::failed(&message))
+            .await;
+    }
 }
 
 // =============================================================================
@@ -133,11 +159,57 @@ async fn stream_resolve_status_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ResolveStatusQuery>,
-) -> Result<impl axum::response::IntoResponse, (StatusCode, String)> {
+) -> Result<Json<ResolveStatusResponse>, (StatusCode, String)> {
     if require_auth(&state, &headers).await.is_err() {
         return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
     }
+    let result = resolve_status(&state, &query).await;
+    log_status_poll(&state, &query, &result).await;
+    result.map(Json)
+}
 
+async fn log_status_poll(
+    state: &AppState,
+    query: &ResolveStatusQuery,
+    result: &Result<ResolveStatusResponse, (StatusCode, String)>,
+) {
+    let torrent_id = raw_torrent_id(&query.torrent_id);
+    for log in AttemptLog::for_torrent(&state.pool, query.provider_id, &torrent_id).await {
+        match result {
+            Ok(r) if r.status == "ready" => {
+                let message = format!(
+                    "Cached (100%); link unrestricted: {}",
+                    r.filename.as_deref().unwrap_or_default()
+                );
+                let change = Change {
+                    status: Some("ready"),
+                    progress: Some(1.0),
+                    ..Default::default()
+                };
+                log.record(Step::Ready, message, change).await;
+            }
+            Ok(r) if r.status == "error" => {
+                let message = r.message.as_deref().unwrap_or("Provider reported an error");
+                log.record(Step::Failed, message, Change::failed(message))
+                    .await;
+            }
+            Ok(r) => log.progress(r.progress.unwrap_or(0.0)).await,
+            Err((code, message)) => {
+                log.record(
+                    Step::PollError,
+                    format!("Status poll failed ({code}): {message}"),
+                    Change::default(),
+                )
+                .await;
+            }
+        }
+    }
+}
+
+async fn resolve_status(
+    state: &AppState,
+    query: &ResolveStatusQuery,
+) -> Result<ResolveStatusResponse, (StatusCode, String)> {
     // Parse provider-prefixed torrent ID
     let (provider_type_from_prefix, raw_torrent_id) =
         DebridProviderType::from_prefixed_id(&query.torrent_id).ok_or_else(|| {
@@ -189,14 +261,14 @@ async fn stream_resolve_status_handler(
     match torrent.status {
         DebridTorrentStatus::Cached | DebridTorrentStatus::Ready => {
             if torrent.links.is_empty() {
-                return Ok(Json(ResolveStatusResponse {
+                return Ok(ResolveStatusResponse {
                     status: "downloading".to_string(),
                     stream_url: None,
                     filename: None,
                     filesize: None,
                     progress: Some(0.99),
                     message: Some("Waiting for links...".to_string()),
-                }));
+                });
             }
 
             let download_link = torrent.links.first().unwrap();
@@ -212,14 +284,14 @@ async fn stream_resolve_status_handler(
                     )
                 })?;
 
-            Ok(Json(ResolveStatusResponse {
+            Ok(ResolveStatusResponse {
                 status: "ready".to_string(),
                 stream_url: Some(unrestricted.url),
                 filename: Some(unrestricted.filename),
                 filesize: Some(unrestricted.filesize),
                 progress: None,
                 message: None,
-            }))
+            })
         }
         DebridTorrentStatus::WaitingFileSelection => {
             // File selection was lost — resolve correct file IDs from provider's file list.
@@ -237,42 +309,42 @@ async fn stream_resolve_status_handler(
                 warn!(error = %e, "select_files failed in status poll");
             }
             // Report as downloading so frontend keeps polling
-            Ok(Json(ResolveStatusResponse {
+            Ok(ResolveStatusResponse {
                 status: "downloading".to_string(),
                 stream_url: None,
                 filename: None,
                 filesize: None,
                 progress: Some(0.0),
                 message: None,
-            }))
+            })
         }
-        DebridTorrentStatus::Downloading { progress } => Ok(Json(ResolveStatusResponse {
+        DebridTorrentStatus::Downloading { progress } => Ok(ResolveStatusResponse {
             status: "downloading".to_string(),
             stream_url: None,
             filename: None,
             filesize: None,
             progress: Some(progress),
             message: None,
-        })),
+        }),
         // Not recorded to debrid_availability_cache: this endpoint is keyed by
         // torrent_id and has no info_hash to record against. In practice
         // resolve_torrent catches a block before the client starts polling, so
         // this arm is the rare case where a torrent is refused mid-download.
-        DebridTorrentStatus::Blocked => Ok(Json(ResolveStatusResponse {
+        DebridTorrentStatus::Blocked => Ok(ResolveStatusResponse {
             status: "error".to_string(),
             stream_url: None,
             filename: None,
             filesize: None,
             progress: None,
             message: Some("Real-Debrid refused this release. Try a different source.".to_string()),
-        })),
-        DebridTorrentStatus::Error { message } => Ok(Json(ResolveStatusResponse {
+        }),
+        DebridTorrentStatus::Error { message } => Ok(ResolveStatusResponse {
             status: "error".to_string(),
             stream_url: None,
             filename: None,
             filesize: None,
             progress: None,
             message: Some(message),
-        })),
+        }),
     }
 }

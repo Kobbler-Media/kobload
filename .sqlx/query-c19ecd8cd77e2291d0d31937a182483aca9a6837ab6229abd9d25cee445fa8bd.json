@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE stream_attempts SET\n               status = COALESCE($2, status),\n               cached = COALESCE($3, cached),\n               progress = COALESCE($4, progress),\n               torrent_id = COALESCE($5, torrent_id),\n               error = COALESCE($6, error),\n               ready_at = CASE WHEN $2 = 'ready' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,\n               updated_at = NOW()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Float4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c19ecd8cd77e2291d0d31937a182483aca9a6837ab6229abd9d25cee445fa8bd"
+}

@@ -14,6 +14,7 @@ use crate::debrid::{
     DebridFile, DebridProvider, DebridProviderResolver, DebridTorrentStatus, Lane, Throttled,
 };
 use crate::download_clients::{DownloadClientError, PollResult, ScannedFile, get_extension};
+use crate::services::stream::attempt_log::AttemptLog;
 use crate::services::stream::flight::{self, Acquired, FlightContext, Job};
 use crate::types::{DownloadClientConfig, TestConnectionResult};
 
@@ -187,6 +188,7 @@ impl DownloadClientHandler for DebridHandler {
             magnet: url.to_string(),
             release_title: None,
             want_link: false,
+            log: AttemptLog::off(),
         };
         // Shares the account listing, the rate gate and any in-flight add of the same hash
         // with streaming, and keeps warming from deleting the torrent this grab now owns.

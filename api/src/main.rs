@@ -331,6 +331,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::search::routes())
         .merge(routes::search_download::routes())
         .merge(routes::stream::routes())
+        .merge(routes::stream_attempts::routes())
         .merge(routes::want::routes())
         .merge(routes::watch::routes())
         .merge(routes::watch_directories::routes())

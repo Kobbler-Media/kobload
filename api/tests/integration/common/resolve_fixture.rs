@@ -8,6 +8,7 @@ use nats_jobs::types::{
     StreamFile, StreamOption, StreamPriority, StreamResolveRequest, StreamResolveResponse,
     StreamSourceType,
 };
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::TestServer;
@@ -27,7 +28,8 @@ impl Fixture {
     }
 
     pub async fn with_mock(mock: Arc<MockDebrid>) -> Self {
-        let server = TestServer::start().await;
+        let resolver = mock.resolver();
+        let server = TestServer::start_with_debrid(resolver.clone()).await;
         let provider_id: Uuid = sqlx::query_scalar(
             "INSERT INTO debrid_providers (name, provider_type, api_key)
              VALUES ('mock', 'real_debrid', $1) RETURNING id",
@@ -36,7 +38,6 @@ impl Fixture {
         .fetch_one(&server.pool)
         .await
         .expect("create provider");
-        let resolver = mock.resolver();
         Self {
             server,
             provider_id,
@@ -132,5 +133,87 @@ impl Fixture {
             size: 2_000_000_000,
         }];
         option
+    }
+
+    pub async fn enable_debrid_log(&self) {
+        kobload_api::repositories::app_settings::set(
+            &self.server.pool,
+            kobload_api::repositories::app_settings::keys::DEBRID_LOGGING_ENABLED,
+            &json!(true),
+        )
+        .await
+        .expect("enable debrid log");
+    }
+
+    pub async fn http_resolve(&self, hash: &str) -> Value {
+        let resp = self
+            .server
+            .admin_client()
+            .post_json(
+                "/api/v1/stream/resolve",
+                &json!({"debrid_provider_id": self.provider_id, "info_hash": hash}),
+            )
+            .await;
+        if resp.status.is_success() {
+            resp.json()
+        } else {
+            json!({"error": resp.text()})
+        }
+    }
+
+    pub async fn poll_status(&self, torrent_id: &str) -> Value {
+        let resp = self
+            .server
+            .admin_client()
+            .get(&format!(
+                "/api/v1/stream/resolve/status?provider_id={}&torrent_id={torrent_id}",
+                self.provider_id
+            ))
+            .await;
+        resp.assert_ok();
+        resp.json()
+    }
+
+    pub async fn report(&self, hash: &str, ok: bool, reason: Option<&str>) {
+        self.server
+            .admin_client()
+            .post_json(
+                "/api/v1/stream/outcome",
+                &json!({"debrid_provider_id": self.provider_id, "info_hash": hash, "ok": ok, "reason": reason}),
+            )
+            .await
+            .assert_success();
+    }
+
+    pub async fn attempts(&self) -> Vec<Value> {
+        let resp = self
+            .server
+            .admin_client()
+            .get("/api/v1/stream-attempts")
+            .await;
+        resp.assert_ok();
+        resp.json()
+    }
+
+    pub async fn attempt(&self, hash: &str, origin: &str) -> Value {
+        self.attempts()
+            .await
+            .into_iter()
+            .find(|a| a["info_hash"] == hash && a["origin"] == origin)
+            .unwrap_or_else(|| panic!("no {origin} attempt for {hash}"))
+    }
+
+    pub async fn event_types(&self, attempt: &Value) -> Vec<String> {
+        let id = attempt["id"].as_str().expect("attempt id");
+        let resp = self
+            .server
+            .admin_client()
+            .get(&format!("/api/v1/stream-attempts/{id}/events"))
+            .await;
+        resp.assert_ok();
+        resp.json::<Vec<Value>>()
+            .iter()
+            .map(|e| e["event_type"].as_str().unwrap_or_default().to_string())
+            .collect()
     }
 }

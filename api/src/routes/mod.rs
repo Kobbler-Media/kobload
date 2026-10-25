@@ -21,6 +21,7 @@ pub mod review;
 pub mod search;
 pub mod search_download;
 pub mod stream;
+pub mod stream_attempts;
 pub mod system_health;
 pub mod want;
 pub mod watch;

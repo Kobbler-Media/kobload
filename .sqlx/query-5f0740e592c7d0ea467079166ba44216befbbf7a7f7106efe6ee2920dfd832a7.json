@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM stream_attempts WHERE created_at < NOW() - make_interval(hours => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f0740e592c7d0ea467079166ba44216befbbf7a7f7106efe6ee2920dfd832a7"
+}

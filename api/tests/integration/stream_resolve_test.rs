@@ -195,3 +195,42 @@ async fn test_warm_verdicts_reach_the_next_resolve_and_search() {
     assert_eq!(f.mock.count("add_magnet", None), adds);
     f.server.cleanup().await;
 }
+
+/// The incident: a warmed link the debrid host stopped serving was handed out for every
+/// resolve of its release for hours, twenty failed plays in a row, because the warm entry
+/// outlived every report that it did not work.
+#[tokio::test]
+async fn test_a_reported_failure_drops_the_warmed_link() {
+    let f = Fixture::new(5, &[]).await;
+    f.resolve_file(&hash('a'), 16).await.unwrap();
+    f.resolve_file(&hash('a'), 16).await.unwrap();
+    let unrestricts = || f.mock.count("unrestrict_link", Some(&hash('a')));
+    assert_eq!(
+        unrestricts(),
+        1,
+        "a second resolve did not reuse the warmed link"
+    );
+
+    f.server
+        .admin_client()
+        .post_json(
+            "/api/v1/stream/outcome",
+            &serde_json::json!({
+                "debrid_provider_id": f.provider_id,
+                "info_hash": hash('a').to_uppercase(),
+                "file_id": 16,
+                "ok": false,
+                "reason": "probe_failed",
+            }),
+        )
+        .await
+        .assert_status(reqwest::StatusCode::NO_CONTENT);
+
+    f.resolve_file(&hash('a'), 16).await.unwrap();
+    assert_eq!(
+        unrestricts(),
+        2,
+        "the link reported dead was handed out again"
+    );
+    f.server.cleanup().await;
+}

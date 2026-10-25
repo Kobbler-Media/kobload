@@ -25,6 +25,25 @@ export function getDownloadStatusStyle(status: string): StatusStyle {
   return downloadStatusMap[status] ?? { ...defaultDownloadStyle, label: status };
 }
 
+// --- Debrid stream attempt status ---
+
+const streamAttemptStatusMap: Record<string, StatusStyle> = {
+  resolving: { bg: '#3b82f6', color: '#fff', label: 'Resolving' },
+  caching: { bg: '#8b5cf6', color: '#fff', label: 'Caching' },
+  ready: { bg: '#22c55e', color: '#fff', label: 'Ready' },
+  played: { bg: '#10b981', color: '#fff', label: 'Played' },
+  uncached: { bg: '#6b7280', color: '#fff', label: 'Not Cached' },
+  refused: { bg: '#f97316', color: '#fff', label: 'Refused' },
+  failed: { bg: '#ef4444', color: '#fff', label: 'Failed' },
+  abandoned: { bg: '#ca8a04', color: '#000', label: 'Abandoned' }
+};
+
+export const streamAttemptStatuses = Object.keys(streamAttemptStatusMap);
+
+export function getStreamAttemptStatusStyle(status: string): StatusStyle {
+  return streamAttemptStatusMap[status] ?? { ...defaultDownloadStyle, label: status };
+}
+
 // --- Watch pattern status (effective status after grouping logic) ---
 
 const watchStatusMap: Record<string, { bg: string; color: string; label: string }> = {

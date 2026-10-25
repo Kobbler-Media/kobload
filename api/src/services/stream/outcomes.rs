@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::binge;
 use super::trait_risk::{BASELINE, HALF_LIFE_SECS, release_traits};
-use super::warm_cache::{UnavailableReason, record_availability};
+use super::warm_cache::{self, UnavailableReason, WarmCacheKey, record_availability};
 use crate::repositories::stream_outcomes::{self as repo, TraitDecay};
 use crate::repositories::{RepositoryError, app_settings};
 use nats_jobs::types::{StreamOutcomeReport, StreamPlayback};
@@ -136,6 +136,13 @@ pub async fn record_report(
     if is_transient(reason) {
         return Ok(());
     }
+    // A warmed link is handed out without asking the provider again, so one that the
+    // client could not play would otherwise be the answer to every resolve until it ages out.
+    warm_cache::forget(&WarmCacheKey {
+        debrid_provider_id: provider_id,
+        info_hash: info_hash.clone(),
+        file_id: report.file_id,
+    });
     let reason: String = reason.chars().take(200).collect();
     repo::record_failure(pool, provider_id, &info_hash, report.file_id, &reason).await?;
     Ok(())

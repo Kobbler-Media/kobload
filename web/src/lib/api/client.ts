@@ -1041,6 +1041,55 @@ export async function deleteDecisionLogSessions(triggerType?: string): Promise<v
   await request(`/api/v1/decision-logs/sessions${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
 }
 
+export type StreamAttempt = {
+  id: string;
+  provider_id: string;
+  provider_name: string;
+  origin: 'play' | 'warm';
+  info_hash: string;
+  file_id: number | null;
+  release_title: string | null;
+  file_name: string | null;
+  status: string;
+  cached: boolean | null;
+  progress: number | null;
+  torrent_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  ready_at: string | null;
+};
+
+export type StreamAttemptEvent = {
+  id: string;
+  event_type: string;
+  message: string;
+  created_at: string;
+};
+
+export async function listStreamAttempts(params: {
+  status?: string;
+  search?: string;
+  before?: string;
+  limit?: number;
+}): Promise<StreamAttempt[]> {
+  const searchParams = new URLSearchParams();
+  if (params.status) searchParams.set('status', params.status);
+  if (params.search) searchParams.set('search', params.search);
+  if (params.before) searchParams.set('before', params.before);
+  if (params.limit) searchParams.set('limit', String(params.limit));
+  const qs = searchParams.toString();
+  return request(`/api/v1/stream-attempts${qs ? `?${qs}` : ''}`);
+}
+
+export async function getStreamAttemptEvents(id: string): Promise<StreamAttemptEvent[]> {
+  return request(`/api/v1/stream-attempts/${id}/events`);
+}
+
+export async function clearStreamAttempts(): Promise<{ deleted: number }> {
+  return request('/api/v1/stream-attempts', { method: 'DELETE' });
+}
+
 export async function getDecisionLogSettings(): Promise<import('$lib/types').DecisionLogSettings> {
   return request('/api/v1/decision-logs/settings');
 }

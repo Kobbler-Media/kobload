@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH stale AS (\n               UPDATE stream_attempts\n               SET status = 'abandoned', error = COALESCE(error, $2), updated_at = NOW()\n               WHERE status IN ('resolving', 'caching')\n                 AND updated_at < NOW() - make_interval(mins => $1)\n               RETURNING id\n           )\n           INSERT INTO stream_attempt_events (attempt_id, event_type, message)\n           SELECT id, 'abandoned', $2 FROM stale",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91a1ba71c691b31bca5b3c0c41ef05605370ebc7a0dd9d38ca3204e6c028fbdc"
+}
