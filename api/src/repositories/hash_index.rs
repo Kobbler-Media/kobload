@@ -434,7 +434,10 @@ async fn upsert_entries(
     entries: &[HashIndexEntry],
     chunk_size: usize,
 ) -> Result<u64> {
-    let entries = dedup_entries(entries);
+    let mut entries = dedup_entries(entries);
+    // Several callers upsert overlapping hashes concurrently; a fixed (byte)
+    // lock order stops two batches from deadlocking on each other's rows.
+    entries.sort_unstable_by(|a, b| a.info_hash.cmp(&b.info_hash));
     let mut total = 0u64;
     for chunk in entries.chunks(chunk_size) {
         let info_hashes: Vec<&str> = chunk.iter().map(|e| e.info_hash.as_str()).collect();
@@ -663,7 +666,12 @@ pub async fn upsert_files(pool: &PgPool, entries: &[HashFileEntry]) -> Result<u6
         return Ok(0);
     }
 
-    let entries = dedup_file_entries(entries);
+    let mut entries = dedup_file_entries(entries);
+    // Same lock-order rule as upsert_entries; ensure_parents below sorts the
+    // parent rows with COLLATE "C" so both tables agree with this byte order.
+    entries.sort_unstable_by(|a, b| {
+        (a.info_hash.as_str(), a.file_idx).cmp(&(b.info_hash.as_str(), b.file_idx))
+    });
     let mut total = 0u64;
     for chunk in entries.chunks(2000) {
         let info_hashes: Vec<&str> = chunk.iter().map(|e| e.info_hash.as_str()).collect();
@@ -680,8 +688,9 @@ pub async fn upsert_files(pool: &PgPool, entries: &[HashFileEntry]) -> Result<u6
         let result = sqlx::query(
             r#"WITH ensure_parents AS (
                    INSERT INTO torrent_hash_index (info_hash, original_title, source)
-                   SELECT DISTINCT h, h, 'file_entry'
+                   SELECT DISTINCT h COLLATE "C", h COLLATE "C", 'file_entry'
                    FROM unnest($1::text[]) AS h
+                   ORDER BY 1
                    ON CONFLICT (info_hash) DO NOTHING
                )
                INSERT INTO torrent_hash_files

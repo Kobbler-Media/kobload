@@ -111,6 +111,9 @@ impl JobHandler for HashIndexBootstrapHandler {
                 year, quality, size, magnet_url, source, seeders,
                 season, episodes
             FROM hash_import
+            -- Same byte lock order as hash_index::upsert_entries, which may
+            -- be running concurrently.
+            ORDER BY info_hash COLLATE \"C\"
             ON CONFLICT (info_hash) DO UPDATE SET
                 last_seen = NOW(),
                 imdb_id = COALESCE(torrent_hash_index.imdb_id, EXCLUDED.imdb_id),

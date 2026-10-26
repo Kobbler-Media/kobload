@@ -19,6 +19,7 @@ mod feed_log_content_test;
 mod file_download_test;
 mod french_dub_language_test;
 mod hash_index_bootstrap_test;
+mod hash_index_deadlock_test;
 mod hash_index_persist_test;
 mod hash_index_season_episode_test;
 mod indexer_auth_failure_test;
