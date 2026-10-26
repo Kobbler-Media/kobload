@@ -33,6 +33,14 @@ services:
       - autovacuum_naptime=30s
       - -c
       - log_autovacuum_min_duration=60s
+      # Memory sizing depends on the host, so it comes from .env; the defaults
+      # are stock Postgres. See docker/postgres-tuning.conf.
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-128MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
 
   bitmagnet:
     image: ghcr.io/bitmagnet-io/bitmagnet:latest
