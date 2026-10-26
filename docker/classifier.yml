@@ -1,8 +1,14 @@
 flags:
+  # bitmagnet only feeds Kobload, whose sync pulls movie/tv_show/book types.
+  # "unknown" is the final verdict -- the delete step runs after video parsing
+  # and TMDB matching, and nothing reclassifies later -- and it was ~65% of each
+  # crawl and ~80% of torrent_files. Existing ones need a one-off
+  # `bitmagnet reprocess --contentType null` to go through this same path.
   delete_content_types:
     - software
     - music
     - xxx
+    - unknown
 
 keywords:
   # The stock xxx keyword list is entirely English, so JAV and Chinese adult
