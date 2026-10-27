@@ -13,8 +13,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::common::stream_fixtures::hash;
-use crate::common::tv_watch::{TvWatch, episode_want, usenet_release};
+use crate::common::tv_watch::{TvWatch, episode_want, torrent_release, usenet_release};
 use kobload_api::decision_log::repository::{get_session_detail, list_sessions};
 use kobload_api::jobs::handlers::{SearchGates, backlog_search_pattern};
 use kobload_api::repositories::hash_index::{self, HashIndexEntry};
@@ -205,16 +204,6 @@ async fn search_routes_rank_the_unambiguous_release_first() {
 const STREAM_COLLISION: &str = "Kitsune Days S01E13 720p HDTV x264-GRP";
 const STREAM_ABSOLUTE: &str = "[Erai-raws] Kitsune Days - 13 [2160p][Multiple Subtitle]";
 
-fn torrent(guid: &str, title: &str, hash_char: char) -> Release {
-    let mut release = usenet_release(guid, title);
-    let info_hash = hash(hash_char);
-    release.protocol = "torrent".to_string();
-    release.download_url = None;
-    release.magnet_url = Some(format!("magnet:?xt=urn:btih:{info_hash}"));
-    release.info_hash = Some(info_hash);
-    release
-}
-
 fn hash_index_entry(release: &Release) -> HashIndexEntry {
     HashIndexEntry {
         info_hash: release.info_hash.clone().unwrap(),
@@ -246,8 +235,8 @@ async fn stream_search_ranks_the_unambiguous_release_first() {
         let (tv, _) = start().await;
         let pool = &tv.server.pool;
         let torrents = [
-            torrent(COLLISION_GUID, STREAM_COLLISION, 'c'),
-            torrent(ABSOLUTE_GUID, STREAM_ABSOLUTE, 'a'),
+            torrent_release(COLLISION_GUID, STREAM_COLLISION, 'c'),
+            torrent_release(ABSOLUTE_GUID, STREAM_ABSOLUTE, 'a'),
         ];
         match source {
             StreamSource::HashIndex => {

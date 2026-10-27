@@ -12,13 +12,15 @@ use super::release_fit;
 use super::trait_risk::{self, TraitRisk};
 use crate::language::{self, LanguageFit};
 use crate::repositories::stream_outcomes as repo;
-use nats_jobs::types::{StreamAvailability, StreamOption, StreamPlayback, StreamPreference};
+use nats_jobs::types::{
+    StreamAvailability, StreamGroup, StreamOption, StreamPlayback, StreamPreference,
+};
 
 /// Known availability of a hash on a debrid provider.
-///
-/// Ordered best-first; the discriminant is the ranking tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnownAvailability {
+    /// A finished copy is on the account already; playing it adds nothing.
+    InAccount,
     /// We resolved this ourselves, recently. The strongest signal there is.
     Available,
     /// Torrentio reports it cached. Weaker than our own probe: the status comes
@@ -33,7 +35,8 @@ pub enum KnownAvailability {
     /// Our own probe failed to cache it (no seeds / timed out). Deprioritise,
     /// but still offer it if nothing better exists — it may have recovered.
     Dead,
-    /// Provider refuses to serve it (RD filter-gate). Never offer it.
+    /// Provider refused to add it (RD filter-gate). RD does not refuse a hash every time,
+    /// so it is offered last rather than hidden.
     Blocked,
 }
 
@@ -66,41 +69,29 @@ pub struct RankPreferences<'a> {
     pub audio_languages: &'a [String],
 }
 
-/// (failed playback, tier, wrong language, suspect fake, continuity, risk bucket)
-type RankKey = (bool, Tier, bool, bool, continuity::Rank, u8);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Tier {
-    Played,
-    Ready,
-    Likely,
-    Unknown,
-    RefusalExpected,
-    Uncached,
-    Dead,
-}
+/// (group, wrong language, suspect fake, continuity, risk bucket)
+type RankKey = (StreamGroup, bool, bool, continuity::Rank, u8);
 
 /// A release that played starts again; its availability only matters once a probe says
-/// it is gone. Our own availability verdict outranks name-based refusal risk, which only
-/// demotes what nobody has checked.
-fn tier(availability: KnownAvailability, played: bool, refusal_expected: bool) -> Tier {
+/// it is gone. Below the played and on-account releases the rest run by quality, with
+/// whatever already failed for us at the bottom.
+fn group(availability: KnownAvailability, played: bool, playback_failed: bool) -> StreamGroup {
     use KnownAvailability as A;
     match availability {
-        A::Available if played => Tier::Played,
-        A::LikelyAvailable | A::Unknown if played => Tier::Played,
-        A::Available => Tier::Ready,
-        A::LikelyAvailable | A::Unknown if refusal_expected => Tier::RefusalExpected,
-        A::LikelyAvailable => Tier::Likely,
-        A::Unknown => Tier::Unknown,
-        A::LikelyDead => Tier::Uncached,
-        A::Dead | A::Blocked => Tier::Dead,
+        _ if playback_failed => StreamGroup::Failed,
+        A::Dead | A::Blocked => StreamGroup::Failed,
+        A::LikelyDead => StreamGroup::Uncached,
+        _ if played => StreamGroup::Played,
+        // A probe that found it ready keeps the torrent for playback, so it is on the account.
+        A::InAccount | A::Available => StreamGroup::Account,
+        A::LikelyAvailable | A::Unknown => StreamGroup::Available,
     }
 }
 
 fn exposed(availability: KnownAvailability, played: bool) -> StreamAvailability {
     use KnownAvailability as A;
     match availability {
-        A::Available => StreamAvailability::Ready,
+        A::Available | A::InAccount => StreamAvailability::Ready,
         A::LikelyAvailable => StreamAvailability::Likely,
         A::Unknown if played => StreamAvailability::Likely,
         A::Unknown => StreamAvailability::Unknown,
@@ -108,16 +99,14 @@ fn exposed(availability: KnownAvailability, played: bool) -> StreamAvailability 
     }
 }
 
-/// Order is: a release that just failed for a client sinks below everything; then the
-/// availability tier; then releases without a preferred audio language sink; then fakes
+/// Order is: the group; then releases without a preferred audio language sink; then fakes
 /// sink; then continuity with what the caller played before; then learned name risk; then
 /// score, discounted for releases many devices cannot play, whose default audio track is
 /// not the preferred language, or that look different from the previous episode.
 /// The pack the previous episode played from ranks as played: the next episode in it was
 /// selected along with that one.
-/// Availability is a hard tier rather than a score bonus: score ranges shift per quality
+/// The group is a hard tier rather than a score bonus: score ranges shift per quality
 /// profile, so any constant would be either too small to matter or swamp quality.
-/// Blocked releases are dropped.
 ///
 /// Warming walks this order, so it must be final — callers must not reorder it.
 pub async fn rank_options(
@@ -128,10 +117,6 @@ pub async fn rank_options(
 ) -> Vec<StreamOption> {
     let prefer = preferences.prefer;
     let audio_languages = language::normalise(preferences.audio_languages);
-    let candidates: Vec<RankCandidate> = candidates
-        .into_iter()
-        .filter(|c| c.availability != KnownAvailability::Blocked)
-        .collect();
     for c in &candidates {
         if let (Some(hash), Some(group)) = (&c.option.info_hash, &c.option.binge_group) {
             binge::remember(hash, group);
@@ -227,9 +212,14 @@ pub async fn rank_options(
             if language_fit == LanguageFit::Secondary {
                 penalty += LANGUAGE_ORDER_MARGIN;
             }
-            let key = (
+            let group = group(
+                availability,
+                played,
                 option.playback == Some(StreamPlayback::Failed),
-                tier(availability, played, risk.refusal_expected()),
+            );
+            option.group = Some(group);
+            let key = (
+                group,
                 language_fit == LanguageFit::Missing,
                 fit.suspect,
                 continuity_rank,

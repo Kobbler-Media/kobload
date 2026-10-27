@@ -2,15 +2,21 @@ use crate::common;
 
 use std::time::{Duration, Instant};
 
-use common::debrid_mock::MockRelease;
+use common::debrid_mock::{MockDebrid, MockRelease};
 use common::resolve_fixture::Fixture;
 use common::stream_fixtures::hash;
 use kobload_api::services::stream::warm_cache::{UnavailableReason, record_availability};
 use kobload_api::services::stream::{KnownAvailability, known_availability};
+use nats_jobs::types::StreamGroup;
 
 #[tokio::test]
-async fn test_known_blocked_refuses_in_ms_without_provider_calls() {
-    let f = Fixture::new(20, &[]).await;
+async fn test_known_blocked_hash_held_on_the_account_plays_from_that_copy() {
+    let f = Fixture::with_mock(
+        MockDebrid::new(Duration::from_millis(5))
+            .with_releases(&[(&hash('a'), MockRelease::Refused)])
+            .with_torrent(&hash('a'), &[1]),
+    )
+    .await;
     record_availability(
         &f.server.pool,
         &hash('a'),
@@ -19,18 +25,48 @@ async fn test_known_blocked_refuses_in_ms_without_provider_calls() {
     )
     .await;
 
-    let started = Instant::now();
-    let err = f.resolve(&hash('a')).await.unwrap_err();
-    assert!(
-        started.elapsed() < Duration::from_millis(250),
-        "{:?}",
-        started.elapsed()
+    let played = f.resolve(&hash('a')).await.unwrap();
+    assert!(played.cached);
+    assert_eq!(f.mock.count("add_magnet", None), 0, "{:?}", f.mock.calls());
+    assert_eq!(
+        known_availability(&f.server.pool, f.provider_id, &[hash('a')])
+            .await
+            .get(&hash('a')),
+        Some(&KnownAvailability::Available)
     );
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_known_blocked_hash_is_asked_again_and_cleared_once_accepted() {
+    let f = Fixture::new(5, &[]).await;
+    record_availability(
+        &f.server.pool,
+        &hash('a'),
+        f.provider_id,
+        Some(UnavailableReason::Blocked),
+    )
+    .await;
+
+    assert!(f.resolve(&hash('a')).await.unwrap().cached);
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('a'))), 1);
+    assert_eq!(
+        known_availability(&f.server.pool, f.provider_id, &[hash('a')])
+            .await
+            .get(&hash('a')),
+        Some(&KnownAvailability::Available)
+    );
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_refusal_is_reported_in_the_text_kobbler_classifies() {
+    let f = Fixture::new(5, &[(&hash('a'), MockRelease::Refused)]).await;
+    let err = f.resolve(&hash('a')).await.unwrap_err();
     assert!(
         err.contains("refused this"),
         "kobbler classifies on this text: {err}"
     );
-    assert!(f.mock.calls().is_empty(), "{:?}", f.mock.calls());
     f.server.cleanup().await;
 }
 
@@ -182,17 +218,20 @@ async fn test_warm_verdicts_reach_the_next_resolve_and_search() {
     );
 
     let adds = f.mock.count("add_magnet", None);
-    let started = Instant::now();
     assert!(
         f.resolve(&hash('r'))
             .await
             .unwrap_err()
             .contains("refused this")
     );
-    assert!(started.elapsed() < Duration::from_millis(250));
+    assert_eq!(
+        f.mock.count("add_magnet", None),
+        adds + 1,
+        "a refusal demotes the release; playing it asks the provider again"
+    );
     let ready = f.resolve(&hash('c')).await.unwrap();
     assert!(ready.cached);
-    assert_eq!(f.mock.count("add_magnet", None), adds);
+    assert_eq!(f.mock.count("add_magnet", None), adds + 1);
     f.server.cleanup().await;
 }
 
@@ -232,5 +271,18 @@ async fn test_a_reported_failure_drops_the_warmed_link() {
         2,
         "the link reported dead was handed out again"
     );
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_warming_skips_releases_that_already_failed() {
+    let f = Fixture::new(5, &[(&hash('r'), MockRelease::Refused)]).await;
+    let mut failed = f.option(&hash('r'));
+    failed.group = Some(StreamGroup::Failed);
+    f.warm_options(vec![failed, f.option(&hash('c'))])
+        .await
+        .unwrap();
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('r'))), 0);
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('c'))), 1);
     f.server.cleanup().await;
 }

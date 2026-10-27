@@ -183,18 +183,6 @@ fn map_torrent_status(status: &str, progress: Option<f64>) -> DebridTorrentStatu
     }
 }
 
-/// Preference order when the account holds several copies of one hash.
-/// Higher is better: a ready entry with links is worth reusing, a broken one is not.
-fn rank_existing(t: &ExistingTorrent) -> u8 {
-    match t.status {
-        DebridTorrentStatus::Ready | DebridTorrentStatus::Cached if t.has_links => 4,
-        DebridTorrentStatus::Ready | DebridTorrentStatus::Cached => 3,
-        DebridTorrentStatus::WaitingFileSelection => 2,
-        DebridTorrentStatus::Downloading { .. } => 1,
-        DebridTorrentStatus::Blocked | DebridTorrentStatus::Error { .. } => 0,
-    }
-}
-
 // ── DebridProvider implementation ───────────────────────────────────────
 
 #[async_trait]
@@ -446,12 +434,13 @@ impl DebridProvider for RealDebridProvider {
         &self,
         http_client: &Client,
         api_key: &str,
-    ) -> Result<std::collections::HashMap<String, ExistingTorrent>, DebridError> {
-        // One page, newest-first. The account may hold far more (1040 on the
-        // account this was built against), but reuse only ever targets recent
-        // entries, and a single call keeps this off the rate-limit budget.
-        // Docs cap `limit` at 5000; 500 is a deliberate cost/coverage tradeoff.
-        let url = format!("{BASE_URL}/torrents?limit=500");
+    ) -> Result<std::collections::HashMap<String, Vec<ExistingTorrent>>, DebridError> {
+        // One page, newest-first, so a single call stays off the rate-limit budget.
+        // Search also reads it to find copies of filter-gated releases added from
+        // elsewhere (Stremio addons) — RD refuses re-adding those, so a copy missed
+        // here is unplayable. 500 missed most of a 1576-torrent account. Docs cap
+        // `limit` at 5000.
+        let url = format!("{BASE_URL}/torrents?limit=2500");
         let resp = http_client
             .get(&url)
             .header("Authorization", auth_header(api_key))
@@ -464,7 +453,7 @@ impl DebridProvider for RealDebridProvider {
             .await
             .map_err(|e| DebridError::Parse(format!("Failed to parse torrent list: {e}")))?;
 
-        let mut out: std::collections::HashMap<String, ExistingTorrent> =
+        let mut out: std::collections::HashMap<String, Vec<ExistingTorrent>> =
             std::collections::HashMap::new();
         for item in items {
             let hash = item.hash.to_lowercase();
@@ -481,36 +470,17 @@ impl DebridProvider for RealDebridProvider {
                 continue;
             }
 
-            let candidate = ExistingTorrent {
+            out.entry(hash).or_default().push(ExistingTorrent {
                 id: item.id,
                 status,
                 has_links,
-            };
-            // RD may hold several copies of one hash. Prefer the most usable:
-            // a ready entry with links beats a half-finished duplicate.
-            match out.get(&hash) {
-                Some(existing) if rank_existing(existing) >= rank_existing(&candidate) => {}
-                _ => {
-                    out.insert(hash, candidate);
-                }
-            }
+            });
+        }
+        for copies in out.values_mut() {
+            copies.sort_by_key(|t| std::cmp::Reverse(t.usefulness()));
         }
 
         Ok(out)
-    }
-
-    async fn find_existing_torrent(
-        &self,
-        http_client: &Client,
-        api_key: &str,
-        info_hash: &str,
-    ) -> Result<Option<ExistingTorrent>, DebridError> {
-        // RD has no lookup-by-hash endpoint, so this is the same listing call.
-        // It stays a separate method because callers differ in how they cache
-        // the result — a warm batch reuses one listing across every probe,
-        // while this path runs once per playback request.
-        let all = self.find_existing_torrents(http_client, api_key).await?;
-        Ok(all.get(&info_hash.to_lowercase()).cloned())
     }
 
     async fn delete_torrent(

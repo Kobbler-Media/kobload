@@ -78,6 +78,8 @@ impl Fixture {
                 nzb_url: None,
                 file_id,
                 priority,
+                release_title: None,
+                file_name: None,
             },
         )
         .await
@@ -120,6 +122,7 @@ impl Fixture {
             binge_group: None,
             playback: None,
             availability: None,
+            group: None,
             audio_languages: Vec::new(),
         }
     }
@@ -146,13 +149,19 @@ impl Fixture {
     }
 
     pub async fn http_resolve(&self, hash: &str) -> Value {
+        self.http_resolve_with(hash, json!({})).await
+    }
+
+    /// `extra` fields are merged into the resolve body.
+    pub async fn http_resolve_with(&self, hash: &str, extra: Value) -> Value {
+        let mut body = json!({"debrid_provider_id": self.provider_id, "info_hash": hash});
+        if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+            body.extend(extra.clone());
+        }
         let resp = self
             .server
             .admin_client()
-            .post_json(
-                "/api/v1/stream/resolve",
-                &json!({"debrid_provider_id": self.provider_id, "info_hash": hash}),
-            )
+            .post_json("/api/v1/stream/resolve", &body)
             .await;
         if resp.status.is_success() {
             resp.json()

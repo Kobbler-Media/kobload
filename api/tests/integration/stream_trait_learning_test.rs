@@ -192,11 +192,11 @@ async fn test_decay_fades_influence() {
     accept_others(&server, p.id, 6).await;
     refuse(&server, p.id, "ZQX", 6).await;
     assert_eq!(leader(&server, &p).await, PLAIN);
-    age_traits(&server, p.id, 13).await;
+    age_traits(&server, p.id, 15).await;
     assert_eq!(
         leader(&server, &p).await,
         TAGGED,
-        "half the evidence no longer expects a refusal"
+        "past a half-life too little evidence is left to judge the tag"
     );
     server.cleanup().await;
 }

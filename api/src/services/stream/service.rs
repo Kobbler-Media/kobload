@@ -43,6 +43,10 @@ const DEFAULT_LIMIT: u32 = 50;
 /// precisely when they mattered most.
 const TORRENTIO_GRACE: Duration = Duration::from_millis(1200);
 
+/// How long ranking waits for the account listing search started up front. A listing
+/// that runs longer still serves the next search, which finds it cached.
+const ACCOUNT_LISTING_WAIT: Duration = Duration::from_secs(2);
+
 /// TTL for the indexer result cache.
 const INDEXER_CACHE_TTL: Duration = Duration::from_secs(900); // 15 minutes
 
@@ -740,6 +744,11 @@ pub async fn stream_search(
         torrentio_hints += 1;
     }
 
+    // A copy on the account that holds the wanted file plays without an add, so neither a
+    // refusal nor a dead probe of that hash matters for it any more.
+    let held = account_held(ctx, default_provider, &scored).await;
+    let in_account = held.len();
+
     if !known.is_empty() {
         let blocked = known
             .values()
@@ -755,6 +764,7 @@ pub async fn stream_search(
             .count();
         info!(
             known = known.len(),
+            in_account,
             blocked,
             available,
             likely_available,
@@ -797,10 +807,14 @@ pub async fn stream_search(
                     continue;
                 }
 
-                let availability = known
-                    .get(&normalized)
-                    .copied()
-                    .unwrap_or(KnownAvailability::Unknown);
+                let availability = if held.contains(&(normalized.clone(), file_idx)) {
+                    KnownAvailability::InAccount
+                } else {
+                    known
+                        .get(&normalized)
+                        .copied()
+                        .unwrap_or(KnownAvailability::Unknown)
+                };
 
                 let match_score = result.match_score.unwrap_or(0.0);
                 let quality_score = result.quality_score.unwrap_or(0.0);
@@ -856,6 +870,7 @@ pub async fn stream_search(
                     binge_group,
                     playback: None,
                     availability: None,
+                    group: None,
                     audio_languages: Vec::new(),
                 };
                 ranked.push(RankCandidate {
@@ -898,6 +913,7 @@ pub async fn stream_search(
                 binge_group: None,
                 playback: None,
                 availability: None,
+                group: None,
                 audio_languages: Vec::new(),
             };
             ranked.push(RankCandidate {
@@ -962,6 +978,50 @@ pub async fn stream_search(
 }
 
 /// Search indexers and score results, storing in cache on success.
+/// The (hash, file index) pairs of torrent candidates a finished copy on the account serves.
+async fn account_held(
+    ctx: &StreamSearchContext<'_>,
+    provider: &DebridProviderRow,
+    scored: &[crate::watch::ProcessedRelease],
+) -> std::collections::HashSet<(String, Option<i32>)> {
+    let Some(provider_type) = DebridProviderType::parse(&provider.provider_type) else {
+        return std::collections::HashSet::new();
+    };
+    let keys: Vec<(String, Option<i32>, Option<String>)> = scored
+        .iter()
+        .filter(|pr| pr.is_candidate() && pr.release.protocol == "torrent")
+        .filter_map(|pr| {
+            let hash = find_info_hash_for_result(pr)?.to_lowercase();
+            let file_idx = extract_file_idx_from_guid(&pr.release.guid);
+            Some((hash, file_idx, pr.release.file_name.clone()))
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let wants: Vec<super::account_index::Want> = keys
+        .iter()
+        .map(|(hash, file_idx, file_name)| super::account_index::Want {
+            info_hash: hash.clone(),
+            file_name: file_name.clone(),
+            provider_file_id: file_idx
+                .filter(|_| provider_type == DebridProviderType::RealDebrid)
+                .map(|idx| idx + 1),
+        })
+        .collect();
+    super::account_index::serving(
+        provider.id,
+        ctx.debrid_providers.get(&provider_type),
+        ctx.http_client,
+        &provider.api_key,
+        &wants,
+        ACCOUNT_LISTING_WAIT,
+    )
+    .await
+    .into_iter()
+    .map(|i| (keys[i].0.clone(), keys[i].1))
+    .collect()
+}
+
 async fn search_and_score_indexers(
     ctx: &StreamSearchContext<'_>,
     request: &StreamSearchRequest,
@@ -1809,6 +1869,7 @@ pub fn hash_index_rows_with_files_to_releases(
             });
         } else {
             // File data available — one release per file
+            let pack_resolution = crate::quality::parse_quality(&row.original_title).resolution;
             for file in &row.files {
                 let file_title = strip_file_extension(&file.filename);
                 // If the file title is bare (no show/episode — e.g. "812 - Expert"
@@ -1817,7 +1878,7 @@ pub fn hash_index_rows_with_files_to_releases(
                 let title = if is_bare_tv_title(&file_title) {
                     row.original_title.clone()
                 } else {
-                    file_title
+                    with_pack_resolution(file_title, pack_resolution.as_deref())
                 };
                 releases.push(Release {
                     guid: format!("hashidx_{}_f{}", row.info_hash, file.file_idx),
@@ -1851,6 +1912,19 @@ pub fn hash_index_rows_with_files_to_releases(
     releases
 }
 
+fn with_pack_resolution(file_title: String, pack_resolution: Option<&str>) -> String {
+    match pack_resolution {
+        Some(res)
+            if crate::quality::parse_quality(&file_title)
+                .resolution
+                .is_none() =>
+        {
+            format!("{file_title} {res}")
+        }
+        _ => file_title,
+    }
+}
+
 /// Check if a title is "bare" for TV — no season and no episodes detected.
 /// Used to detect hash index file entries like "812 - Expert" that are useless
 /// for matching without the parent torrent's context.
@@ -1863,7 +1937,7 @@ fn is_bare_tv_title(title: &str) -> bool {
 }
 
 /// Strip common video file extensions from a filename for use as a release title.
-fn strip_file_extension(filename: &str) -> String {
+pub(super) fn strip_file_extension(filename: &str) -> String {
     let extensions = [
         ".mkv", ".mp4", ".avi", ".wmv", ".m4v", ".ts", ".m2ts", ".flv", ".webm", ".mov",
     ];

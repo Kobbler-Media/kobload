@@ -37,7 +37,6 @@ export const streamEventTones: Record<string, EventTone> = {
   caching: 'accent',
   failed: 'bad',
   refused: 'bad',
-  known_blocked: 'bad',
   playback_failed: 'bad',
   timed_out: 'bad',
   released: 'warn',

@@ -42,7 +42,7 @@ RD removed `/torrents/instantAvailability` — it returns error_code 37 ("Disabl
 
 In debrid mode Torrentio **drops `infoHash`/`fileIdx`** (recover both from the `/resolve/...` URL) — but it also returns far more content: the keyless endpoint is hard-capped at 50 streams vs 108 for the same movie, and the extras include already-cached 4K. So the debrid response is the primary source and the keyless one is merged in behind it as a fallback; both are fetched concurrently.
 
-Match RD errors on `error_code`, never the `error` string (not reliably a slug): 33 = no free slot (transient), 35 = infringing/filter-gate (**permanent for that hash**, applied heuristically by filename so it hits a large fraction of releases), 36 = fair usage, 37 = disabled endpoint. Rate limit: 250 req/min.
+Match RD errors on `error_code`, never the `error` string (not reliably a slug): 33 = no free slot (transient), 35 = infringing/filter-gate (applied heuristically by filename so it hits a large fraction of releases, and **not consistent**: the same hash has been accepted and then refused a minute later, and copies already on the account keep serving — so a refusal demotes, it never hides, and the account is checked before adding), 36 = fair usage, 37 = disabled endpoint. Rate limit: 250 req/min.
 
 RD does **not** dedup: re-adding a present hash often creates a duplicate entry rather than erroring, so hash-level dedup has to live here.
 

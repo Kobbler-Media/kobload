@@ -99,8 +99,8 @@ async fn resolve_torrent(
             origin: Origin::Play,
             info_hash,
             file_id: request.file_id,
-            release_title: None,
-            file_name: None,
+            release_title: request.release_title.as_deref(),
+            file_name: request.file_name.as_deref(),
         },
     )
     .await;
@@ -148,34 +148,17 @@ async fn resolve_torrent(
         .is_user()
         .then(|| throttle::gate(ctx.provider_type, &ctx.api_key).user_session());
 
-    // Warming records refusals seconds after a search returns, but the client's list was
-    // ordered before that; this keeps walking into them free.
-    if is_known_blocked(&ctx.pool, info_hash, request.debrid_provider_id).await {
-        info!(info_hash = %info_hash, "Resolve: hash is known-blocked, refusing without calling provider");
-        log.record(
-            Step::KnownBlocked,
-            "Provider refused this hash within the last 30 days; not asked again",
-            Change {
-                status: Some("refused"),
-                error: Some(REFUSED_MESSAGE.to_string()),
-                ..Default::default()
-            },
-        )
-        .await;
-        return Err(StreamSearchError::DebridError(REFUSED_MESSAGE.to_string()));
-    }
-
     flight::claim(request.debrid_provider_id, info_hash);
     let job = Job {
         provider_id: request.debrid_provider_id,
         info_hash: info_hash.to_string(),
         file_id: request.file_id,
-        file_name: None,
+        file_name: request.file_name.clone(),
         magnet: request
             .magnet_url
             .clone()
             .unwrap_or_else(|| format!("magnet:?xt=urn:btih:{info_hash}")),
-        release_title: None,
+        release_title: request.release_title.clone(),
         want_link: true,
         log,
     };
@@ -294,24 +277,6 @@ async fn resolve_usenet(
 
         tokio::time::sleep(POLL_INTERVAL).await;
     }
-}
-
-async fn is_known_blocked(pool: &PgPool, info_hash: &str, provider_id: Uuid) -> bool {
-    sqlx::query_scalar!(
-        r#"SELECT true AS "blocked!" FROM debrid_availability_cache
-           WHERE provider_id = $1
-             AND info_hash = $2
-             AND available = false
-             AND reason = 'blocked'
-             AND checked_at > NOW() - INTERVAL '30 days'"#,
-        provider_id,
-        info_hash.to_lowercase(),
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false)
 }
 
 /// Load a debrid provider's config by ID.

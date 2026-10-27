@@ -7,10 +7,11 @@ use super::{
     MockDownloadClient, MockDownloadClientResolver, MockIndexer, MockIndexerResolver, TestServer,
     TestServerOptions,
 };
+use kobload_api::debrid::DebridProviderResolver;
 use kobload_api::repositories::{clients as clients_repo, watch as watch_repo};
 use kobload_api::services::stream::{StreamSearchContext, stream_search};
 use kobload_api::watch::Release;
-use nats_jobs::types::StreamSearchRequest;
+use nats_jobs::types::{StreamOption, StreamSearchRequest};
 
 pub struct TvWatch {
     pub server: TestServer,
@@ -21,6 +22,10 @@ pub struct TvWatch {
 
 impl TvWatch {
     pub async fn start() -> Self {
+        Self::start_with_debrid(Arc::new(kobload_api::debrid::DefaultDebridProviderResolver)).await
+    }
+
+    pub async fn start_with_debrid(debrid: Arc<dyn DebridProviderResolver>) -> Self {
         let indexer = Arc::new(MockIndexer::new());
         let options = TestServerOptions {
             download_clients: Arc::new(MockDownloadClientResolver::new(Arc::new(
@@ -28,7 +33,7 @@ impl TvWatch {
             ))),
             indexers: Arc::new(MockIndexerResolver::new(indexer.clone())),
         };
-        let server = TestServer::start_with_options(options).await;
+        let server = TestServer::start_inner(options, debrid).await;
         let pool = &server.pool;
 
         clients_repo::create_client(
@@ -115,8 +120,31 @@ impl TvWatch {
     /// Stream-searches through a debrid-enabled source, returning the offered
     /// release titles in ranked order.
     pub async fn stream_titles(&self, want: &nats_jobs::MediaWant) -> Vec<String> {
+        self.stream_options(want)
+            .await
+            .into_iter()
+            .map(|o| o.release_title)
+            .collect()
+    }
+
+    pub async fn debrid_provider(&self) -> Uuid {
+        let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM debrid_providers LIMIT 1")
+            .fetch_optional(&self.server.pool)
+            .await
+            .unwrap();
+        match existing {
+            Some(id) => id,
+            None => {
+                super::stream_fixtures::create_provider(&self.server.pool, "real_debrid")
+                    .await
+                    .id
+            }
+        }
+    }
+
+    pub async fn stream_options(&self, want: &nats_jobs::MediaWant) -> Vec<StreamOption> {
         let pool = &self.server.pool;
-        super::stream_fixtures::create_provider(pool, "real_debrid").await;
+        self.debrid_provider().await;
         sqlx::query("UPDATE indexer_sources SET debrid_mode = 'both' WHERE id = $1")
             .bind(self.source.id)
             .execute(pool)
@@ -145,13 +173,7 @@ impl TvWatch {
             prefer: None,
             audio_languages: Vec::new(),
         };
-        stream_search(&ctx, &request)
-            .await
-            .unwrap()
-            .options
-            .into_iter()
-            .map(|o| o.release_title)
-            .collect()
+        stream_search(&ctx, &request).await.unwrap().options
     }
 
     pub async fn grabbed(&self, pattern_id: Uuid) -> Vec<String> {
@@ -202,4 +224,14 @@ pub fn usenet_release(guid: &str, title: &str) -> Release {
         "raw_data": {},
     }))
     .unwrap()
+}
+
+pub fn torrent_release(guid: &str, title: &str, hash_char: char) -> Release {
+    let mut release = usenet_release(guid, title);
+    let info_hash = super::stream_fixtures::hash(hash_char);
+    release.protocol = "torrent".to_string();
+    release.download_url = None;
+    release.magnet_url = Some(format!("magnet:?xt=urn:btih:{info_hash}"));
+    release.info_hash = Some(info_hash);
+    release
 }

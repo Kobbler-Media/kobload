@@ -223,6 +223,16 @@ impl Run {
             Err(out) => return out,
         };
         self.log_cache_check(&torrent).await;
+        account_index::remember(self.job.provider_id, &torrent);
+        account_index::placed(
+            self.job.provider_id,
+            &self.job.info_hash,
+            ExistingTorrent {
+                id: torrent_id.clone(),
+                status: torrent.status.clone(),
+                has_links: !torrent.links.is_empty(),
+            },
+        );
 
         match torrent.status {
             DebridTorrentStatus::Blocked => {
@@ -265,46 +275,53 @@ impl Run {
         }
     }
 
-    /// A torrent on the account is reused only if it already serves the wanted file;
-    /// otherwise the hash is added again, since RD lets a torrent select files only once.
+    /// A copy on the account is reused only if it already serves the wanted file; with
+    /// none that does, the hash is added again, since RD lets a torrent select files only
+    /// once. Copies can differ in what they selected, so each is checked.
     async fn obtain(&self, target: &Target) -> Result<Placed, Acquired> {
-        let Some(found) = account_index::lookup(
-            self.job.provider_id,
+        let provider_id = self.job.provider_id;
+        let copies = account_index::copies(
+            provider_id,
             &self.handler,
             &self.ctx.http_client,
             &self.ctx.api_key,
             &self.job.info_hash,
         )
-        .await
-        else {
-            return self.add_and_get().await;
-        };
-        match self.get(&found.id).await {
-            Ok(t) if t.serves(target.name.as_deref(), target.id) => {
-                debug!(info_hash = %self.job.info_hash, torrent_id = %found.id, "Reusing existing torrent");
-                self.log_placed(
-                    Step::Reused,
-                    format!(
-                        "Torrent {} already on the account serves this file",
-                        found.id
-                    ),
-                    &found.id,
-                )
-                .await;
-                Ok((found.id, true, t))
+        .await;
+        let serves = |t: &DebridTorrent| t.serves(target.name.as_deref(), target.id);
+        for found in &copies {
+            if account_index::details(provider_id, &found.id).is_some_and(|t| !serves(&t)) {
+                continue;
             }
-            Ok(_) => {
-                info!(info_hash = %self.job.info_hash, torrent_id = %found.id, "Existing torrent lacks the wanted file; adding it again");
-                self.add_and_get().await
+            match self.get(&found.id).await {
+                Ok(t) if serves(&t) => {
+                    debug!(info_hash = %self.job.info_hash, torrent_id = %found.id, "Reusing existing torrent");
+                    self.log_placed(
+                        Step::Reused,
+                        format!(
+                            "Torrent {} already on the account serves this file",
+                            found.id
+                        ),
+                        &found.id,
+                    )
+                    .await;
+                    return Ok((found.id.clone(), true, t));
+                }
+                Ok(t) => account_index::remember(provider_id, &t),
+                Err(DebridError::NotFound) => {
+                    account_index::removed(provider_id, &self.job.info_hash, &found.id);
+                }
+                Err(e) => {
+                    return Err(self
+                        .failed(None, false, "Failed to get torrent status", e)
+                        .await);
+                }
             }
-            Err(DebridError::NotFound) => {
-                account_index::forget(self.job.provider_id, &self.job.info_hash);
-                self.add_and_get().await
-            }
-            Err(e) => Err(self
-                .failed(None, false, "Failed to get torrent status", e)
-                .await),
         }
+        if !copies.is_empty() {
+            info!(info_hash = %self.job.info_hash, copies = copies.len(), "No copy on the account holds the wanted file; adding it again");
+        }
+        self.add_and_get().await
     }
 
     /// A stream from a pack selects every episode, so the next ones are ready in the same
@@ -369,7 +386,7 @@ impl Run {
         };
         self.log_placed(Step::Added, format!("Magnet added as torrent {id}"), &id)
             .await;
-        account_index::record_added(
+        account_index::placed(
             self.job.provider_id,
             &self.job.info_hash,
             ExistingTorrent {
@@ -479,7 +496,7 @@ impl Run {
         if reused {
             return;
         }
-        account_index::forget(self.job.provider_id, &self.job.info_hash);
+        account_index::removed(self.job.provider_id, &self.job.info_hash, torrent_id);
         if let Err(e) = self
             .handler
             .delete_torrent(&self.ctx.http_client, &self.ctx.api_key, torrent_id)
@@ -578,7 +595,7 @@ pub async fn release_probe(ctx: &FlightContext, job: &Job, torrent_id: &str) {
     if is_claimed(job.provider_id, &job.info_hash) {
         return;
     }
-    account_index::forget(job.provider_id, &job.info_hash);
+    account_index::removed(job.provider_id, &job.info_hash, torrent_id);
     let handler = Throttled::new(ctx.provider.clone(), &ctx.api_key, Lane::background());
     if let Err(e) = handler
         .delete_torrent(&ctx.http_client, &ctx.api_key, torrent_id)

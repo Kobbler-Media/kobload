@@ -47,7 +47,6 @@ impl Origin {
 pub enum Step {
     Requested,
     WarmHit,
-    KnownBlocked,
     Joined,
     Reused,
     Added,
@@ -70,7 +69,6 @@ impl Step {
         match self {
             Self::Requested => "requested",
             Self::WarmHit => "warm_hit",
-            Self::KnownBlocked => "known_blocked",
             Self::Joined => "joined",
             Self::Reused => "reused",
             Self::Added => "added",
@@ -120,13 +118,6 @@ impl AttemptLog {
         {
             return Self::off();
         }
-        let title = match started.release_title {
-            Some(t) => Some(t.to_string()),
-            None => hash_index::get_original_title(pool, started.info_hash)
-                .await
-                .ok()
-                .flatten(),
-        };
         let file_name = match (started.file_name, started.file_id) {
             (Some(name), _) => Some(name.to_string()),
             (None, Some(idx)) => hash_index::get_file_name(pool, started.info_hash, idx)
@@ -134,6 +125,15 @@ impl AttemptLog {
                 .ok()
                 .flatten(),
             (None, None) => None,
+        };
+        // A pack's hash-level title names the pack, or one episode of it at best.
+        let title = match (started.release_title, &file_name) {
+            (Some(t), _) => Some(t.to_string()),
+            (None, Some(name)) => Some(super::service::strip_file_extension(name)),
+            (None, None) => hash_index::get_original_title(pool, started.info_hash)
+                .await
+                .ok()
+                .flatten(),
         };
         let new = NewAttempt {
             provider_id: started.provider_id,

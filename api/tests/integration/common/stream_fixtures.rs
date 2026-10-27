@@ -39,6 +39,7 @@ pub fn option(provider: &RankProvider, info_hash: &str, title: &str, score: f64)
         binge_group: None,
         playback: None,
         availability: None,
+        group: None,
         audio_languages: Vec::new(),
     }
 }

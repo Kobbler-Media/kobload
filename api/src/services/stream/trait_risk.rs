@@ -16,9 +16,6 @@ const MIN_EVIDENCE: f64 = 2.95;
 /// provider's overall refusal rate: a token on most releases ("1080p") tells nothing.
 pub const BASELINE: &str = "all";
 
-/// A release is expected to be refused at this probability, provided its own traits are
-/// what push it there rather than the provider refusing everything alike.
-pub const REFUSAL_EXPECTED: f64 = 0.85;
 const MEDIUM_LIFT: f64 = 0.5;
 const HIGH_LIFT: f64 = 1.5;
 
@@ -123,14 +120,9 @@ fn smoothed(failures: f64, successes: f64) -> f64 {
 pub struct Risk {
     /// Log-odds the release's traits add over the provider's baseline.
     pub lift: f64,
-    pub refusal: f64,
 }
 
 impl Risk {
-    pub fn refusal_expected(&self) -> bool {
-        self.lift > 0.0 && self.refusal >= REFUSAL_EXPECTED
-    }
-
     /// 0 = low, 1 = medium, 2 = high. Buckets rather than the raw value, so learned risk
     /// separates releases without reshuffling the quality order of near-equal ones.
     pub fn bucket(&self) -> u8 {
@@ -147,7 +139,6 @@ impl Risk {
 /// Learned per provider from its own refusals and acceptances. Nothing is assumed about any
 /// provider or tag: with no evidence every release is neutral.
 pub struct TraitRisk {
-    baseline: f64,
     lifts: HashMap<String, f64>,
 }
 
@@ -174,7 +165,7 @@ impl TraitRisk {
                 (r.trait_name.clone(), lift)
             })
             .collect();
-        Self { baseline, lifts }
+        Self { lifts }
     }
 
     pub fn risk(&self, traits: &[String]) -> Risk {
@@ -186,10 +177,8 @@ impl TraitRisk {
         if known.is_empty() {
             return Risk::default();
         }
-        let lift: f64 = known.iter().sum();
         Risk {
-            lift,
-            refusal: 1.0 / (1.0 + (-(self.baseline + lift)).exp()),
+            lift: known.iter().sum(),
         }
     }
 }
@@ -230,16 +219,14 @@ mod tests {
     #[test]
     fn a_trait_only_counts_above_the_baseline() {
         let risk = TraitRisk {
-            baseline: logit(0.5),
             lifts: HashMap::from([
                 ("tok:bad".to_string(), logit(0.9)),
                 ("tok:common".to_string(), 0.0),
             ]),
         };
         assert_eq!(risk.risk(&["tok:unseen".to_string()]), Risk::default());
-        assert!(!risk.risk(&["tok:common".to_string()]).refusal_expected());
+        assert_eq!(risk.risk(&["tok:common".to_string()]).bucket(), 0);
         let bad = risk.risk(&["tok:bad".to_string(), "tok:common".to_string()]);
-        assert!(bad.refusal_expected());
         assert_eq!(bad.bucket(), 2);
     }
 }

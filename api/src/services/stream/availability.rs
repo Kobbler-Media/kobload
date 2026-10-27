@@ -10,13 +10,13 @@ use super::ranking::KnownAvailability;
 const AVAILABLE_TTL: &str = "6 hours";
 /// Dead torrents can pick up seeders again, so re-probe them daily.
 const DEAD_TTL: &str = "24 hours";
-/// The RD filter-gate verdict is filename-derived and effectively permanent.
+/// The RD filter-gate verdict only demotes, and a copy on the account overrides it.
 const BLOCKED_TTL: &str = "30 days";
 
 /// Look up what we already know about these hashes on the given provider.
 ///
 /// Applies a different freshness window per outcome so a blocked hash stays
-/// suppressed for weeks while a merely-dead one gets retried the next day.
+/// demoted for weeks while a merely-dead one gets retried the next day.
 pub async fn known_availability(
     pool: &PgPool,
     provider_id: Uuid,

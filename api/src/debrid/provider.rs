@@ -73,7 +73,8 @@ pub trait DebridProvider: Send + Sync {
         link: &str,
     ) -> Result<UnrestrictedLink, DebridError>;
 
-    /// Find torrents already on the account, keyed by lowercase info hash.
+    /// Torrents already on the account, keyed by lowercase info hash, every copy of a hash
+    /// best-first: copies select different files, and RD allows selecting only once.
     ///
     /// Real-Debrid does not deduplicate: re-adding a hash it already holds
     /// usually creates a second entry rather than returning the existing one
@@ -87,24 +88,8 @@ pub trait DebridProvider: Send + Sync {
         &self,
         _http_client: &reqwest::Client,
         _api_key: &str,
-    ) -> Result<std::collections::HashMap<String, ExistingTorrent>, DebridError> {
+    ) -> Result<std::collections::HashMap<String, Vec<ExistingTorrent>>, DebridError> {
         Ok(std::collections::HashMap::new())
-    }
-
-    /// Find a single torrent already on the account by info hash.
-    ///
-    /// Same purpose as [`find_existing_torrents`](Self::find_existing_torrents)
-    /// but for the one-off path (a user pressing play), where listing the whole
-    /// account per click would be wasteful.
-    ///
-    /// Returns `None` for providers that do not expose a listing.
-    async fn find_existing_torrent(
-        &self,
-        _http_client: &reqwest::Client,
-        _api_key: &str,
-        _info_hash: &str,
-    ) -> Result<Option<ExistingTorrent>, DebridError> {
-        Ok(None)
     }
 
     /// Remove a torrent from the provider account.

@@ -6,7 +6,7 @@ use kobload_api::services::stream::warm_cache::UnavailableReason;
 use kobload_api::services::stream::{
     KnownAvailability, RankCandidate, RankPreferences, RankProvider, outcomes, rank_options,
 };
-use nats_jobs::types::{StreamAvailability, StreamOption};
+use nats_jobs::types::{StreamAvailability, StreamGroup, StreamOption};
 use reqwest::StatusCode;
 use serde_json::json;
 
@@ -36,7 +36,7 @@ fn with(option: StreamOption, availability: KnownAvailability) -> RankCandidate 
 }
 
 #[tokio::test]
-async fn test_tiers_put_proven_releases_first_and_uncached_last() {
+async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
     let server = TestServer::start().await;
     let p = create_provider(&server.pool, "real_debrid").await;
     let played = "Movie.2024.720p.BluRay.x264-GGG";
@@ -94,6 +94,10 @@ async fn test_tiers_put_proven_releases_first_and_uncached_last() {
             option(&p, &hash('h'), "Movie.2024.1080p.BluRay.x264-HHH", 99.0),
             KnownAvailability::Blocked,
         ),
+        with(
+            option(&p, &hash('i'), "Movie.2024.720p.BluRay.x264-III", 4.0),
+            KnownAvailability::InAccount,
+        ),
     ];
     let out = ranked(&server, &p, candidates).await;
 
@@ -102,13 +106,31 @@ async fn test_tiers_put_proven_releases_first_and_uncached_last() {
         vec![
             played,
             "Movie.2024.1080p.BluRay.x264-FFF",
-            "Movie.2024.1080p.BluRay.x264-EEE",
+            "Movie.2024.720p.BluRay.x264-III",
             "Movie.2024.1080p.BluRay.x264-DDD",
+            "Movie.2024.1080p.BluRay.x264-EEE",
             "Movie.2024.1080p.ZQX.x264-CCC",
             "Movie.2024.1080p.BluRay.x264-AAA",
+            "Movie.2024.1080p.BluRay.x264-HHH",
             "Movie.2024.1080p.BluRay.x264-BBB",
         ],
-        "played > ready > likely > unknown > likely refused > uncached; blocked never offered"
+        "played > on account (held or probed ready) > by quality (learned refusal risk last) > uncached > failed"
+    );
+    use StreamGroup as G;
+    assert_eq!(
+        out.iter().map(|o| o.group).collect::<Vec<_>>(),
+        [
+            G::Played,
+            G::Account,
+            G::Account,
+            G::Available,
+            G::Available,
+            G::Available,
+            G::Uncached,
+            G::Failed,
+            G::Failed,
+        ]
+        .map(Some)
     );
     use StreamAvailability::*;
     assert_eq!(
@@ -116,9 +138,11 @@ async fn test_tiers_put_proven_releases_first_and_uncached_last() {
         vec![
             Some(Likely),
             Some(Ready),
-            Some(Likely),
+            Some(Ready),
             Some(Unknown),
             Some(Likely),
+            Some(Likely),
+            Some(Uncached),
             Some(Uncached),
             Some(Uncached),
         ]

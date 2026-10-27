@@ -269,7 +269,7 @@ impl TestServer {
         Self::start_inner(TestServerOptions::default(), debrid_providers).await
     }
 
-    async fn start_inner(
+    pub async fn start_inner(
         options: TestServerOptions,
         debrid_providers: Arc<dyn kobload_api::debrid::DebridProviderResolver>,
     ) -> Self {

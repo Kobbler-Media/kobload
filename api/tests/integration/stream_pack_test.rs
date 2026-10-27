@@ -2,7 +2,7 @@ use crate::common;
 
 use std::time::Duration;
 
-use common::debrid_mock::MockDebrid;
+use common::debrid_mock::{MockDebrid, MockRelease};
 use common::resolve_fixture::Fixture;
 use common::stream_fixtures::hash;
 
@@ -88,5 +88,24 @@ async fn test_a_warmed_pack_episode_resolves_to_that_episode_without_calls() {
     assert_eq!(resolved.filename, "Show.S01E02.1080p.mkv");
     assert_eq!(f.mock.calls().len(), before, "{:?}", f.mock.calls());
     assert_eq!(f.mock.selections(&p), vec![vec![1, 2, 3]]);
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_the_copy_that_holds_the_wanted_file_is_reused_whichever_it_is() {
+    let (f, p) = pack_fixture(|m| {
+        let p = hash('p');
+        m.with_releases(&[(&p, MockRelease::Refused)])
+            .with_torrent(&p, &[2])
+            .with_torrent(&p, &[3])
+    })
+    .await;
+    let resolved = f.resolve_file(&p, 1).await.unwrap();
+    assert_eq!(resolved.filename, "Show.S01E02.1080p.mkv");
+    assert_eq!(
+        f.mock.count("add_magnet", Some(&p)),
+        0,
+        "the provider refuses this hash, so only the older copy can serve E02"
+    );
     f.server.cleanup().await;
 }

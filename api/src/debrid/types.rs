@@ -268,6 +268,28 @@ pub struct ExistingTorrent {
     pub has_links: bool,
 }
 
+impl ExistingTorrent {
+    /// Higher is better: a ready copy with links is worth reusing, a broken one is not.
+    pub fn usefulness(&self) -> u8 {
+        match self.status {
+            DebridTorrentStatus::Ready | DebridTorrentStatus::Cached if self.has_links => 4,
+            DebridTorrentStatus::Ready | DebridTorrentStatus::Cached => 3,
+            DebridTorrentStatus::WaitingFileSelection => 2,
+            DebridTorrentStatus::Downloading { .. } => 1,
+            DebridTorrentStatus::Blocked | DebridTorrentStatus::Error { .. } => 0,
+        }
+    }
+
+    /// Finished on the provider. Real-Debrid's listing leaves the links off nearly every
+    /// finished torrent, so `has_links` cannot be part of this.
+    pub fn is_finished(&self) -> bool {
+        matches!(
+            self.status,
+            DebridTorrentStatus::Ready | DebridTorrentStatus::Cached
+        )
+    }
+}
+
 /// Active torrent slot usage on a provider account.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ActiveSlots {

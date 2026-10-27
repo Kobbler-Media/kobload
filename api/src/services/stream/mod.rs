@@ -1,4 +1,4 @@
-mod account_index;
+pub mod account_index;
 pub mod attempt_log;
 mod availability;
 mod binge;

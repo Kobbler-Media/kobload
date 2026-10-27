@@ -33,7 +33,7 @@ use crate::debrid::{
 use crate::repositories::stream_attempts::Change;
 use crate::services::stream::load_provider_config;
 use crate::types::DownloadStreamEvent;
-use nats_jobs::types::StreamOption;
+use nats_jobs::types::{StreamGroup, StreamOption};
 use sqlx::PgPool;
 
 const WARM_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -144,9 +144,8 @@ fn insert(key: WarmCacheKey, entry: WarmCacheEntry) {
 /// Why a hash is unavailable on a provider. Drives the negative-cache TTL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnavailableReason {
-    /// Provider refuses to serve this file (RD error_code 35 / "virus" status).
-    /// Durable for this hash; the search-side TTL is `BLOCKED_TTL` in
-    /// `services/stream/service.rs`.
+    /// Provider refused this file (RD error_code 35 / "virus" status). RD does not refuse
+    /// a hash every time, so it only demotes; the TTL is `BLOCKED_TTL` in `availability.rs`.
     Blocked,
     /// No seeds, metadata never resolved, or warming timed out. Can recover.
     Dead,
@@ -257,7 +256,8 @@ fn failed(key: WarmCacheKey, error: String) {
 }
 
 /// Probes the top options in ranked order, so the releases a client will fall back to are
-/// verified before it reaches them. Every call waits behind any user resolve on the same
+/// verified before it reaches them. Releases that already failed are left for a client to
+/// try, not re-probed on every search. Every call waits behind any user resolve on the same
 /// account (see [`crate::debrid::throttle`]), and a probe of a hash a user is resolving
 /// joins that resolve instead of adding the magnet twice.
 pub async fn warm_top_results(
@@ -272,6 +272,7 @@ pub async fn warm_top_results(
     let mut seen_hashes = std::collections::HashSet::new();
     let candidates: Vec<_> = options
         .into_iter()
+        .filter(|opt| opt.group != Some(StreamGroup::Failed))
         .filter(|opt| {
             opt.info_hash
                 .as_ref()

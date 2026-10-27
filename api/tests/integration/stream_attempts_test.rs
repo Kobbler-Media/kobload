@@ -2,14 +2,15 @@ use crate::common;
 
 use std::time::Duration;
 
-use common::debrid_mock::MockRelease;
+use common::debrid_mock::{MockDebrid, MockRelease};
 use common::resolve_fixture::Fixture;
 use common::stream_fixtures::hash;
 use futures::StreamExt;
 use kobload_api::jobs::handlers::CacheCleanupHandler;
 use kobload_api::jobs::worker::JobHandler;
+use kobload_api::repositories::hash_index::{self, HashFileEntry, HashIndexEntry};
 use kobload_api::services::stream::warm_cache::{UnavailableReason, record_availability};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 async fn logged(latency_ms: u64, releases: &[(&str, MockRelease)]) -> Fixture {
@@ -87,8 +88,14 @@ async fn test_client_polling_tracks_caching_to_ready() {
 }
 
 #[tokio::test]
-async fn test_known_blocked_is_logged_without_provider_calls() {
-    let f = logged(0, &[]).await;
+async fn test_known_blocked_copy_on_the_account_is_logged_as_reused() {
+    let f = Fixture::with_mock(
+        MockDebrid::new(Duration::ZERO)
+            .with_releases(&[(&hash('a'), MockRelease::Refused)])
+            .with_torrent(&hash('a'), &[1]),
+    )
+    .await;
+    f.enable_debrid_log().await;
     record_availability(
         &f.server.pool,
         &hash('a'),
@@ -98,10 +105,10 @@ async fn test_known_blocked_is_logged_without_provider_calls() {
     .await;
     f.http_resolve(&hash('a')).await;
     let attempt = f.attempt(&hash('a'), "play").await;
-    assert_eq!(attempt["status"], "refused");
+    assert_eq!(attempt["status"], "ready");
     assert_eq!(
         f.event_types(&attempt).await,
-        ["requested", "known_blocked"]
+        ["requested", "reused", "cache_check", "ready"]
     );
     f.server.cleanup().await;
 }
@@ -261,5 +268,80 @@ async fn test_clear_removes_every_attempt() {
         .await
         .assert_ok();
     assert!(f.attempts().await.is_empty());
+    f.server.cleanup().await;
+}
+
+/// A pack's hash-level title names one episode at best (a seed labelled an S01-S15 pack
+/// "S06E03"), so every play of another episode in it was logged under that title.
+#[tokio::test]
+async fn test_play_rows_carry_the_episode_title_not_the_packs() {
+    let cases = [
+        (
+            'p',
+            json!({"file_id": 1, "release_title": "Show S07E16 Right", "file_name": "Show.S07E16.Right.mkv"}),
+            "Show S07E16 Right",
+        ),
+        ('q', json!({"file_id": 1}), "Show.S07E16.Right"),
+    ];
+    let mut mock = MockDebrid::new(Duration::ZERO);
+    for (c, ..) in &cases {
+        mock = mock.with_pack(
+            &hash(*c),
+            &["Show/Show.S06E03.Wrong.mkv", "Show/Show.S07E16.Right.mkv"],
+        );
+    }
+    let f = Fixture::with_mock(mock).await;
+    f.enable_debrid_log().await;
+    for (c, ..) in &cases {
+        let h = hash(*c);
+        hash_index::upsert_batch(
+            &f.server.pool,
+            &[HashIndexEntry {
+                info_hash: h.clone(),
+                imdb_id: None,
+                tmdb_id: None,
+                original_title: "Show S06E03 Wrong".to_string(),
+                parsed_title: None,
+                year: None,
+                quality: None,
+                size: None,
+                magnet_url: None,
+                source: "test".to_string(),
+                seeders: None,
+                season: None,
+                episodes: None,
+            }],
+        )
+        .await
+        .unwrap();
+        hash_index::upsert_files(
+            &f.server.pool,
+            &[1, 0].map(|idx| HashFileEntry {
+                info_hash: h.clone(),
+                file_idx: idx,
+                filename: if idx == 1 {
+                    "Show.S07E16.Right.mkv"
+                } else {
+                    "Show.S06E03.Wrong.mkv"
+                }
+                .to_string(),
+                size: Some(1),
+                season: None,
+                episodes: None,
+                media_type: "video".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+    }
+    for (c, extra, title) in cases {
+        f.http_resolve_with(&hash(c), extra).await;
+        let attempt = f.attempt(&hash(c), "play").await;
+        assert_eq!(attempt["release_title"], title, "{c}: {attempt}");
+        assert_eq!(
+            attempt["file_name"], "Show.S07E16.Right.mkv",
+            "{c}: {attempt}"
+        );
+    }
     f.server.cleanup().await;
 }

@@ -210,6 +210,10 @@ impl Throttled {
         &self.lane
     }
 
+    pub fn provider(&self) -> Arc<dyn DebridProvider> {
+        self.inner.clone()
+    }
+
     pub fn gate(&self) -> &Arc<Gate> {
         &self.gate
     }
@@ -308,22 +312,9 @@ impl DebridProvider for Throttled {
         &self,
         http_client: &reqwest::Client,
         api_key: &str,
-    ) -> Result<HashMap<String, ExistingTorrent>, DebridError> {
+    ) -> Result<HashMap<String, Vec<ExistingTorrent>>, DebridError> {
         self.run(|| self.inner.find_existing_torrents(http_client, api_key))
             .await
-    }
-
-    async fn find_existing_torrent(
-        &self,
-        http_client: &reqwest::Client,
-        api_key: &str,
-        info_hash: &str,
-    ) -> Result<Option<ExistingTorrent>, DebridError> {
-        self.run(|| {
-            self.inner
-                .find_existing_torrent(http_client, api_key, info_hash)
-        })
-        .await
     }
 
     async fn delete_torrent(

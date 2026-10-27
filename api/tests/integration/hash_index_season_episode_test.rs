@@ -471,3 +471,61 @@ async fn upsert_coalesces_season_episodes() {
 
     server.cleanup().await;
 }
+
+/// Pack files are titled by their file name, which often drops the resolution the pack
+/// name carries ("Criminal Minds S07E16 A Family Affair.mkv" inside a 720p pack); without
+/// it every such file ranked and displayed as unknown quality.
+#[test]
+fn pack_files_inherit_the_pack_resolution_when_their_name_has_none() {
+    let file = |idx: i32, name: &str| hash_index::HashFileEntry {
+        info_hash: "a".repeat(40),
+        file_idx: idx,
+        filename: name.to_string(),
+        size: Some(300_000_000),
+        season: Some(7),
+        episodes: Some(vec![16]),
+        media_type: "video".to_string(),
+    };
+    let row = hash_index::HashIndexRowWithFiles {
+        info_hash: "a".repeat(40),
+        imdb_id: None,
+        tmdb_id: None,
+        original_title: "Criminal Minds 2005.S01-S17.720p.AMZN.H264.x264.AAC-Zero00".to_string(),
+        parsed_title: None,
+        year: None,
+        quality: None,
+        size: None,
+        magnet_url: None,
+        source: "test".to_string(),
+        seeders: None,
+        season: Some(7),
+        episodes: None,
+        files: vec![
+            file(1, "Criminal Minds S07E16 A Family Affair.mkv"),
+            file(2, "Criminal.Minds.S07E17.1080p.WEB.mkv"),
+        ],
+    };
+    let releases = kobload_api::services::stream::hash_index_rows_with_files_to_releases(vec![row]);
+    let resolutions: Vec<(String, Option<String>)> = releases
+        .iter()
+        .map(|r| {
+            (
+                r.title.clone(),
+                kobload_api::quality::parse_quality(&r.title).resolution,
+            )
+        })
+        .collect();
+    assert_eq!(
+        resolutions,
+        [
+            (
+                "Criminal Minds S07E16 A Family Affair 720p".to_string(),
+                Some("720p".to_string())
+            ),
+            (
+                "Criminal.Minds.S07E17.1080p.WEB".to_string(),
+                Some("1080p".to_string())
+            ),
+        ]
+    );
+}

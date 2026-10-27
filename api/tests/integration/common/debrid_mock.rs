@@ -39,6 +39,7 @@ struct MockState {
     calls: Vec<MockCall>,
     rate_limited_adds: u32,
     progress: HashMap<String, f32>,
+    listing_delay: Duration,
 }
 
 /// A stateful in-memory debrid account. Every call is logged with the hash it concerns.
@@ -130,6 +131,11 @@ impl MockDebrid {
             .unwrap()
             .progress
             .insert(hash.to_string(), progress);
+    }
+
+    /// Account listings take this long on top of the call latency, like a large RD account.
+    pub fn slow_listing(&self, delay: Duration) {
+        self.state.lock().unwrap().listing_delay = delay;
     }
 
     pub fn rate_limit_next_adds(&self, n: u32) {
@@ -308,7 +314,8 @@ impl DebridProvider for MockDebrid {
             .get(&hash)
             .cloned()
             .unwrap_or_default();
-        let cached = self.release(&hash) == MockRelease::Cached
+        // Like Real-Debrid, a refusal only stops the add; a copy already held still serves.
+        let cached = self.release(&hash) != MockRelease::Uncached
             && !selected.iter().any(|id| uncached.contains(id));
         let (status, links) = match (selected.is_empty(), cached) {
             (true, _) => (DebridTorrentStatus::WaitingFileSelection, Vec::new()),
@@ -388,41 +395,44 @@ impl DebridProvider for MockDebrid {
         &self,
         _: &reqwest::Client,
         _: &str,
-    ) -> Result<HashMap<String, ExistingTorrent>, DebridError> {
+    ) -> Result<HashMap<String, Vec<ExistingTorrent>>, DebridError> {
         self.call("list_torrents", String::new()).await;
-        let state = self.state.lock().unwrap();
-        let mut newest: HashMap<String, &String> = HashMap::new();
-        for (id, t) in &state.torrents {
-            let entry = newest.entry(t.hash.clone()).or_insert(id);
-            if torrent_number(id) > torrent_number(entry) {
-                *entry = id;
-            }
+        let listing_delay = self.state.lock().unwrap().listing_delay;
+        tokio::time::sleep(listing_delay).await;
+        let mut copies: Vec<(u32, String, String, bool)> = {
+            let state = self.state.lock().unwrap();
+            state
+                .torrents
+                .iter()
+                .map(|(id, t)| {
+                    (
+                        torrent_number(id),
+                        t.hash.clone(),
+                        id.clone(),
+                        !t.selected.is_empty(),
+                    )
+                })
+                .collect()
+        };
+        copies.sort_by_key(|(n, ..)| std::cmp::Reverse(*n));
+        let mut out: HashMap<String, Vec<ExistingTorrent>> = HashMap::new();
+        for (_, hash, id, selected) in copies {
+            let ready = selected && self.release(&hash) != MockRelease::Uncached;
+            // Real-Debrid's listing leaves the links off nearly every finished torrent.
+            out.entry(hash).or_default().push(ExistingTorrent {
+                id,
+                status: if ready {
+                    DebridTorrentStatus::Ready
+                } else {
+                    DebridTorrentStatus::WaitingFileSelection
+                },
+                has_links: false,
+            });
         }
-        Ok(newest
-            .into_iter()
-            .map(|(hash, id)| {
-                (
-                    hash,
-                    ExistingTorrent {
-                        id: id.clone(),
-                        status: DebridTorrentStatus::WaitingFileSelection,
-                        has_links: false,
-                    },
-                )
-            })
-            .collect())
-    }
-
-    async fn find_existing_torrent(
-        &self,
-        client: &reqwest::Client,
-        api_key: &str,
-        info_hash: &str,
-    ) -> Result<Option<ExistingTorrent>, DebridError> {
-        Ok(self
-            .find_existing_torrents(client, api_key)
-            .await?
-            .remove(&info_hash.to_lowercase()))
+        for list in out.values_mut() {
+            list.sort_by_key(|t| std::cmp::Reverse(t.usefulness()));
+        }
+        Ok(out)
     }
 
     async fn delete_torrent(
