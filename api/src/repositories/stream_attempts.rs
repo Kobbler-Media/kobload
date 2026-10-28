@@ -206,6 +206,7 @@ pub async fn latest_for_release(
            WHERE info_hash = $1
              AND ($2::uuid IS NULL OR provider_id = $2)
              AND status IN ('ready', 'caching', 'played')
+             AND ($3::int IS NULL OR file_id IS NULL OR file_id = $3)
            ORDER BY (file_id IS NOT DISTINCT FROM $3) DESC, (origin = 'play') DESC, created_at DESC
            LIMIT 1"#,
         info_hash,

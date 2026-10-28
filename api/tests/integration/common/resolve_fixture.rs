@@ -184,11 +184,21 @@ impl Fixture {
     }
 
     pub async fn report(&self, hash: &str, ok: bool, reason: Option<&str>) {
+        self.report_file(hash, None, ok, reason).await;
+    }
+
+    pub async fn report_file(
+        &self,
+        hash: &str,
+        file_id: Option<i32>,
+        ok: bool,
+        reason: Option<&str>,
+    ) {
         self.server
             .admin_client()
             .post_json(
                 "/api/v1/stream/outcome",
-                &json!({"debrid_provider_id": self.provider_id, "info_hash": hash, "ok": ok, "reason": reason}),
+                &json!({"debrid_provider_id": self.provider_id, "info_hash": hash, "file_id": file_id, "ok": ok, "reason": reason}),
             )
             .await
             .assert_success();

@@ -189,6 +189,23 @@ async fn test_playback_reports_close_the_attempt() {
 }
 
 #[tokio::test]
+async fn test_a_report_for_one_file_of_a_pack_leaves_its_siblings_alone() {
+    let h = hash('p');
+    let mock = MockDebrid::new(Duration::ZERO)
+        .with_pack(&h, &["Show/Show.S01E01.mkv", "Show/Show.S01E02.mkv"]);
+    let f = Fixture::with_mock(mock).await;
+    f.enable_debrid_log().await;
+    f.http_resolve_with(&h, json!({"file_id": 0})).await;
+    for ok in [true, false] {
+        f.report_file(&h, Some(1), ok, Some("decoder error")).await;
+        let attempt = f.attempt(&h, "play").await;
+        assert_eq!(attempt["status"], "ready", "{attempt}");
+        assert_eq!(f.event_types(&attempt).await.last().unwrap(), "ready");
+    }
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
 async fn test_cleanup_purges_after_a_day_and_abandons_stalled_attempts() {
     let f = logged(0, &[(&hash('s'), MockRelease::Uncached)]).await;
     f.http_resolve(&hash('o')).await;
