@@ -136,3 +136,52 @@ async fn test_close_scores_keep_the_previous_episodes_look() {
     }
     server.cleanup().await;
 }
+
+/// Both releases played; the replay kobbler asks for is the one played last, and it leads
+/// even over a better-scored earlier play.
+#[tokio::test]
+async fn test_of_two_played_releases_the_preferred_one_leads() {
+    let server = TestServer::start().await;
+    let p = create_provider(&server.pool, "real_debrid").await;
+    let earlier = "Show.S01E01.2160p.WEB-DL-EARLIER";
+    let latest = "Show.S01E01.360p.WEB-LATEST";
+    for (c, title) in [('e', earlier), ('l', latest)] {
+        server
+            .admin_client()
+            .post_json(
+                "/api/v1/stream/outcome",
+                &json!({ "debrid_provider_id": p.id, "info_hash": hash(c), "ok": true,
+                         "release_title": title }),
+            )
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let prefer = StreamPreference {
+        info_hash: hash('l'),
+        file_id: None,
+        release_title: Some(latest.to_string()),
+    };
+    let out = rank(
+        &server,
+        &p,
+        vec![
+            (
+                option(&p, &hash('e'), earlier, 9.0),
+                KnownAvailability::InAccount,
+            ),
+            (
+                option(&p, &hash('l'), latest, 2.0),
+                KnownAvailability::InAccount,
+            ),
+        ],
+        &prefer,
+    )
+    .await;
+    assert_eq!(
+        out.iter()
+            .map(|o| o.release_title.as_str())
+            .collect::<Vec<_>>(),
+        [latest, earlier]
+    );
+    server.cleanup().await;
+}
