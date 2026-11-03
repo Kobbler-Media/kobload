@@ -24,12 +24,15 @@ pub enum KnownAvailability {
     /// We resolved this ourselves, recently. The strongest signal there is.
     Available,
     /// Torrentio reports it cached. Weaker than our own probe: the status comes
-    /// from Torrentio's shared store (~5-day TTL, populated when *any* of its
+    /// from Torrentio's shared store (14-day TTL, populated when *any* of its
     /// users unrestricted the hash), not from a check against our account, so
     /// it means "recently cached for someone" rather than "cached for us".
     LikelyAvailable,
     /// Nothing known either way.
     Unknown,
+    /// Its name carries a tag the provider refuses, or Torrentio left it out of its debrid
+    /// listing, which it does for hashes any of its users had refused as infringing.
+    LikelyRefused,
     /// Torrentio reports it not cached — it would have to download first.
     LikelyDead,
     /// Our own probe failed to cache it (no seeds / timed out). Deprioritise,
@@ -69,8 +72,8 @@ pub struct RankPreferences<'a> {
     pub audio_languages: &'a [String],
 }
 
-/// (group, wrong language, suspect fake, continuity, risk bucket)
-type RankKey = (StreamGroup, bool, bool, continuity::Rank, u8);
+/// (group, wrong language, suspect fake, continuity, risk bucket, not RD+)
+type RankKey = (StreamGroup, bool, bool, continuity::Rank, u8, bool);
 
 /// A release that played starts again; its availability only matters once a probe says
 /// it is gone. Below the played and on-account releases the rest run by quality, with
@@ -80,7 +83,7 @@ fn group(availability: KnownAvailability, played: bool, playback_failed: bool) -
     match availability {
         _ if playback_failed => StreamGroup::Failed,
         A::Dead | A::Blocked => StreamGroup::Failed,
-        A::LikelyDead => StreamGroup::Uncached,
+        A::LikelyDead | A::LikelyRefused => StreamGroup::Uncached,
         _ if played => StreamGroup::Played,
         // A probe that found it ready keeps the torrent for playback, so it is on the account.
         A::InAccount | A::Available => StreamGroup::Account,
@@ -95,12 +98,13 @@ fn exposed(availability: KnownAvailability, played: bool) -> StreamAvailability 
         A::LikelyAvailable => StreamAvailability::Likely,
         A::Unknown if played => StreamAvailability::Likely,
         A::Unknown => StreamAvailability::Unknown,
-        A::LikelyDead | A::Dead | A::Blocked => StreamAvailability::Uncached,
+        A::LikelyDead | A::LikelyRefused | A::Dead | A::Blocked => StreamAvailability::Uncached,
     }
 }
 
 /// Order is: the group; then releases without a preferred audio language sink; then fakes
 /// sink; then continuity with what the caller played before; then learned name risk; then
+/// Torrentio's RD+ ahead of releases nobody has vouched for; then
 /// score, discounted for releases many devices cannot play, whose default audio track is
 /// not the preferred language, or that look different from the previous episode.
 /// The pack the previous episode played from ranks as played: the next episode in it was
@@ -224,6 +228,7 @@ pub async fn rank_options(
                 fit.suspect,
                 continuity_rank,
                 risk.bucket(),
+                availability != KnownAvailability::LikelyAvailable,
             );
             (key, fit.sort_score - penalty * fit.sort_score.abs(), option)
         })

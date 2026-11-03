@@ -10,6 +10,7 @@ mod release_fit;
 mod resolve;
 mod service;
 mod trait_risk;
+pub mod vouched;
 pub mod warm_cache;
 
 pub use availability::known_availability;

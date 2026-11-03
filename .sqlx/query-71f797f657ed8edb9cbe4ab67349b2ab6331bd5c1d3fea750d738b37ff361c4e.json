@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO debrid_stream_torrents (provider_id, torrent_id, info_hash)\n         VALUES ($1, $2, $3)\n         ON CONFLICT (provider_id, torrent_id) DO UPDATE SET touched_at = NOW()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71f797f657ed8edb9cbe4ab67349b2ab6331bd5c1d3fea750d738b37ff361c4e"
+}

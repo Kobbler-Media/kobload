@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use kobload_api::debrid::provider::DebridProvider;
-use kobload_api::debrid::types::ActiveSlots;
+use kobload_api::debrid::rd_names;
+use kobload_api::debrid::types::{ActiveSlots, AddPauses};
 use kobload_api::debrid::{
     CachedAvailability, DebridAccountStatus, DebridError, DebridFile, DebridProviderResolver,
     DebridProviderType, DebridTorrent, DebridTorrentStatus, ExistingTorrent, UnrestrictedLink,
@@ -41,6 +42,14 @@ struct MockState {
     progress: HashMap<String, f32>,
     listing_delay: Duration,
     lost: HashSet<(String, i32)>,
+    unseen_gets: u32,
+    linkless: HashSet<String>,
+    magnets: Vec<String>,
+    archived: HashSet<String>,
+    add_pauses: Option<AddPauses>,
+    refused_adds: u32,
+    active_limit: Option<usize>,
+    served_as: HashMap<String, (String, String)>,
 }
 
 /// A stateful in-memory debrid account. Every call is logged with the hash it concerns.
@@ -116,6 +125,11 @@ impl MockDebrid {
         state.lost.extend(held.into_iter().map(|id| (id, file_id)));
     }
 
+    /// The account is emptied behind kobload's back, as a user clearing it would.
+    pub fn forget_torrents(&self) {
+        self.state.lock().unwrap().torrents.clear();
+    }
+
     pub fn holds(&self, torrent_id: &str) -> bool {
         self.state.lock().unwrap().torrents.contains_key(torrent_id)
     }
@@ -154,6 +168,62 @@ impl MockDebrid {
     /// Account listings take this long on top of the call latency, like a large RD account.
     pub fn slow_listing(&self, delay: Duration) {
         self.state.lock().unwrap().listing_delay = delay;
+    }
+
+    /// RD is not read-your-writes: a torrent just added can 404 for a moment.
+    pub fn not_found_next_gets(&self, n: u32) {
+        self.state.lock().unwrap().unseen_gets = n;
+    }
+
+    /// Copies held now report finished with no links, as RD's sometimes do.
+    pub fn strip_held_links(&self, hash: &str) {
+        let mut state = self.state.lock().unwrap();
+        let held: Vec<String> = state
+            .torrents
+            .iter()
+            .filter(|(_, t)| t.hash == hash)
+            .map(|(id, _)| id.clone())
+            .collect();
+        state.linkless.extend(held);
+    }
+
+    /// A selection of more than one file unrestricts to one archive of them all.
+    pub fn archive_multi_selections(&self, hash: &str) {
+        self.state.lock().unwrap().archived.insert(hash.to_string());
+    }
+
+    pub fn magnets(&self) -> Vec<String> {
+        self.state.lock().unwrap().magnets.clone()
+    }
+
+    /// Pauses adds the way Real-Debrid does, with a hold short enough for a test.
+    pub fn with_add_pauses(self: Arc<Self>, hold: Duration) -> Arc<Self> {
+        self.state.lock().unwrap().add_pauses = Some(AddPauses {
+            hold,
+            burst: 4,
+            spacing: Duration::from_secs(45),
+            refuses_name: rd_names::refuses,
+        });
+        self
+    }
+
+    /// Adds beyond this many torrents still downloading answer "too many active".
+    pub fn with_active_limit(self: Arc<Self>, n: usize) -> Arc<Self> {
+        self.state.lock().unwrap().active_limit = Some(n);
+        self
+    }
+
+    /// The next adds are refused as infringing, whatever the hash, as during a pause.
+    pub fn refuse_next_adds(&self, n: u32) {
+        self.state.lock().unwrap().refused_adds = n;
+    }
+
+    pub fn serve_as(&self, hash: &str, filename: &str, mime: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .served_as
+            .insert(hash.to_string(), (filename.to_string(), mime.to_string()));
     }
 
     pub fn rate_limit_next_adds(&self, n: u32) {
@@ -246,6 +316,10 @@ impl DebridProvider for MockDebrid {
         DebridProviderType::RealDebrid
     }
 
+    fn add_pauses(&self) -> Option<AddPauses> {
+        self.state.lock().unwrap().add_pauses
+    }
+
     async fn check_availability(
         &self,
         _: &reqwest::Client,
@@ -265,15 +339,38 @@ impl DebridProvider for MockDebrid {
         self.call("add_magnet", hash.clone()).await;
         {
             let mut state = self.state.lock().unwrap();
+            state.magnets.push(magnet.to_string());
             if state.rate_limited_adds > 0 {
                 state.rate_limited_adds -= 1;
                 return Err(DebridError::RateLimited {
                     retry_after: Some(self.retry_after),
                 });
             }
+            if state.refused_adds > 0 {
+                state.refused_adds -= 1;
+                return Err(DebridError::Blocked);
+            }
         }
         if self.release(&hash) == MockRelease::Refused {
             return Err(DebridError::Blocked);
+        }
+        let limit = self.state.lock().unwrap().active_limit;
+        if let Some(limit) = limit {
+            let downloading = {
+                let state = self.state.lock().unwrap();
+                state
+                    .torrents
+                    .values()
+                    .map(|t| t.hash.clone())
+                    .collect::<Vec<_>>()
+            };
+            let active = downloading
+                .iter()
+                .filter(|h| self.release(h) == MockRelease::Uncached)
+                .count();
+            if active >= limit {
+                return Err(DebridError::TooManyActive);
+            }
         }
         let mut state = self.state.lock().unwrap();
         state.next_id += 1;
@@ -320,6 +417,14 @@ impl DebridProvider for MockDebrid {
     ) -> Result<DebridTorrent, DebridError> {
         let hash = self.hash_of(torrent_id);
         self.call("get_torrent", hash.clone()).await;
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.unseen_gets > 0 {
+                state.unseen_gets -= 1;
+                return Err(DebridError::NotFound);
+            }
+        }
+        let linkless = self.state.lock().unwrap().linkless.contains(torrent_id);
         let selected = match self.state.lock().unwrap().torrents.get(torrent_id) {
             Some(t) => t.selected.clone(),
             None => return Err(DebridError::NotFound),
@@ -380,7 +485,7 @@ impl DebridProvider for MockDebrid {
             id: torrent_id.to_string(),
             status,
             files,
-            links,
+            links: if linkless { Vec::new() } else { links },
         })
     }
 
@@ -409,11 +514,36 @@ impl DebridProvider for MockDebrid {
             .get(file_id - 1)
             .cloned()
             .unwrap_or_default();
+        let multi = {
+            let state = self.state.lock().unwrap();
+            state.archived.contains(&hash)
+                && state
+                    .torrents
+                    .get(&torrent_id)
+                    .is_some_and(|t| t.selected.len() > 1)
+        };
+        if multi {
+            return Ok(UnrestrictedLink {
+                url: format!("https://mock.invalid/stream/{torrent_id}/all.rar"),
+                filename: "Show.S01.rar".to_string(),
+                filesize: 6_000_000_000,
+                mime_type: None,
+                expires_at: None,
+            });
+        }
+        let served_as = self.state.lock().unwrap().served_as.get(&hash).cloned();
+        let (filename, mime_type) = match served_as {
+            Some((name, mime)) => (name, Some(mime)),
+            None => (
+                path.rsplit('/').next().unwrap_or_default().to_string(),
+                None,
+            ),
+        };
         Ok(UnrestrictedLink {
             url: format!("https://mock.invalid/stream/{torrent_id}/{file_id}"),
-            filename: path.rsplit('/').next().unwrap_or_default().to_string(),
+            filename,
             filesize: 2_000_000_000,
-            mime_type: None,
+            mime_type,
             expires_at: None,
         })
     }

@@ -83,3 +83,38 @@ async fn test_record_availability_case_variants_share_a_row() {
 
     server.cleanup().await;
 }
+
+/// RD evicts cached torrents slowly and a stale verdict is recovered by the walk, while
+/// every re-probe spends one of RD's scarce adds; a refusal (usually RD pausing the
+/// account's adds) or a dead swarm ages faster.
+#[tokio::test]
+async fn test_verdicts_stay_trusted_for_their_window() {
+    use kobload_api::services::stream::{KnownAvailability, known_availability};
+    let server = TestServer::start().await;
+    let provider_id = create_provider(&server.pool).await;
+    let cases = [
+        ('a', None, 2, Some(KnownAvailability::Available)),
+        ('b', None, 8, None),
+        ('c', Some(UnavailableReason::Dead), 2, None),
+        ('d', Some(UnavailableReason::Blocked), 2, None),
+    ];
+    for (c, reason, days, _) in &cases {
+        let hash = c.to_string().repeat(40);
+        record_availability(&server.pool, &hash, provider_id, *reason).await;
+        sqlx::query("UPDATE debrid_availability_cache SET checked_at = NOW() - make_interval(days => $1) WHERE info_hash = $2")
+            .bind(*days)
+            .bind(&hash)
+            .execute(&server.pool)
+            .await
+            .unwrap();
+    }
+    let hashes: Vec<String> = cases
+        .iter()
+        .map(|(c, ..)| c.to_string().repeat(40))
+        .collect();
+    let known = known_availability(&server.pool, provider_id, &hashes).await;
+    for ((c, _, days, expected), hash) in cases.iter().zip(&hashes) {
+        assert_eq!(known.get(hash), expected.as_ref(), "{c} after {days} days");
+    }
+    server.cleanup().await;
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM debrid_stream_torrents WHERE provider_id = $1 AND torrent_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "376f0815a09e84649cada9b4542ad6aedaf2dd268bd332b0c76b722f7b6c8016"
+}

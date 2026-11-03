@@ -345,6 +345,7 @@ pub async fn stream_search(
     // absent hashes mean "unknown", never "uncached".
     let mut torrentio_cached: std::collections::HashMap<String, bool> =
         std::collections::HashMap::new();
+    let mut torrentio_omitted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut binge_groups: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut torrentio_used = false;
@@ -370,6 +371,9 @@ pub async fn stream_search(
         for tr in results {
             if let Some(cached) = tr.debrid_cached {
                 torrentio_cached.insert(tr.entry.info_hash.to_lowercase(), cached);
+            }
+            if tr.debrid_omitted {
+                torrentio_omitted.insert(tr.entry.info_hash.to_lowercase());
             }
             if let Some(group) = tr.binge_group {
                 binge_groups.insert(tr.entry.info_hash.to_lowercase(), group);
@@ -730,6 +734,9 @@ pub async fn stream_search(
     // never blocks — the release may simply be new to their index.
     let mut torrentio_hints = 0usize;
     for (hash, cached) in &torrentio_cached {
+        if *cached {
+            super::vouched::remember(default_provider.id, hash);
+        }
         if known.contains_key(hash) {
             continue;
         }
@@ -742,6 +749,29 @@ pub async fn stream_search(
             },
         );
         torrentio_hints += 1;
+    }
+    let mut torrentio_omitted_count = 0usize;
+    for hash in torrentio_omitted {
+        if let std::collections::hash_map::Entry::Vacant(e) = known.entry(hash) {
+            e.insert(KnownAvailability::LikelyRefused);
+            torrentio_omitted_count += 1;
+        }
+    }
+    let refuses_name = DebridProviderType::parse(&default_provider.provider_type)
+        .and_then(|t| ctx.debrid_providers.get(&t).add_pauses())
+        .map(|p| p.refuses_name);
+    let mut refused_names = 0usize;
+    if let Some(refuses_name) = refuses_name {
+        for pr in scored.iter().filter(|pr| pr.is_candidate()) {
+            if let Some(hash) = find_info_hash_for_result(pr)
+                && refuses_name(&pr.release.title)
+                && let std::collections::hash_map::Entry::Vacant(e) =
+                    known.entry(hash.to_lowercase())
+            {
+                e.insert(KnownAvailability::LikelyRefused);
+                refused_names += 1;
+            }
+        }
     }
 
     // A copy on the account that holds the wanted file plays without an add, so neither a
@@ -769,6 +799,8 @@ pub async fn stream_search(
             available,
             likely_available,
             torrentio_hints,
+            torrentio_omitted = torrentio_omitted_count,
+            refused_names,
             "Applied known debrid availability to stream results"
         );
     }

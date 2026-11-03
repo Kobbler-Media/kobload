@@ -5,13 +5,18 @@
 
 use crate::jobs::JobError;
 use crate::jobs::worker::JobHandler;
-use crate::repositories::{release_sightings, search_cache, stream_attempts, xem_cache};
+use crate::repositories::{
+    release_sightings, search_cache, stream_attempts, stream_torrents, xem_cache,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 use uuid::Uuid;
+
+/// A stream's torrent still downloading after this long is forgotten rather than reclaimed.
+const STREAM_TORRENT_DAYS: i32 = 7;
 
 /// Handler for cache cleanup jobs.
 pub struct CacheCleanupHandler {
@@ -95,6 +100,10 @@ impl JobHandler for CacheCleanupHandler {
             info!(deleted = attempts_deleted, "Pruned old stream attempts");
         }
 
+        let stream_torrents_deleted = stream_torrents::prune(&self.pool, STREAM_TORRENT_DAYS)
+            .await
+            .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+
         let probes_ingested = crate::services::stream::outcomes::ingest_past_probes(&self.pool)
             .await
             .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
@@ -113,6 +122,7 @@ impl JobHandler for CacheCleanupHandler {
             "release_sightings_deleted": sightings_deleted,
             "stream_attempts_abandoned": attempts_abandoned,
             "stream_attempts_deleted": attempts_deleted,
+            "stream_torrents_deleted": stream_torrents_deleted,
             "stream_probes_ingested": probes_ingested
         }))
     }

@@ -290,10 +290,17 @@ async fn test_warming_skips_releases_that_already_failed() {
     let f = Fixture::new(5, &[(&hash('r'), MockRelease::Refused)]).await;
     let mut failed = f.option(&hash('r'));
     failed.group = Some(StreamGroup::Failed);
-    f.warm_options(vec![failed, f.option(&hash('c'))])
+    let mut uncached = f.option(&hash('u'));
+    uncached.group = Some(StreamGroup::Uncached);
+    f.warm_options(vec![failed, uncached, f.option(&hash('c'))])
         .await
         .unwrap();
     assert_eq!(f.mock.count("add_magnet", Some(&hash('r'))), 0);
+    assert_eq!(
+        f.mock.count("add_magnet", Some(&hash('u'))),
+        0,
+        "a probe of a release expected to need downloading only spends an add"
+    );
     assert_eq!(f.mock.count("add_magnet", Some(&hash('c'))), 1);
     f.server.cleanup().await;
 }
@@ -366,5 +373,48 @@ async fn test_lost_file_keeps_the_held_copy_when_the_fresh_add_is_refused() {
     assert!(f.resolve_file(&hash('a'), 0).await.is_err());
     assert!(f.mock.holds("T1"), "its other files still play");
     assert!(f.resolve_file(&hash('a'), 1).await.unwrap().cached);
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_a_just_added_torrent_that_404s_is_asked_again() {
+    let f = Fixture::new(5, &[]).await;
+    f.resolve(&hash('z')).await.unwrap();
+    f.mock.not_found_next_gets(2);
+    assert!(f.resolve(&hash('a')).await.unwrap().cached);
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('a'))), 1);
+    f.server.cleanup().await;
+}
+
+/// RD sometimes reports an old copy finished with no links; Torrentio adds it again.
+#[tokio::test]
+async fn test_a_held_copy_without_links_plays_from_a_fresh_add() {
+    let f = Fixture::with_mock(
+        MockDebrid::new(Duration::from_millis(5)).with_torrent(&hash('a'), &[1]),
+    )
+    .await;
+    f.mock.strip_held_links(&hash('a'));
+    let played = f.resolve(&hash('a')).await.unwrap();
+    assert!(played.cached, "{played:?}");
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('a'))), 1);
+    assert!(!f.mock.holds("T1"));
+    f.server.cleanup().await;
+}
+
+/// Without trackers RD finds peers for an uncached release through DHT alone.
+#[tokio::test]
+async fn test_magnets_carry_trackers() {
+    let f = Fixture::new(5, &[]).await;
+    f.resolve(&hash('a')).await.unwrap();
+    let mut russian = f.option(&hash('b'));
+    russian.release_title = "Щенячий патруль / PAW Patrol / Сезон: 1 [2013 WEB-DL 1080p]".into();
+    f.warm_options(vec![russian]).await.unwrap();
+    let magnets = f.mock.magnets();
+    assert_eq!(magnets.len(), 2, "{magnets:?}");
+    for m in &magnets {
+        assert!(m.contains("&tr="), "{m}");
+    }
+    assert!(!magnets[0].contains("t-ru.org"), "{}", magnets[0]);
+    assert!(magnets[1].contains("t-ru.org"), "{}", magnets[1]);
     f.server.cleanup().await;
 }

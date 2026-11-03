@@ -270,9 +270,20 @@ pub async fn warm_top_results(
     // A season pack appears once per episode file; its cache status is the torrent's, so
     // one probe answers for all of them.
     let mut seen_hashes = std::collections::HashSet::new();
+    let lead_uncached = options
+        .first()
+        .is_some_and(|o| o.group == Some(StreamGroup::Uncached));
+    // An uncached release costs an add only to be deleted again, unless it leads: then
+    // nothing better exists and starting its download now is the head start.
     let candidates: Vec<_> = options
         .into_iter()
-        .filter(|opt| opt.group != Some(StreamGroup::Failed))
+        .enumerate()
+        .filter(|(i, opt)| match opt.group {
+            Some(StreamGroup::Failed) => false,
+            Some(StreamGroup::Uncached) => *i == 0 && lead_uncached,
+            _ => true,
+        })
+        .map(|(_, opt)| opt)
         .filter(|opt| {
             opt.info_hash
                 .as_ref()

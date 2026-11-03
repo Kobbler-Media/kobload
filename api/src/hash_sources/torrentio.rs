@@ -63,6 +63,9 @@ pub struct TorrentioResult {
     /// response carried no cache information either way.
     pub debrid_cached: Option<bool>,
     pub binge_group: Option<String>,
+    /// Keyless-only: the debrid listing came back and left this hash out, as Torrentio
+    /// does for hashes its users had refused as infringing.
+    pub debrid_omitted: bool,
 }
 
 pub struct TorrentioClient {
@@ -166,32 +169,13 @@ impl TorrentioClient {
             self.fetch_streams_inner(&base_url, imdb_id, media_kind, season, episode),
         );
 
-        let mut results = match debrid_result {
-            Ok(entries) => entries,
-            Err(e) => {
-                warn!(url = %debrid_url, error = %e, "torrentio debrid search failed");
-                Vec::new()
-            }
-        };
-
-        // Merge in anything the debrid response could not supply. Debrid entries
-        // win on conflict: only they carry cache markers.
-        let seen: std::collections::HashSet<String> =
-            results.iter().map(|r| r.entry.info_hash.clone()).collect();
-        match keyless_result {
-            Ok(entries) => {
-                for e in entries {
-                    if !seen.contains(&e.entry.info_hash) {
-                        results.push(e);
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(url = %base_url, error = %e, "torrentio keyless search failed");
-            }
+        if let Err(e) = &debrid_result {
+            warn!(url = %debrid_url, error = %e, "torrentio debrid search failed");
         }
-
-        results
+        if let Err(e) = &keyless_result {
+            warn!(url = %base_url, error = %e, "torrentio keyless search failed");
+        }
+        merge_listings(debrid_result, keyless_result)
     }
 
     async fn fetch_streams_inner(
@@ -219,6 +203,24 @@ impl TorrentioClient {
             api_episode,
         )?)
     }
+}
+
+/// Debrid entries win on conflict: only they carry cache markers.
+fn merge_listings<E>(
+    debrid: Result<Vec<TorrentioResult>, E>,
+    keyless: Result<Vec<TorrentioResult>, E>,
+) -> Vec<TorrentioResult> {
+    let mut results = debrid.unwrap_or_default();
+    let verdict = results.iter().any(|r| r.debrid_cached.is_some());
+    let seen: std::collections::HashSet<String> =
+        results.iter().map(|r| r.entry.info_hash.clone()).collect();
+    for mut e in keyless.unwrap_or_default() {
+        if !seen.contains(&e.entry.info_hash) {
+            e.debrid_omitted = verdict;
+            results.push(e);
+        }
+    }
+    results
 }
 
 pub fn parse_streams(
@@ -340,6 +342,7 @@ pub fn parse_streams(
                 file,
                 debrid_cached,
                 binge_group,
+                debrid_omitted: false,
             })
         })
         .collect();
@@ -639,6 +642,65 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/\
     }
 
     use super::*;
+
+    fn listing(streams: serde_json::Value) -> Vec<TorrentioResult> {
+        parse_streams(&streams.to_string(), "tt1", "movies", None, None).unwrap()
+    }
+
+    fn debrid_stream(hash: char, name: &str) -> serde_json::Value {
+        let hash = hash.to_string().repeat(40);
+        serde_json::json!({
+            "name": name,
+            "title": "Movie.2024.1080p.WEB-DL.x264-GRP",
+            "url": format!("https://torrentio.strem.fun/resolve/realdebrid/KEY/{hash}/null/0/m.mkv"),
+        })
+    }
+
+    fn keyless_stream(hash: char) -> serde_json::Value {
+        serde_json::json!({
+            "name": "Torrentio\n1080p",
+            "title": "Movie.2024.1080p.WEB-DL.x264-GRP",
+            "infoHash": hash.to_string().repeat(40),
+        })
+    }
+
+    fn omitted(results: &[TorrentioResult]) -> Vec<String> {
+        let mut out: Vec<String> = results
+            .iter()
+            .filter(|r| r.debrid_omitted)
+            .map(|r| r.entry.info_hash[..1].to_string())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn keyless_hashes_the_debrid_listing_left_out_are_marked_omitted() {
+        let keyless = || {
+            Ok(listing(
+                serde_json::json!({ "streams": [keyless_stream('a'), keyless_stream('b'), keyless_stream('c')] }),
+            ))
+        };
+        let debrid = listing(serde_json::json!({ "streams": [
+            debrid_stream('a', "[RD+] Torrentio\n1080p"),
+            debrid_stream('c', "[RD download] Torrentio\n1080p"),
+        ] }));
+        assert_eq!(omitted(&merge_listings(Ok(debrid), keyless())), ["b"]);
+
+        let failed: Result<Vec<TorrentioResult>, String> = Err("timeout".into());
+        assert!(
+            omitted(&merge_listings(failed, keyless())).is_empty(),
+            "an outage says nothing"
+        );
+
+        let bad_key = listing(
+            serde_json::json!({ "streams": [{ "name": "Torrentio\nRD error", "title": "x" }] }),
+        );
+        assert!(
+            omitted(&merge_listings(Ok(bad_key), keyless())).is_empty(),
+            "a listing without cache markers is not a debrid verdict"
+        );
+    }
 
     #[test]
     fn test_strip_file_extension() {

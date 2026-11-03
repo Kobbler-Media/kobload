@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO debrid_availability_cache (info_hash, provider_id, available, file_data)\n           VALUES ($1, $2, true, $3)\n           ON CONFLICT (info_hash, provider_id) DO UPDATE SET file_data = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5b43b35aababb3bdf0decb058d0ee4c269caa611c3a6e2574fc4c52f3a258ae9"
+}

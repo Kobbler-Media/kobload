@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use super::types::{
-    ActiveSlots, CachedAvailability, DebridAccountStatus, DebridError, DebridProviderType,
-    DebridTorrent, ExistingTorrent, UnrestrictedLink, UsenetDownload,
+    ActiveSlots, AddPauses, CachedAvailability, DebridAccountStatus, DebridError,
+    DebridProviderType, DebridTorrent, ExistingTorrent, UnrestrictedLink, UsenetDownload,
 };
 
 /// Trait implemented by each debrid provider (Real-Debrid, AllDebrid, Premiumize, TorBox).
@@ -22,6 +22,10 @@ pub trait DebridProvider: Send + Sync {
     /// Whether this provider supports usenet downloads (only TorBox).
     fn supports_usenet(&self) -> bool {
         false
+    }
+
+    fn add_pauses(&self) -> Option<AddPauses> {
+        None
     }
 
     /// Maximum number of hashes per availability check request.

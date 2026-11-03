@@ -2,6 +2,7 @@
 
 pub mod app_settings;
 pub mod auth;
+pub mod cached_files;
 pub mod clients;
 pub mod config;
 pub mod downloads;
@@ -19,6 +20,7 @@ pub mod scene_mappings;
 pub mod search_cache;
 pub mod stream_attempts;
 pub mod stream_outcomes;
+pub mod stream_torrents;
 pub mod trash_filters;
 pub mod watch;
 pub mod watch_directories;

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM debrid_stream_torrents WHERE touched_at < NOW() - make_interval(days => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6fab3dc57eeee359aebe845d692408c97fead6d7069bb75a053c11924cfe83bb"
+}

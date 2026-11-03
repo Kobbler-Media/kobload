@@ -5,14 +5,17 @@
 //! Rate limit: 250 requests/minute
 //! Availability check: up to 100 hashes per request
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use tracing::warn;
 
 use super::provider::DebridProvider;
+use super::rd_names;
 use super::types::{
-    ActiveSlots, CachedAvailability, DebridAccountStatus, DebridError, DebridFile,
+    ActiveSlots, AddPauses, CachedAvailability, DebridAccountStatus, DebridError, DebridFile,
     DebridProviderType, DebridTorrent, DebridTorrentStatus, ExistingTorrent, UnrestrictedLink,
 };
 
@@ -101,6 +104,13 @@ const RD_ERR_TOO_MANY_REQUESTS: i32 = 34;
 const RD_ERR_INFRINGING_FILE: i32 = 35;
 /// Fair usage limit.
 const RD_ERR_FAIR_USAGE: i32 = 36;
+/// Traffic exhausted, too many active downloads, download limit: the account is capped
+/// for now, the same answer for every hash.
+const RD_ERR_ACCOUNT_LIMITS: [i32; 3] = [21, 23, 26];
+/// Torrent too big: permanent for that hash, like a refusal.
+const RD_ERR_TORRENT_TOO_BIG: i32 = 29;
+/// Permission denied, hoster not available for free users: the account cannot do this.
+const RD_ERR_ACCESS_DENIED: [i32; 2] = [9, 20];
 /// Disabled endpoint (what /torrents/instantAvailability now returns).
 const RD_ERR_DISABLED_ENDPOINT: i32 = 37;
 
@@ -136,6 +146,13 @@ async fn check_error_response(resp: reqwest::Response) -> Result<reqwest::Respon
         Some(RD_ERR_TORRENT_ALREADY_ACTIVE) => return Err(DebridError::TooManyActive),
         Some(RD_ERR_FAIR_USAGE) => return Err(DebridError::FairUsage),
         Some(RD_ERR_HOSTER_UNAVAILABLE) => return Err(DebridError::HosterUnavailable),
+        Some(RD_ERR_TORRENT_TOO_BIG) => return Err(DebridError::TooBig),
+        Some(code) if RD_ERR_ACCOUNT_LIMITS.contains(&code) => {
+            return Err(DebridError::FairUsage);
+        }
+        Some(code) if RD_ERR_ACCESS_DENIED.contains(&code) => {
+            return Err(DebridError::AuthFailed);
+        }
         Some(RD_ERR_TOO_MANY_REQUESTS) => return Err(DebridError::RateLimited { retry_after }),
         Some(RD_ERR_DISABLED_ENDPOINT) => {
             return Err(DebridError::UnsupportedOperation);
@@ -167,7 +184,8 @@ async fn check_error_response(resp: reqwest::Response) -> Result<reqwest::Respon
 fn map_torrent_status(status: &str, progress: Option<f64>) -> DebridTorrentStatus {
     let pct = progress.unwrap_or(0.0) as f32 / 100.0;
     match status {
-        "downloaded" => DebridTorrentStatus::Ready,
+        // "dead" is a finished torrent whose swarm died; RD still serves its files.
+        "downloaded" | "dead" => DebridTorrentStatus::Ready,
         "waiting_files_selection" => DebridTorrentStatus::WaitingFileSelection,
         "magnet_conversion" | "queued" | "downloading" | "uploading" | "compressing" => {
             DebridTorrentStatus::Downloading { progress: pct }
@@ -176,7 +194,7 @@ fn map_torrent_status(status: &str, progress: Option<f64>) -> DebridTorrentStatu
         // as for genuine malware flags; either way the hash is dead to us
         // permanently, so surface it distinctly from transient errors.
         "virus" => DebridTorrentStatus::Blocked,
-        "magnet_error" | "error" | "dead" => DebridTorrentStatus::Error {
+        "magnet_error" | "error" => DebridTorrentStatus::Error {
             message: format!("Torrent status: {status}"),
         },
         other => {
@@ -192,6 +210,18 @@ fn map_torrent_status(status: &str, progress: Option<f64>) -> DebridTorrentStatu
 impl DebridProvider for RealDebridProvider {
     fn provider_type(&self) -> DebridProviderType {
         DebridProviderType::RealDebrid
+    }
+
+    /// Measured by Debrid Media Manager (src/utils/rdAddPause.ts and services/realDebrid.ts
+    /// there, 2026-10): about four adds in three minutes trip a pause of 21 s to five
+    /// minutes, during which every add answers error 35.
+    fn add_pauses(&self) -> Option<AddPauses> {
+        Some(AddPauses {
+            hold: Duration::from_secs(30),
+            burst: 4,
+            spacing: Duration::from_secs(45),
+            refuses_name: rd_names::refuses,
+        })
     }
 
     fn max_hashes_per_batch(&self) -> usize {
@@ -593,6 +623,23 @@ mod tests {
             ),
             (r#"{"error":"infringing_file","error_code":35}"#, "Blocked"),
             (r#"{"error":"service_unavailable"}"#, "Status("),
+            (
+                r#"{"error":"traffic_exhausted","error_code":21}"#,
+                "FairUsage",
+            ),
+            (
+                r#"{"error":"too_many_active_downloads","error_code":23}"#,
+                "FairUsage",
+            ),
+            (r#"{"error":"torrent_too_big","error_code":29}"#, "TooBig"),
+            (
+                r#"{"error":"permission_denied","error_code":9}"#,
+                "AuthFailed",
+            ),
+            (
+                r#"{"error":"hoster_not_free","error_code":20}"#,
+                "AuthFailed",
+            ),
         ];
         for (body, expected) in cases {
             let resp = http::Response::builder()
@@ -611,17 +658,20 @@ mod tests {
 
     #[test]
     fn test_rd_torrent_status_mapping() {
-        // Verify our status string mapping covers all RD states
-        let cases = vec![
-            ("downloaded", true),    // Ready
-            ("downloading", false),  // Downloading
-            ("magnet_error", false), // Error
-            ("error", false),        // Error
-            ("queued", false),       // Downloading
+        use DebridTorrentStatus as S;
+        type Expect = fn(&S) -> bool;
+        let cases: [(&str, Expect); 6] = [
+            ("downloaded", |s| matches!(s, S::Ready)),
+            // RD's status for a finished torrent whose swarm died: its files still stream.
+            ("dead", |s| matches!(s, S::Ready)),
+            ("downloading", |s| matches!(s, S::Downloading { .. })),
+            ("queued", |s| matches!(s, S::Downloading { .. })),
+            ("magnet_error", |s| matches!(s, S::Error { .. })),
+            ("error", |s| matches!(s, S::Error { .. })),
         ];
-        for (status, is_ready) in cases {
-            let result = matches!(status, "downloaded");
-            assert_eq!(result, is_ready, "status: {status}");
+        for (status, expected) in cases {
+            let got = map_torrent_status(status, Some(100.0));
+            assert!(expected(&got), "{status} -> {got:?}");
         }
     }
 }

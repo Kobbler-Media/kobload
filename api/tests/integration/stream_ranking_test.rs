@@ -98,6 +98,10 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
             option(&p, &hash('i'), "Movie.2024.720p.BluRay.x264-III", 4.0),
             KnownAvailability::InAccount,
         ),
+        with(
+            option(&p, &hash('j'), "Movie.2024.2160p.BluRay.x265-JJJ", 50.0),
+            KnownAvailability::LikelyRefused,
+        ),
     ];
     let out = ranked(&server, &p, candidates).await;
 
@@ -107,14 +111,16 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
             played,
             "Movie.2024.1080p.BluRay.x264-FFF",
             "Movie.2024.720p.BluRay.x264-III",
-            "Movie.2024.1080p.BluRay.x264-DDD",
             "Movie.2024.1080p.BluRay.x264-EEE",
+            "Movie.2024.1080p.BluRay.x264-DDD",
             "Movie.2024.1080p.ZQX.x264-CCC",
+            "Movie.2024.2160p.BluRay.x265-JJJ",
             "Movie.2024.1080p.BluRay.x264-AAA",
             "Movie.2024.1080p.BluRay.x264-HHH",
             "Movie.2024.1080p.BluRay.x264-BBB",
         ],
-        "played > on account (held or probed ready) > by quality (learned refusal risk last) > uncached > failed"
+        "played > on account (held or probed ready) > learned refusal risk, then Torrentio RD+ \
+         over unknown > uncached, likely refused included > failed"
     );
     use StreamGroup as G;
     assert_eq!(
@@ -126,6 +132,7 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
             G::Available,
             G::Available,
             G::Available,
+            G::Uncached,
             G::Uncached,
             G::Failed,
             G::Failed,
@@ -139,9 +146,10 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
             Some(Likely),
             Some(Ready),
             Some(Ready),
+            Some(Likely),
             Some(Unknown),
             Some(Likely),
-            Some(Likely),
+            Some(Uncached),
             Some(Uncached),
             Some(Uncached),
             Some(Uncached),

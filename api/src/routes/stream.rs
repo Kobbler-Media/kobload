@@ -246,6 +246,12 @@ async fn resolve_status(
         api_key,
         Lane::user(),
     );
+    if let Err(e) =
+        crate::repositories::stream_torrents::polled(&state.pool, query.provider_id, raw_torrent_id)
+            .await
+    {
+        warn!(error = %e, "Failed to note a polled stream torrent");
+    }
 
     // Get current torrent status
     let torrent = handler

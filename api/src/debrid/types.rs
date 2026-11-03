@@ -1,6 +1,7 @@
 use crate::parsing::file::VIDEO_EXTENSIONS;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::time::Duration;
 
 /// Supported debrid provider types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +291,20 @@ impl ExistingTorrent {
     }
 }
 
+/// How a provider pauses an account's adds: after a few adds in quick succession it
+/// refuses every add for a while, with the same answer it gives a release it refuses.
+#[derive(Debug, Clone, Copy)]
+pub struct AddPauses {
+    /// How long one such refusal holds the account's adds before the add is tried again.
+    pub hold: Duration,
+    /// Adds the account takes in a burst before it risks a pause...
+    pub burst: u32,
+    /// ...and how long each one takes to be forgotten.
+    pub spacing: Duration,
+    /// Names the provider refuses every time; their refusal is not a pause.
+    pub refuses_name: fn(&str) -> bool,
+}
+
 /// Active torrent slot usage on a provider account.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ActiveSlots {
@@ -333,6 +348,11 @@ pub enum DebridError {
     /// takedown, so it is durable for a given hash but says nothing about
     /// whether the content is actually cached.
     Blocked,
+    /// Real-Debrid error_code 29: larger than the account may add.
+    TooBig,
+    /// Held back by our own throttle while the provider pauses this account's adds, so it
+    /// was never sent.
+    AddsDeferred,
     /// The account has too many active torrents right now.
     ///
     /// Real-Debrid error_code 33 ("Torrent already active"). Transient — the
@@ -351,9 +371,11 @@ impl DebridError {
     /// Whether this error is transient and the operation could be retried.
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::Request(_) | Self::RateLimited { .. } | Self::TooManyActive | Self::FairUsage => {
-                true
-            }
+            Self::Request(_)
+            | Self::RateLimited { .. }
+            | Self::TooManyActive
+            | Self::FairUsage
+            | Self::AddsDeferred => true,
             Self::Status(status, _) => status.is_server_error(),
             _ => false,
         }
@@ -363,7 +385,7 @@ impl DebridError {
     /// provider, so it should be negatively cached for a long time rather
     /// than re-probed on the next search.
     pub fn is_permanent_for_hash(&self) -> bool {
-        matches!(self, Self::Blocked)
+        matches!(self, Self::Blocked | Self::TooBig)
     }
 
     /// Whether this error says nothing about the hash itself and so must NOT
@@ -377,6 +399,7 @@ impl DebridError {
                 | Self::FairUsage
                 | Self::AuthFailed
                 | Self::HosterUnavailable
+                | Self::AddsDeferred
         )
     }
 }
@@ -398,6 +421,8 @@ impl fmt::Display for DebridError {
             }
             Self::NotFound => write!(f, "Not found"),
             Self::Blocked => write!(f, "Provider refused this file (infringing/filtered)"),
+            Self::TooBig => write!(f, "Provider refused this torrent (too big for the account)"),
+            Self::AddsDeferred => write!(f, "Provider is pausing adds on this account"),
             Self::TooManyActive => write!(f, "Too many active torrents on the provider"),
             Self::FairUsage => write!(f, "Provider fair usage limit reached"),
             Self::HosterUnavailable => write!(f, "Provider lost this file (hoster_unavailable)"),

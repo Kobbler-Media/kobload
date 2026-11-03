@@ -64,6 +64,25 @@ impl Fixture {
         file_id: Option<i32>,
         priority: Option<StreamPriority>,
     ) -> Result<StreamResolveResponse, String> {
+        self.resolve_request(hash, file_id, priority, None).await
+    }
+
+    pub async fn resolve_titled(
+        &self,
+        hash: &str,
+        title: &str,
+    ) -> Result<StreamResolveResponse, String> {
+        self.resolve_request(hash, None, None, Some(title.to_string()))
+            .await
+    }
+
+    async fn resolve_request(
+        &self,
+        hash: &str,
+        file_id: Option<i32>,
+        priority: Option<StreamPriority>,
+        release_title: Option<String>,
+    ) -> Result<StreamResolveResponse, String> {
         let ctx = StreamResolveContext {
             pool: &self.server.pool,
             http_client: &self.server.app_state.http_client,
@@ -78,7 +97,7 @@ impl Fixture {
                 nzb_url: None,
                 file_id,
                 priority,
-                release_title: None,
+                release_title,
                 file_name: None,
             },
         )

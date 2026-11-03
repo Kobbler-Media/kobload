@@ -5,18 +5,18 @@ use uuid::Uuid;
 
 use super::ranking::KnownAvailability;
 
-/// How long a successful probe stays trusted. Debrid caches are evicted over
-/// time, so this is deliberately short — it is a ranking hint, not a promise.
-const AVAILABLE_TTL: &str = "6 hours";
+/// How long a successful probe stays trusted. RD evicts slowly (Torrentio trusts its
+/// equivalent for 14 days), a stale verdict only costs one failed resolve in the walk,
+/// and every re-probe spends one of RD's scarce adds.
+const AVAILABLE_TTL: &str = "7 days";
 /// Dead torrents can pick up seeders again, so re-probe them daily.
 const DEAD_TTL: &str = "24 hours";
 /// The RD filter-gate verdict only demotes, and a copy on the account overrides it.
-const BLOCKED_TTL: &str = "30 days";
+const BLOCKED_TTL: &str = "24 hours";
 
 /// Look up what we already know about these hashes on the given provider.
 ///
-/// Applies a different freshness window per outcome so a blocked hash stays
-/// demoted for weeks while a merely-dead one gets retried the next day.
+/// Applies a different freshness window per outcome.
 pub async fn known_availability(
     pool: &PgPool,
     provider_id: Uuid,

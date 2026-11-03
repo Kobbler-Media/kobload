@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT torrent_id, info_hash FROM debrid_stream_torrents\n         WHERE provider_id = $1 AND touched_at < NOW() - make_interval(mins => $2)\n         ORDER BY touched_at\n         LIMIT 20",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "torrent_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "debrid_stream_torrents",
+            "name": "torrent_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "info_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "debrid_stream_torrents",
+            "name": "info_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0f664b92c60618656de04e56847e65e63e3edf52f7ed6a5c6475b7306e82b8ca"
+}

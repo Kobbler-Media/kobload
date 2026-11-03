@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT file_data FROM debrid_availability_cache WHERE provider_id = $1 AND info_hash = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "file_data",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "debrid_availability_cache",
+            "name": "file_data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ca4896c87d9fcc16dd7126b76dfa0892a0d84cf3f8fc89c57b71c033465438a5"
+}
