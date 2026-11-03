@@ -51,19 +51,29 @@ impl Lane {
         self.0.load(Ordering::Relaxed)
     }
 
-    /// Tokens a call in this lane must leave in the bucket for the lanes above it.
-    fn reserve(&self) -> f64 {
+    fn reserve(&self, limits: &Limits) -> f64 {
         match self.priority() {
             USER => 0.0,
-            DOWNLOAD => USER_RESERVE,
-            _ => USER_RESERVE + DOWNLOAD_RESERVE,
+            DOWNLOAD => limits.user_reserve,
+            _ => limits.user_reserve + limits.download_reserve,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Call {
+    Add,
+    Other,
+}
+
+/// `user_reserve` / `download_reserve`: tokens lower lanes leave in the bucket, so a
+/// user's first calls never queue behind a burst of grabs or warming, and a grab never
+/// queues behind warming.
 struct Limits {
     per_sec: f64,
     burst: f64,
+    user_reserve: f64,
+    download_reserve: f64,
 }
 
 /// Real-Debrid documents 250 requests/minute per account. 3/s (180/min) leaves room for
@@ -73,32 +83,75 @@ fn limits(provider: DebridProviderType) -> Limits {
         DebridProviderType::RealDebrid => Limits {
             per_sec: 3.0,
             burst: 8.0,
+            user_reserve: 3.0,
+            download_reserve: 2.0,
         },
         _ => Limits {
             per_sec: 5.0,
             burst: 10.0,
+            user_reserve: 3.0,
+            download_reserve: 2.0,
         },
     }
 }
 
-/// Tokens lower lanes leave in the bucket, so a user's first calls never queue behind a
-/// burst of grabs or warming, and a grab never queues behind warming.
-const USER_RESERVE: f64 = 3.0;
-const DOWNLOAD_RESERVE: f64 = 2.0;
+/// Real-Debrid throttles `addMagnet` well below its documented limit: on a live account
+/// 7-15 adds inside ten seconds drew 429s while 19 spread over a minute did not.
+fn add_limits(provider: DebridProviderType) -> Option<Limits> {
+    (provider == DebridProviderType::RealDebrid).then_some(Limits {
+        per_sec: 0.4,
+        burst: 5.0,
+        user_reserve: 2.0,
+        download_reserve: 1.0,
+    })
+}
+
 const YIELD_TICK: Duration = Duration::from_millis(25);
 const BASE_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const BACKGROUND_ATTEMPTS: u32 = 2;
+const DOWNLOAD_ATTEMPTS: u32 = 3;
+/// kobapp gives up on its whole walk at the first `rate_limited`, so a user call outwaits
+/// the throttle for this long before reporting one.
+const USER_RETRY_WINDOW: Duration = Duration::from_secs(30);
 
 struct Bucket {
+    limits: Limits,
     tokens: f64,
     refilled: Instant,
+}
+
+impl Bucket {
+    fn new(limits: Limits) -> Self {
+        Self {
+            tokens: limits.burst,
+            refilled: Instant::now(),
+            limits,
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now.duration_since(self.refilled).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * self.limits.per_sec).min(self.limits.burst);
+        self.refilled = now;
+    }
+
+    /// How long until this lane may spend a token; zero once it can.
+    fn shortfall(&self, lane: &Lane) -> Duration {
+        let need = 1.0 + lane.reserve(&self.limits);
+        Duration::from_secs_f64(((need - self.tokens) / self.limits.per_sec).max(0.0))
+    }
+}
+
+struct Buckets {
+    calls: Bucket,
+    adds: Option<Bucket>,
     paused_until: Option<Instant>,
     backoff: Duration,
 }
 
 pub struct Gate {
-    limits: Limits,
-    bucket: Mutex<Bucket>,
+    buckets: Mutex<Buckets>,
     users: AtomicUsize,
 }
 
@@ -109,15 +162,13 @@ pub fn gate(provider: DebridProviderType, api_key: &str) -> Arc<Gate> {
     GATES
         .entry(format!("{}:{api_key}", provider.as_str()))
         .or_insert_with(|| {
-            let limits = limits(provider);
             Arc::new(Gate {
-                bucket: Mutex::new(Bucket {
-                    tokens: limits.burst,
-                    refilled: Instant::now(),
+                buckets: Mutex::new(Buckets {
+                    calls: Bucket::new(limits(provider)),
+                    adds: add_limits(provider).map(Bucket::new),
                     paused_until: None,
                     backoff: BASE_BACKOFF,
                 }),
-                limits,
                 users: AtomicUsize::new(0),
             })
         })
@@ -139,7 +190,7 @@ impl Gate {
         UserSession(self.clone())
     }
 
-    async fn acquire(&self, lane: &Lane) {
+    async fn acquire(&self, lane: &Lane, call: Call) {
         loop {
             let user = lane.is_user();
             if !user && self.users.load(Ordering::Relaxed) > 0 {
@@ -147,20 +198,30 @@ impl Gate {
                 continue;
             }
             let wait = {
-                let mut b = self.bucket.lock().unwrap_or_else(|e| e.into_inner());
+                let mut b = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
                 let now = Instant::now();
-                let elapsed = now.duration_since(b.refilled).as_secs_f64();
-                b.tokens = (b.tokens + elapsed * self.limits.per_sec).min(self.limits.burst);
-                b.refilled = now;
+                b.calls.refill(now);
+                if let Some(adds) = b.adds.as_mut() {
+                    adds.refill(now);
+                }
                 match b.paused_until {
                     Some(until) if until > now => until - now,
                     _ => {
-                        let need = 1.0 + lane.reserve();
-                        if b.tokens >= need {
-                            b.tokens -= 1.0;
+                        let adds = b.adds.as_ref().filter(|_| call == Call::Add);
+                        let wait = b
+                            .calls
+                            .shortfall(lane)
+                            .max(adds.map_or(Duration::ZERO, |a| a.shortfall(lane)));
+                        if wait.is_zero() {
+                            b.calls.tokens -= 1.0;
+                            if call == Call::Add
+                                && let Some(adds) = b.adds.as_mut()
+                            {
+                                adds.tokens -= 1.0;
+                            }
                             return;
                         }
-                        Duration::from_secs_f64((need - b.tokens) / self.limits.per_sec)
+                        wait
                     }
                 }
             };
@@ -170,7 +231,7 @@ impl Gate {
 
     /// Returns whether the call was rate limited, after pausing every caller on the account.
     fn observe<T>(&self, result: &Result<T, DebridError>) -> bool {
-        let mut b = self.bucket.lock().unwrap_or_else(|e| e.into_inner());
+        let mut b = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Err(DebridError::RateLimited { retry_after }) => {
                 let pause = retry_after.unwrap_or(b.backoff);
@@ -180,7 +241,7 @@ impl Gate {
                 );
                 b.paused_until = Some(Instant::now() + pause);
                 b.backoff = (b.backoff * 2).min(MAX_BACKOFF);
-                b.tokens = 0.0;
+                b.calls.tokens = 0.0;
                 true
             }
             Ok(_) => {
@@ -223,17 +284,29 @@ impl Throttled {
         F: Fn() -> Fut,
         Fut: Future<Output = Result<T, DebridError>> + 'a,
     {
-        let attempts = if self.lane.priority() == BACKGROUND {
-            2
-        } else {
-            3
-        };
+        self.run_as(Call::Other, call).await
+    }
+
+    async fn run_as<'a, T, F, Fut>(&'a self, kind: Call, call: F) -> Result<T, DebridError>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T, DebridError>> + 'a,
+    {
+        let started = Instant::now();
         let mut made = 0;
         loop {
-            self.gate.acquire(&self.lane).await;
+            self.gate.acquire(&self.lane, kind).await;
             let result = call().await;
             made += 1;
-            if !self.gate.observe(&result) || made >= attempts {
+            if !self.gate.observe(&result) {
+                return result;
+            }
+            let more = match self.lane.priority() {
+                USER => started.elapsed() < USER_RETRY_WINDOW,
+                DOWNLOAD => made < DOWNLOAD_ATTEMPTS,
+                _ => made < BACKGROUND_ATTEMPTS,
+            };
+            if !more {
                 return result;
             }
         }
@@ -270,8 +343,10 @@ impl DebridProvider for Throttled {
         api_key: &str,
         magnet: &str,
     ) -> Result<String, DebridError> {
-        self.run(|| self.inner.add_magnet(http_client, api_key, magnet))
-            .await
+        self.run_as(Call::Add, || {
+            self.inner.add_magnet(http_client, api_key, magnet)
+        })
+        .await
     }
 
     async fn select_files(
@@ -393,24 +468,58 @@ mod tests {
         let background = Lane::background();
         let taken = async {
             let mut n = 0;
-            while tokio::time::timeout(Duration::from_millis(5), gate.acquire(&background))
-                .await
-                .is_ok()
+            while tokio::time::timeout(
+                Duration::from_millis(5),
+                gate.acquire(&background, Call::Other),
+            )
+            .await
+            .is_ok()
             {
                 n += 1;
             }
             n
         }
         .await;
-        assert_eq!(taken, 8 - (USER_RESERVE + DOWNLOAD_RESERVE) as usize);
+        assert_eq!(taken, 8 - 5);
         let started = Instant::now();
-        for _ in 0..DOWNLOAD_RESERVE as usize {
-            gate.acquire(&Lane::download()).await;
+        for _ in 0..2 {
+            gate.acquire(&Lane::download(), Call::Other).await;
         }
-        for _ in 0..USER_RESERVE as usize {
-            gate.acquire(&Lane::user()).await;
+        for _ in 0..3 {
+            gate.acquire(&Lane::user(), Call::Other).await;
         }
         assert!(started.elapsed() < Duration::from_millis(20));
+    }
+
+    async fn instant(gate: &Gate, lane: &Lane, call: Call) -> bool {
+        tokio::time::timeout(Duration::from_millis(5), gate.acquire(lane, call))
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn adds_trickle_while_other_calls_flow() {
+        let gate = fresh_gate();
+        let user = Lane::user();
+        for _ in 0..5 {
+            assert!(instant(&gate, &user, Call::Add).await);
+        }
+        assert!(!instant(&gate, &user, Call::Add).await);
+        assert!(instant(&gate, &user, Call::Other).await);
+    }
+
+    #[tokio::test]
+    async fn background_adds_leave_room_for_a_user() {
+        let gate = fresh_gate();
+        let background = Lane::background();
+        let mut taken = 0;
+        while instant(&gate, &background, Call::Add).await {
+            taken += 1;
+        }
+        assert_eq!(taken, 2);
+        assert!(instant(&gate, &Lane::download(), Call::Add).await);
+        assert!(instant(&gate, &Lane::user(), Call::Add).await);
+        assert!(instant(&gate, &Lane::user(), Call::Add).await);
     }
 
     #[tokio::test]
@@ -421,7 +530,7 @@ mod tests {
         });
         assert!(gate.observe(&limited));
         let started = Instant::now();
-        gate.acquire(&Lane::user()).await;
+        gate.acquire(&Lane::user(), Call::Other).await;
         assert!(started.elapsed() >= Duration::from_millis(200));
     }
 }

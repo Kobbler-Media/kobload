@@ -154,6 +154,17 @@ async fn test_rate_limited_resolve_honours_retry_after() {
     f.server.cleanup().await;
 }
 
+/// kobapp stops walking its options at the first `rate_limited`, so a user resolve waits
+/// a throttle out rather than reporting it.
+#[tokio::test]
+async fn test_user_resolve_outlasts_a_long_rate_limit() {
+    let f = Fixture::new(5, &[]).await;
+    f.mock.rate_limit_next_adds(5);
+    assert!(f.resolve(&hash('a')).await.unwrap().cached);
+    assert_eq!(f.mock.count("add_magnet", None), 6);
+    f.server.cleanup().await;
+}
+
 #[tokio::test]
 async fn test_warm_yields_to_a_user_resolve() {
     let warm_hashes: Vec<String> = ['1', '2', '3', '4'].map(hash).to_vec();
@@ -284,5 +295,76 @@ async fn test_warming_skips_releases_that_already_failed() {
         .unwrap();
     assert_eq!(f.mock.count("add_magnet", Some(&hash('r'))), 0);
     assert_eq!(f.mock.count("add_magnet", Some(&hash('c'))), 1);
+    f.server.cleanup().await;
+}
+
+const LOST_PACK: &[&str] = &["Show.S01/Show.S01E01.mkv", "Show.S01/Show.S01E02.mkv"];
+
+async fn lost_file_fixture(release: MockRelease) -> Fixture {
+    let f = Fixture::with_mock(
+        MockDebrid::new(Duration::from_millis(5))
+            .with_releases(&[(&hash('a'), release)])
+            .with_pack(&hash('a'), LOST_PACK)
+            .with_torrent(&hash('a'), &[1, 2]),
+    )
+    .await;
+    f.mock.lose_held_file(&hash('a'), 1);
+    f
+}
+
+async fn assert_not_marked_unavailable(f: &Fixture) {
+    let known = known_availability(&f.server.pool, f.provider_id, &[hash('a')]).await;
+    assert!(
+        !matches!(
+            known.get(&hash('a')),
+            Some(KnownAvailability::Dead | KnownAvailability::Blocked)
+        ),
+        "a lost file on one copy says nothing about the hash: {known:?}"
+    );
+}
+
+/// Real-Debrid answers `hoster_unavailable` for a file it lost from an old copy on the
+/// account, while a fresh add of the same hash is cached and serves it.
+#[tokio::test]
+async fn test_lost_file_on_a_held_copy_plays_from_a_fresh_add() {
+    let f = lost_file_fixture(MockRelease::Cached).await;
+
+    let played = f.resolve_file(&hash('a'), 0).await.unwrap();
+    assert!(played.cached);
+    assert!(!played.stream_url.contains("/T1/"), "{}", played.stream_url);
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('a'))), 1);
+    assert!(
+        !f.mock.holds("T1"),
+        "the copy that lost the file stays first in line: {:?}",
+        f.mock.calls()
+    );
+    assert_not_marked_unavailable(&f).await;
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_warming_a_lost_file_replaces_the_held_copy() {
+    let f = lost_file_fixture(MockRelease::Cached).await;
+
+    f.warm_options(vec![f.file_option(&hash('a'), 0, LOST_PACK[0])])
+        .await
+        .unwrap();
+    assert_eq!(f.mock.count("add_magnet", Some(&hash('a'))), 1);
+    assert!(!f.mock.holds("T1"), "{:?}", f.mock.calls());
+    assert_not_marked_unavailable(&f).await;
+
+    let before = f.mock.count("unrestrict_link", None);
+    assert!(f.resolve_file(&hash('a'), 0).await.unwrap().cached);
+    assert_eq!(f.mock.count("unrestrict_link", None), before);
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_lost_file_keeps_the_held_copy_when_the_fresh_add_is_refused() {
+    let f = lost_file_fixture(MockRelease::Refused).await;
+
+    assert!(f.resolve_file(&hash('a'), 0).await.is_err());
+    assert!(f.mock.holds("T1"), "its other files still play");
+    assert!(f.resolve_file(&hash('a'), 1).await.unwrap().cached);
     f.server.cleanup().await;
 }

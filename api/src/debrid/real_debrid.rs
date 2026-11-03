@@ -91,6 +91,8 @@ struct RdErrorResponse {
 }
 
 // Real-Debrid `error_code` values we act on. Full table: https://api.real-debrid.com/
+/// Hoster unavailable — on unrestrict, this copy lost the file.
+const RD_ERR_HOSTER_UNAVAILABLE: i32 = 19;
 /// Torrent already active — no free slot, the hash itself is fine.
 const RD_ERR_TORRENT_ALREADY_ACTIVE: i32 = 33;
 /// Too many requests.
@@ -133,6 +135,7 @@ async fn check_error_response(resp: reqwest::Response) -> Result<reqwest::Respon
         Some(RD_ERR_INFRINGING_FILE) => return Err(DebridError::Blocked),
         Some(RD_ERR_TORRENT_ALREADY_ACTIVE) => return Err(DebridError::TooManyActive),
         Some(RD_ERR_FAIR_USAGE) => return Err(DebridError::FairUsage),
+        Some(RD_ERR_HOSTER_UNAVAILABLE) => return Err(DebridError::HosterUnavailable),
         Some(RD_ERR_TOO_MANY_REQUESTS) => return Err(DebridError::RateLimited { retry_after }),
         Some(RD_ERR_DISABLED_ENDPOINT) => {
             return Err(DebridError::UnsupportedOperation);
@@ -579,6 +582,31 @@ mod tests {
         assert_eq!(provider.provider_type(), DebridProviderType::RealDebrid);
         assert_eq!(provider.max_hashes_per_batch(), 20);
         assert!(!provider.supports_usenet());
+    }
+
+    #[tokio::test]
+    async fn test_error_codes_win_over_http_status() {
+        let cases = [
+            (
+                r#"{"error":"hoster_unavailable","error_code":19}"#,
+                "HosterUnavailable",
+            ),
+            (r#"{"error":"infringing_file","error_code":35}"#, "Blocked"),
+            (r#"{"error":"service_unavailable"}"#, "Status("),
+        ];
+        for (body, expected) in cases {
+            let resp = http::Response::builder()
+                .status(503)
+                .body(body.to_string())
+                .unwrap();
+            let err = check_error_response(reqwest::Response::from(resp))
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{err:?}").starts_with(expected),
+                "{body} -> {err:?}"
+            );
+        }
     }
 
     #[test]

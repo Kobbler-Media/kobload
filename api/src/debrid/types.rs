@@ -340,6 +340,9 @@ pub enum DebridError {
     TooManyActive,
     /// Provider-side fair-usage throttle (Real-Debrid error_code 36).
     FairUsage,
+    /// Real-Debrid error_code 19 on unrestrict: this copy on the account has lost
+    /// the file, though a fresh add of the hash usually serves it.
+    HosterUnavailable,
     /// Generic error with message.
     Other(String),
 }
@@ -373,6 +376,7 @@ impl DebridError {
                 | Self::TooManyActive
                 | Self::FairUsage
                 | Self::AuthFailed
+                | Self::HosterUnavailable
         )
     }
 }
@@ -396,6 +400,7 @@ impl fmt::Display for DebridError {
             Self::Blocked => write!(f, "Provider refused this file (infringing/filtered)"),
             Self::TooManyActive => write!(f, "Too many active torrents on the provider"),
             Self::FairUsage => write!(f, "Provider fair usage limit reached"),
+            Self::HosterUnavailable => write!(f, "Provider lost this file (hoster_unavailable)"),
             Self::Other(msg) => write!(f, "{msg}"),
         }
     }

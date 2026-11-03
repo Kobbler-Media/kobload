@@ -14,7 +14,7 @@ use super::attempt_log::{AttemptLog, Step};
 use super::warm_cache::{UnavailableReason, reason_for_error};
 use crate::debrid::{
     DebridError, DebridFile, DebridProvider, DebridProviderType, DebridTorrent,
-    DebridTorrentStatus, ExistingTorrent, Lane, Throttled,
+    DebridTorrentStatus, ExistingTorrent, Lane, Throttled, UnrestrictedLink,
 };
 use crate::repositories::stream_attempts::Change;
 
@@ -214,53 +214,84 @@ type Placed = (String, bool, DebridTorrent);
 impl Run {
     async fn go(&self) -> Acquired {
         let target = self.target().await;
-        let placed = match self.obtain(&target).await {
+        let mut placed = match self.obtain(&target).await {
             Ok(placed) => placed,
             Err(out) => return out,
         };
-        let (torrent_id, reused, torrent) = match self.settle(placed, &target).await {
-            Ok(placed) => placed,
-            Err(out) => return out,
-        };
-        self.log_cache_check(&torrent).await;
-        account_index::remember(self.job.provider_id, &torrent);
-        account_index::placed(
-            self.job.provider_id,
-            &self.job.info_hash,
-            ExistingTorrent {
-                id: torrent_id.clone(),
-                status: torrent.status.clone(),
-                has_links: !torrent.links.is_empty(),
-            },
-        );
+        let mut stale: Option<String> = None;
+        loop {
+            let (torrent_id, reused, torrent) = match self.settle(placed, &target).await {
+                Ok(placed) => placed,
+                Err(out) => return out,
+            };
+            self.log_cache_check(&torrent).await;
+            account_index::remember(self.job.provider_id, &torrent);
+            account_index::placed(
+                self.job.provider_id,
+                &self.job.info_hash,
+                ExistingTorrent {
+                    id: torrent_id.clone(),
+                    status: torrent.status.clone(),
+                    has_links: !torrent.links.is_empty(),
+                },
+            );
 
-        match torrent.status {
-            DebridTorrentStatus::Blocked => {
-                self.record(Some(UnavailableReason::Blocked)).await;
-                self.discard(&torrent_id, reused).await;
-                Acquired::Refused
-            }
-            DebridTorrentStatus::Error { ref message } => {
-                self.record(Some(UnavailableReason::Dead)).await;
-                self.discard(&torrent_id, reused).await;
-                Acquired::Failed {
-                    message: format!("Torrent failed on provider: {message}"),
+            return match torrent.status {
+                DebridTorrentStatus::Blocked => {
+                    self.record(Some(UnavailableReason::Blocked)).await;
+                    self.discard(&torrent_id, reused).await;
+                    Acquired::Refused
                 }
-            }
-            DebridTorrentStatus::Cached | DebridTorrentStatus::Ready
-                if !torrent.links.is_empty() =>
-            {
-                if self.job.want_link {
+                DebridTorrentStatus::Error { ref message } => {
+                    self.record(Some(UnavailableReason::Dead)).await;
+                    self.discard(&torrent_id, reused).await;
+                    Acquired::Failed {
+                        message: format!("Torrent failed on provider: {message}"),
+                    }
+                }
+                DebridTorrentStatus::Cached | DebridTorrentStatus::Ready
+                    if !torrent.links.is_empty() =>
+                {
+                    if !self.job.want_link {
+                        self.record(None).await;
+                        return Acquired::Pending { torrent_id, reused };
+                    }
                     let link = torrent
                         .wanted_link(target.name.as_deref(), target.id)
                         .unwrap_or(&torrent.links[0]);
-                    self.unrestrict(&torrent_id, link).await
-                } else {
-                    self.record(None).await;
-                    Acquired::Pending { torrent_id, reused }
+                    match self.unrestrict(link).await {
+                        // RD drops single files from old copies while the hash stays
+                        // cached; Torrentio recovers the same way, by adding it again.
+                        Err(DebridError::HosterUnavailable) if reused => {
+                            info!(info_hash = %self.job.info_hash, torrent_id = %torrent_id, "Copy on the account lost the file; adding the hash again");
+                            self.job
+                                .log
+                                .record(
+                                    Step::Readded,
+                                    format!("Torrent {torrent_id} lost this file (hoster_unavailable); adding the hash again"),
+                                    Change::default(),
+                                )
+                                .await;
+                            placed = match self.add_and_get().await {
+                                Ok(placed) => placed,
+                                Err(out) => return out,
+                            };
+                            stale = Some(torrent_id);
+                            continue;
+                        }
+                        served => {
+                            let out = self.ready(&torrent_id, served).await;
+                            // Deleted only once the new copy plays: a refused re-add
+                            // leaves the old one as the only source of its other files.
+                            if let (Acquired::Ready { .. }, Some(stale)) = (&out, &stale) {
+                                self.discard(stale, false).await;
+                            }
+                            out
+                        }
+                    }
                 }
-            }
-            _ => Acquired::Pending { torrent_id, reused },
+                _ => Acquired::Pending { torrent_id, reused },
+            };
         }
     }
 
@@ -439,12 +470,18 @@ impl Run {
         }
     }
 
-    async fn unrestrict(&self, torrent_id: &str, link: &str) -> Acquired {
-        match self
-            .handler
+    async fn unrestrict(&self, link: &str) -> Result<UnrestrictedLink, DebridError> {
+        self.handler
             .unrestrict_link(&self.ctx.http_client, &self.ctx.api_key, link)
             .await
-        {
+    }
+
+    async fn ready(
+        &self,
+        torrent_id: &str,
+        served: Result<UnrestrictedLink, DebridError>,
+    ) -> Acquired {
+        match served {
             Ok(u) => {
                 self.record(None).await;
                 Acquired::Ready {

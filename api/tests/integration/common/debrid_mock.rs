@@ -40,6 +40,7 @@ struct MockState {
     rate_limited_adds: u32,
     progress: HashMap<String, f32>,
     listing_delay: Duration,
+    lost: HashSet<(String, i32)>,
 }
 
 /// A stateful in-memory debrid account. Every call is logged with the hash it concerns.
@@ -100,6 +101,23 @@ impl MockDebrid {
         );
         drop(state);
         self
+    }
+
+    /// Real-Debrid has lost this file from every copy held now: its link answers
+    /// `hoster_unavailable`, while a fresh add of the hash serves it again.
+    pub fn lose_held_file(&self, hash: &str, file_id: i32) {
+        let mut state = self.state.lock().unwrap();
+        let held: Vec<String> = state
+            .torrents
+            .iter()
+            .filter(|(_, t)| t.hash == hash)
+            .map(|(id, _)| id.clone())
+            .collect();
+        state.lost.extend(held.into_iter().map(|id| (id, file_id)));
+    }
+
+    pub fn holds(&self, torrent_id: &str) -> bool {
+        self.state.lock().unwrap().torrents.contains_key(torrent_id)
     }
 
     /// The file ids selected on each torrent of this hash, oldest torrent first.
@@ -377,6 +395,15 @@ impl DebridProvider for MockDebrid {
         let torrent_id = parts.next().unwrap_or_default().to_string();
         let hash = self.hash_of(&torrent_id);
         self.call("unrestrict_link", hash.clone()).await;
+        if self
+            .state
+            .lock()
+            .unwrap()
+            .lost
+            .contains(&(torrent_id.clone(), file_id as i32))
+        {
+            return Err(DebridError::HosterUnavailable);
+        }
         let path = self
             .files(&hash)
             .get(file_id - 1)
