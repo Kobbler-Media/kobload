@@ -4,7 +4,7 @@
 
   // Redirect to prowlarr by default
   onMount(() => {
-    goto('/settings/prowlarr', { replaceState: true });
+    goto('/settings/prowlarr', { replace: true });
   });
 </script>
 

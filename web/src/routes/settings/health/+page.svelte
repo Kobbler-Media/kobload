@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getSystemHealth, resetIndexerHealth, type SystemHealthResponse } from '$lib/api/client';
-  import { showToast } from '$lib/stores/toast.svelte';
+  import {
+    getSystemHealth,
+    resetIndexerHealth,
+    type SystemHealthResponse
+  } from '#lib/api/client.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
 
   let health = $state<SystemHealthResponse | null>(null);
   let loading = $state(false);

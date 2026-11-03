@@ -17,7 +17,7 @@ pub use definition::{Definition, SettingDef};
 pub use engine::{CardigannEngine, CardigannResult, SearchRequest, SearchType};
 
 /// Parse a YAML definition string into a `Definition`.
-pub fn load_definition(yaml: &str) -> Result<Definition, serde_yaml::Error> {
+pub fn load_definition(yaml: &str) -> Result<Definition, yaml_serde::Error> {
     let yaml = yaml.strip_prefix('\u{FEFF}').unwrap_or(yaml);
-    serde_yaml::from_str(yaml)
+    yaml_serde::from_str(yaml)
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AliasScope, ReviewItem } from '$lib/types';
+  import type { AliasScope, ReviewItem } from '#lib/types.js';
 
   let {
     item,

@@ -12,10 +12,10 @@
     listStreamAttempts,
     type StreamAttempt,
     type StreamAttemptEvent
-  } from '$lib/api/client';
-  import { createSseConnection, type SseConnection } from '$lib/sse';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import { getStreamAttemptStatusStyle, streamAttemptStatuses } from '$lib/styles/statusColors';
+  } from '#lib/api/client.js';
+  import { createSseConnection, type SseConnection } from '#lib/sse.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import { getStreamAttemptStatusStyle, streamAttemptStatuses } from '#lib/styles/statusColors.js';
   import StreamAttemptCard from './StreamAttemptCard.svelte';
   import LoadingState from '../LoadingState.svelte';
   import EmptyState from '../EmptyState.svelte';

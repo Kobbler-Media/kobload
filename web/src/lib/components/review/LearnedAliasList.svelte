@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AliasScope, LearnedAlias } from '$lib/types';
+  import type { AliasScope, LearnedAlias } from '#lib/types.js';
 
   let {
     aliases,

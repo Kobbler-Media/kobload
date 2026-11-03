@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import {
     InfiniteScroll,
@@ -17,12 +17,12 @@
     rejectWatchMatch,
     bulkRejectWatchMatches,
     bulkDeleteWatchMatches
-  } from '$lib/api/client';
-  import { createSseConnection, type SseConnection } from '$lib/sse';
-  import type { WatchMatch, WatchPattern } from '$lib/types';
-  import { getPatternTitle } from '$lib/components/watch/grouping';
-  import { getScoreColor, getMatchActionStyle } from '$lib/styles/statusColors';
-  import { showToast } from '$lib/stores/toast.svelte';
+  } from '#lib/api/client.js';
+  import { createSseConnection, type SseConnection } from '#lib/sse.js';
+  import type { WatchMatch, WatchPattern } from '#lib/types.js';
+  import { getPatternTitle } from '#lib/components/watch/grouping.js';
+  import { getScoreColor, getMatchActionStyle } from '#lib/styles/statusColors.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
 
   let loading = $state(false);
   let error = $state('');
@@ -121,20 +121,22 @@
   }
 
   function updateUrlParams() {
-    const url = new URL($page.url);
+    const url = new URL(page.url.href);
+
     if (filterPatternId) url.searchParams.set('watch_pattern_id', filterPatternId);
     else url.searchParams.delete('watch_pattern_id');
     if (filterAction) url.searchParams.set('action', filterAction);
     else url.searchParams.delete('action');
     if (filterRejected) url.searchParams.set('rejected', filterRejected);
     else url.searchParams.delete('rejected');
-    goto(url.toString(), { replaceState: true, keepFocus: true });
+
+    goto(url.toString(), { replace: true, reset: false });
   }
 
   function restoreFromUrl() {
-    filterPatternId = $page.url.searchParams.get('watch_pattern_id') ?? '';
-    filterAction = $page.url.searchParams.get('action') ?? '';
-    const rej = $page.url.searchParams.get('rejected');
+    filterPatternId = page.url.searchParams.get('watch_pattern_id') ?? '';
+    filterAction = page.url.searchParams.get('action') ?? '';
+    const rej = page.url.searchParams.get('rejected');
     filterRejected = rej === 'true' ? 'true' : rej === 'false' ? 'false' : '';
   }
 
@@ -311,13 +313,12 @@
       fill="none"
       stroke="currentColor"
       stroke-width="2"
-      ><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line
-        x1="12"
-        y1="16"
-        x2="12.01"
-        y2="16"
-      ></line></svg
     >
+      <circle cx="12" cy="12" r="10"></circle>
+      <line x1="12" y1="8" x2="12" y2="12"></line>
+      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+    </svg>
+
     {error}
   </div>
 {/if}
@@ -475,6 +476,7 @@
 </div>
 
 <InfiniteScroll {hasMore} {loading} onLoadMore={() => loadMatches()} />
+
 <ScrollToTop />
 
 <MultiSelectBar

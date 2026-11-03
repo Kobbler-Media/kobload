@@ -1,5 +1,5 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
-  onMount(() => goto('/settings/indexer-sources', { replaceState: true }));
+  onMount(() => goto('/settings/indexer-sources', { replace: true }));
 </script>

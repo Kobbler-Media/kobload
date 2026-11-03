@@ -5,9 +5,9 @@
     deleteWatchDirectory,
     scanWatchDirectory,
     retryWatchDirectory
-  } from '$lib/api/client';
-  import type { WatchDirectory } from '$lib/types';
-  import WatchDirectoryEditModal from '$lib/components/settings/WatchDirectoryEditModal.svelte';
+  } from '#lib/api/client.js';
+  import type { WatchDirectory } from '#lib/types.js';
+  import WatchDirectoryEditModal from '#lib/components/settings/WatchDirectoryEditModal.svelte';
 
   let loading = $state(false);
   let error = $state('');

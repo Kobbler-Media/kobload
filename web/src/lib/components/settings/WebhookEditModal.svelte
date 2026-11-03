@@ -1,8 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { Modal } from '@koblibs/ui';
-  import { createWebhook, updateWebhook, type StatusWebhook } from '$lib/api/client';
-  import { discardGuard } from '$lib/discardGuard';
+  import { createWebhook, updateWebhook, type StatusWebhook } from '#lib/api/client.js';
+  import { discardGuard } from '#lib/discardGuard.js';
 
   let {
     webhook,

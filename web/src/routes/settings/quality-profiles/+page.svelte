@@ -6,8 +6,8 @@
     updateQualityProfile,
     deleteQualityProfile,
     resetQualityProfiles
-  } from '$lib/api/client';
-  import type { QualityProfile } from '$lib/types';
+  } from '#lib/api/client.js';
+  import type { QualityProfile } from '#lib/types.js';
   import {
     MultiSearchSelect,
     type MultiSearchSelectItem,

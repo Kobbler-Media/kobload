@@ -400,7 +400,6 @@ pub(crate) fn parse_newznab_rss(
     use quick_xml::events::Event;
 
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut releases = Vec::new();
     let mut in_item = false;
@@ -429,7 +428,7 @@ pub(crate) fn parse_newznab_rss(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "item" {
                     in_item = true;
                     // Reset item fields
@@ -457,13 +456,13 @@ pub(crate) fn parse_newznab_rss(
                 if !in_item {
                     continue;
                 }
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
 
                 // Handle <enclosure url="..." length="..." />
                 if name == "enclosure" {
                     for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        let key = attr.key.as_ref().to_string();
+                        let val = attr.value.to_string();
                         match key.as_str() {
                             "url" => enclosure_url = Some(val),
                             "length" => {
@@ -481,8 +480,8 @@ pub(crate) fn parse_newznab_rss(
                     let mut attr_name = String::new();
                     let mut attr_value = String::new();
                     for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        let key = attr.key.as_ref().to_string();
+                        let val = attr.value.to_string();
                         if key == "name" {
                             attr_name = val;
                         } else if key == "value" {
@@ -519,32 +518,41 @@ pub(crate) fn parse_newznab_rss(
                     }
                 }
             }
-            Ok(Event::Text(e)) => {
-                if in_item && let Ok(decoded) = e.decode() {
-                    match current_element.as_str() {
-                        "title" => title.push_str(&decoded),
-                        "guid" => guid.push_str(&decoded),
-                        "link" => link.push_str(&decoded),
-                        "pubDate" => pub_date.push_str(&decoded),
-                        _ => {}
-                    }
-                }
-            }
-            Ok(Event::GeneralRef(e)) => {
-                if in_item && let Ok(decoded) = e.decode() {
-                    match current_element.as_str() {
-                        "title" => title.push_str(&decoded),
-                        "guid" => guid.push_str(&decoded),
-                        "link" => link.push_str(&decoded),
-                        "pubDate" => pub_date.push_str(&decoded),
-                        _ => {}
-                    }
+            Ok(event @ (Event::Text(_) | Event::CData(_) | Event::GeneralRef(_))) if in_item => {
+                let field = match current_element.as_str() {
+                    "title" => &mut title,
+                    "guid" => &mut guid,
+                    "link" => &mut link,
+                    "pubDate" => &mut pub_date,
+                    _ => continue,
+                };
+                match event {
+                    Event::Text(e) => field.push_str(&e),
+                    Event::CData(e) => field.push_str(&e),
+                    Event::GeneralRef(e) => match e.resolve_char_ref() {
+                        Ok(Some(c)) => field.push(c),
+                        _ => match quick_xml::escape::resolve_predefined_entity(&e) {
+                            Some(s) => field.push_str(s),
+                            None => {
+                                field.push('&');
+                                field.push_str(&e);
+                                field.push(';');
+                            }
+                        },
+                    },
+                    _ => {}
                 }
             }
             Ok(Event::End(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
+                if name != "item" {
+                    current_element.clear();
+                }
                 if name == "item" && in_item {
                     in_item = false;
+                    for field in [&mut title, &mut guid, &mut link, &mut pub_date] {
+                        *field = field.trim().to_string();
+                    }
 
                     // Build the release
                     if !guid.is_empty() && !title.is_empty() {
@@ -693,14 +701,14 @@ pub fn parse_api_limits(xml: &str) -> Option<NewznabApiLimits> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 // Stop scanning once we hit items — apilimits is in <channel> before items
                 if name == "item" {
                     return None;
                 }
             }
             Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name.contains("apilimits") {
                     let mut api_current = 0;
                     let mut api_max = 0;
@@ -708,8 +716,8 @@ pub fn parse_api_limits(xml: &str) -> Option<NewznabApiLimits> {
                     let mut grab_max = 0;
 
                     for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        let key = attr.key.as_ref().to_string();
+                        let val = attr.value.to_string();
                         match key.as_str() {
                             "apicurrent" => api_current = val.parse().unwrap_or(0),
                             "apimax" => api_max = val.parse().unwrap_or(0),
@@ -819,6 +827,39 @@ mod tests {
 </rss>"#;
 
         assert!(parse_api_limits(xml).is_none());
+    }
+
+    #[test]
+    fn test_newznab_rss_resolves_entities_in_text() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<rss>
+  <channel>
+    <item>
+      <title>Tom &amp; Jerry &#8211; S01 &lt;Remux&gt;</title>
+      <guid>tj1</guid>
+      <link>http://example.com/get?id=tj1&amp;apikey=k</link>
+      <pubDate>Mon, 25 Mar 2026 12:00:00 +0000</pubDate>
+      <enclosure url="http://example.com/get?id=tj1&amp;apikey=k" length="100" type="application/x-nzb"/>
+    </item>
+    <item>
+      <title><![CDATA[Fast & Furious <2001>]]></title>
+      <guid>ff1</guid>
+      <enclosure url="http://example.com/get?id=ff1" length="100" type="application/x-nzb"/>
+    </item>
+  </channel>
+</rss>"#;
+
+        let releases = parse_newznab_rss(xml, 1).expect("parse");
+        assert_eq!(releases[0].title, "Tom & Jerry \u{2013} S01 <Remux>");
+        assert_eq!(releases[0].guid, "tj1");
+        assert!(
+            releases[0]
+                .download_url
+                .as_deref()
+                .unwrap_or_default()
+                .contains("id=tj1&apikey=k")
+        );
+        assert_eq!(releases[1].title, "Fast & Furious <2001>");
     }
 
     #[test]

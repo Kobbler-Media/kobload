@@ -5,7 +5,7 @@
     saveDevSnapshot,
     deleteDevSnapshot,
     type DevSnapshotStatus
-  } from '$lib/api/client';
+  } from '#lib/api/client.js';
 
   let devSnapshot = $state<DevSnapshotStatus | null>(null);
   let devSnapshotLoading = $state(false);

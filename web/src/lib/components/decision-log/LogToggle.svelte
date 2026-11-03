@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getDecisionLogSettings, updateDecisionLogSettings } from '$lib/api/client';
-  import { showToast } from '$lib/stores/toast.svelte';
+  import { getDecisionLogSettings, updateDecisionLogSettings } from '#lib/api/client.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
 
   let {
     type

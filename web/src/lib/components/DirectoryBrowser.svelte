@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { browseFilesystem } from '$lib/api/client';
-  import { registerOverlay, unregisterOverlay } from '$lib/stores/ui.svelte';
+  import { browseFilesystem } from '#lib/api/client.js';
+  import { registerOverlay, unregisterOverlay } from '#lib/stores/ui.svelte.js';
   import { uid } from '@koblibs/ui';
-  import type { DirectoryEntry } from '$lib/types';
+  import type { DirectoryEntry } from '#lib/types.js';
 
   interface Props {
     open: boolean;

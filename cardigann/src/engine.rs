@@ -78,11 +78,6 @@ impl CardigannEngine {
         Self { client }
     }
 
-    /// Load and validate a YAML definition.
-    pub fn load_definition(yaml: &str) -> Result<Definition, EngineError> {
-        serde_yaml::from_str(yaml).map_err(|e| EngineError::Parse(e.to_string()))
-    }
-
     /// Execute a search query against a definition.
     pub async fn search(
         &self,
@@ -104,7 +99,6 @@ impl CardigannEngine {
                 method: def.search.method.clone(),
                 inputs: HashMap::new(),
                 followredirect: None,
-                categorydesc: None,
                 inheritinputs: None,
             }]
         } else {

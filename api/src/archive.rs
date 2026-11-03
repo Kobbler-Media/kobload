@@ -503,7 +503,9 @@ async fn list_zip_contents(archive_path: &str, archive_relative_path: &str) -> V
                 continue;
             }
 
-            let inner_path = file.name().to_string();
+            let Ok(inner_path) = file.name().map(|n| n.into_owned()) else {
+                continue;
+            };
             let size = file.size() as i64;
             let extension = Path::new(&inner_path)
                 .extension()

@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getProtocolDefaults, setProtocolDefaults, type ProtocolDefaults } from '$lib/api/client';
+  import {
+    getProtocolDefaults,
+    setProtocolDefaults,
+    type ProtocolDefaults
+  } from '#lib/api/client.js';
   import { MultiSearchSelect, type MultiSearchSelectItem } from '@koblibs/ui';
 
   let loading = $state(false);

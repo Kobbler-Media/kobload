@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listWebhooks, updateWebhook, deleteWebhook, type StatusWebhook } from '$lib/api/client';
-  import WebhookEditModal from '$lib/components/settings/WebhookEditModal.svelte';
+  import {
+    listWebhooks,
+    updateWebhook,
+    deleteWebhook,
+    type StatusWebhook
+  } from '#lib/api/client.js';
+  import WebhookEditModal from '#lib/components/settings/WebhookEditModal.svelte';
 
   const VALID_EVENTS = [
     'download.created',

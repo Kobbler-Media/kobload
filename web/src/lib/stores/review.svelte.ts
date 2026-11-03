@@ -1,4 +1,4 @@
-import { getReviewCount } from '$lib/api/client';
+import { getReviewCount } from '#lib/api/client.js';
 
 let openCount = $state(0);
 

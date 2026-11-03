@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import NavGroup from './NavGroup.svelte';
-  import { toggleGroup, isGroupExpanded } from '$lib/stores/sidebar.svelte';
-  import { getReviewState } from '$lib/stores/review.svelte';
+  import { toggleGroup, isGroupExpanded } from '#lib/stores/sidebar.svelte.js';
+  import { getReviewState } from '#lib/stores/review.svelte.js';
 
   interface Props {
     open: boolean;
@@ -230,7 +230,7 @@
       <a
         href="/dashboard"
         class="home-link"
-        class:active={$page.url.pathname === '/dashboard'}
+        class:active={page.url.pathname === '/dashboard'}
         onclick={onClose}
       >
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">

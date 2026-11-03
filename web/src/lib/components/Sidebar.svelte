@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import NavGroup from './NavGroup.svelte';
-  import { toggleGroup, isGroupExpanded } from '$lib/stores/sidebar.svelte';
-  import { getReviewState } from '$lib/stores/review.svelte';
+  import { toggleGroup, isGroupExpanded } from '#lib/stores/sidebar.svelte.js';
+  import { getReviewState } from '#lib/stores/review.svelte.js';
 
   interface Props {
     devMode?: boolean;
@@ -215,7 +215,7 @@
   const isFiltering = $derived(filterQuery.trim().length > 0);
 
   function isHomeActive(): boolean {
-    return $page.url.pathname === '/dashboard';
+    return page.url.pathname === '/dashboard';
   }
 </script>
 

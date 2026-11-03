@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DecisionLogProviderCall } from '$lib/types';
+  import type { DecisionLogProviderCall } from '#lib/types.js';
 
   let {
     call

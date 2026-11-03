@@ -7,8 +7,8 @@
     testDebridProvider,
     type DebridProvider,
     type DebridTestResult
-  } from '$lib/api/client';
-  import { discardGuard } from '$lib/discardGuard';
+  } from '#lib/api/client.js';
+  import { discardGuard } from '#lib/discardGuard.js';
   import DebridTestResultView from './DebridTestResultView.svelte';
 
   let {

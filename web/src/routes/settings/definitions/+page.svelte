@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listDefinitions, updateDefinitions } from '$lib/api/client';
-  import type { DefinitionSummary } from '$lib/api/client';
+  import { listDefinitions, updateDefinitions } from '#lib/api/client.js';
+  import type { DefinitionSummary } from '#lib/api/client.js';
 
   let definitions = $state<DefinitionSummary[]>([]);
   let loading = $state(true);

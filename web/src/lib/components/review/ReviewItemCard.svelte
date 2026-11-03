@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { AliasScope, MatchExplanation, ReviewItem } from '$lib/types';
-  import MatchExplanationView from '$lib/components/decision-log/MatchExplanationView.svelte';
+  import type { AliasScope, MatchExplanation, ReviewItem } from '#lib/types.js';
+  import MatchExplanationView from '#lib/components/decision-log/MatchExplanationView.svelte';
   import RememberNameForm from './RememberNameForm.svelte';
 
   let {

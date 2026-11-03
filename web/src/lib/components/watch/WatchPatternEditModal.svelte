@@ -1,9 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { Modal, SearchSelect, type SearchSelectItem } from '@koblibs/ui';
-  import { updateWatchPattern } from '$lib/api/client';
-  import { discardGuard } from '$lib/discardGuard';
-  import type { WatchPattern } from '$lib/types';
+  import { updateWatchPattern } from '#lib/api/client.js';
+  import { discardGuard } from '#lib/discardGuard.js';
+  import type { WatchPattern } from '#lib/types.js';
   import { getPatternTitle } from './grouping';
 
   let {

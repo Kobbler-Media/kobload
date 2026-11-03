@@ -1,8 +1,8 @@
 <script lang="ts">
-  import type { DownloadItem, DownloadEvent } from '$lib/api/client';
-  import { rescanDownload } from '$lib/api/client';
+  import type { DownloadItem, DownloadEvent } from '#lib/api/client.js';
+  import { rescanDownload } from '#lib/api/client.js';
   import EventTimeline from '../EventTimeline.svelte';
-  import { downloadEventTones } from '$lib/styles/eventTones';
+  import { downloadEventTones } from '#lib/styles/eventTones.js';
 
   interface Props {
     item: DownloadItem;

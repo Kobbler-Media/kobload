@@ -1,16 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto, beforeNavigate } from '$app/navigation';
-  import '$lib/styles/global.css';
-  import favicon from '$lib/assets/favicon.svg';
+  import '#lib/styles/global.css';
+  import favicon from '#lib/assets/favicon.svg';
   import { Toast } from '@koblibs/ui';
-  import LoginForm from '$lib/components/LoginForm.svelte';
-  import NavBar from '$lib/components/NavBar.svelte';
-  import Sidebar from '$lib/components/Sidebar.svelte';
-  import MobileMenu from '$lib/components/MobileMenu.svelte';
-  import { login, getConfig, getDevSnapshotStatus } from '$lib/api/client';
-  import { getAuthState, loadAuthToken, setAuthToken, clearAuth } from '$lib/stores/auth.svelte';
+  import LoginForm from '#lib/components/LoginForm.svelte';
+  import NavBar from '#lib/components/NavBar.svelte';
+  import Sidebar from '#lib/components/Sidebar.svelte';
+  import MobileMenu from '#lib/components/MobileMenu.svelte';
+  import { login, getConfig, getDevSnapshotStatus } from '#lib/api/client.js';
+  import { getAuthState, loadAuthToken, setAuthToken, clearAuth } from '#lib/stores/auth.svelte.js';
   import {
     getUIState,
     setTheme,
@@ -18,9 +18,9 @@
     initTheme,
     hasOpenOverlays,
     closeTopOverlay
-  } from '$lib/stores/ui.svelte';
-  import { showToast, getToastMessage } from '$lib/stores/toast.svelte';
-  import { refreshReviewCount } from '$lib/stores/review.svelte';
+  } from '#lib/stores/ui.svelte.js';
+  import { showToast, getToastMessage } from '#lib/stores/toast.svelte.js';
+  import { refreshReviewCount } from '#lib/stores/review.svelte.js';
 
   const REVIEW_COUNT_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -46,7 +46,7 @@
       const resp = await login(email, password);
       setAuthToken(resp.token);
       showToast('Signed in');
-      goto('/dashboard', { replaceState: true });
+      goto('/dashboard', { replace: true });
     } finally {
       loading = false;
     }
@@ -92,7 +92,7 @@
   });
 
   $effect(() => {
-    const pathname = $page.url.pathname;
+    const pathname = page.url.pathname;
     const pageName = pathname.slice(1).split('/')[0];
     if (pageName && isAuthed) {
       localStorage.setItem('kobload-page', pageName);
@@ -111,9 +111,9 @@
     }
 
     // Restore last page for authed users
-    if (auth.isAuthed && $page.url.pathname === '/') {
+    if (auth.isAuthed && page.url.pathname === '/') {
       const lastPage = localStorage.getItem('kobload-page') || 'dashboard';
-      goto(`/${lastPage}`, { replaceState: true });
+      goto(`/${lastPage}`, { replace: true });
     }
 
     // Dev-only: warn when main thread is blocked >200ms

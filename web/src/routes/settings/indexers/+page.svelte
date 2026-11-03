@@ -18,10 +18,10 @@
     type IndexerMigrationItem,
     type DownloadClientMatch,
     type MigrationResult
-  } from '$lib/api/client';
-  import type { IndexerSource } from '$lib/types';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import IndexerEditModal from '$lib/components/settings/IndexerEditModal.svelte';
+  } from '#lib/api/client.js';
+  import type { IndexerSource } from '#lib/types.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import IndexerEditModal from '#lib/components/settings/IndexerEditModal.svelte';
 
   let loading = $state(false);
   let error = $state('');

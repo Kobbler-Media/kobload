@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listApiKeys, createApiKey, revokeApiKey, type ApiKeySummary } from '$lib/api/client';
+  import { listApiKeys, createApiKey, revokeApiKey, type ApiKeySummary } from '#lib/api/client.js';
 
   let loading = $state(false);
   let error = $state('');

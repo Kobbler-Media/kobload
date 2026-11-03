@@ -1,7 +1,7 @@
-import type { HandleClientError } from '@sveltejs/kit';
+import type { HandleClientError } from '@sveltejs/kit/hooks';
 
-export const handleError: HandleClientError = ({ error, message }) => {
-  console.error('[SvelteKit unhandled error]', message, error);
+export const handleError: HandleClientError = ({ kind, error }) => {
+  console.error(`[SvelteKit ${kind} error]`, error);
 };
 
 if (typeof window !== 'undefined') {

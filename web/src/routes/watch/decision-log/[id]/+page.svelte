@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { DeleteConfirmModal } from '@koblibs/ui';
   import {
@@ -9,12 +9,12 @@
     deleteDecisionLogSession,
     testWatchPattern,
     listLearnedAliases
-  } from '$lib/api/client';
-  import { learnedNames } from '$lib/learnedAliases';
-  import type { DecisionLogSessionDetail } from '$lib/types';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import ProviderCallCard from '$lib/components/decision-log/ProviderCallCard.svelte';
-  import ReleaseRow from '$lib/components/decision-log/ReleaseRow.svelte';
+  } from '#lib/api/client.js';
+  import { learnedNames } from '#lib/learnedAliases.js';
+  import type { DecisionLogSessionDetail } from '#lib/types.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import ProviderCallCard from '#lib/components/decision-log/ProviderCallCard.svelte';
+  import ReleaseRow from '#lib/components/decision-log/ReleaseRow.svelte';
 
   let loading = $state(true);
   let error = $state('');
@@ -41,7 +41,7 @@
     return session.releases.filter((r) => ids.includes(r.id));
   });
 
-  function toggleCompare(release: import('$lib/types').DecisionLogRelease) {
+  function toggleCompare(release: import('#lib/types.js').DecisionLogRelease) {
     if (compareIds.has(release.id)) {
       compareIds.delete(release.id);
     } else {
@@ -55,7 +55,7 @@
     compareIds = new Set(compareIds);
   }
 
-  const sessionId = $derived($page.params.id!);
+  const sessionId = $derived(page.params.id!);
 
   const filteredReleases = $derived(() => {
     if (!session) return [];
@@ -254,7 +254,7 @@
   <!-- Breadcrumbs -->
   <nav class="breadcrumbs">
     <a href={getBackLink()}>{getBackLabel()}</a>
-    <span class="sep">&rsaquo;</span>
+    <span class="sep">›</span>
     <span class="current">Session Detail</span>
   </nav>
 
@@ -283,9 +283,10 @@
     </div>
     <div class="header-actions">
       <button class="btn compact alt" type="button" onclick={handleExport}>Export JSON</button>
-      <button class="btn compact danger" type="button" onclick={() => (showDeleteConfirm = true)}>
-        Delete
-      </button>
+
+      <button class="btn compact danger" type="button" onclick={() => (showDeleteConfirm = true)}
+        >Delete</button
+      >
     </div>
   </div>
 
@@ -359,34 +360,31 @@
           class="tab"
           class:active={decisionFilter === 'all'}
           type="button"
-          onclick={() => (decisionFilter = 'all')}
+          onclick={() => (decisionFilter = 'all')}>All ({releaseCounts().all})</button
         >
-          All ({releaseCounts().all})
-        </button>
+
         <button
           class="tab"
           class:active={decisionFilter === 'best'}
           type="button"
-          onclick={() => (decisionFilter = 'best')}
+          onclick={() => (decisionFilter = 'best')}>Best ({releaseCounts().best})</button
         >
-          Best ({releaseCounts().best})
-        </button>
+
         <button
           class="tab"
           class:active={decisionFilter === 'candidate'}
           type="button"
           onclick={() => (decisionFilter = 'candidate')}
+          >Candidates ({releaseCounts().candidate})</button
         >
-          Candidates ({releaseCounts().candidate})
-        </button>
+
         <button
           class="tab"
           class:active={decisionFilter === 'rejected'}
           type="button"
           onclick={() => (decisionFilter = 'rejected')}
+          >Rejected ({releaseCounts().rejected})</button
         >
-          Rejected ({releaseCounts().rejected})
-        </button>
       </div>
       <input
         type="text"

@@ -1,4 +1,4 @@
-import type { WatchPattern } from '$lib/types';
+import type { WatchPattern } from '#lib/types.js';
 
 export type StatusCounts = {
   searching: number;

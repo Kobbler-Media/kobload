@@ -1,24 +1,22 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { ScrollToTop } from '@koblibs/ui';
-  import LogToggle from '$lib/components/decision-log/LogToggle.svelte';
-  import StreamAttempts from '$lib/components/debrid-log/StreamAttempts.svelte';
-  import SearchSessions from '$lib/components/debrid-log/SearchSessions.svelte';
+  import LogToggle from '#lib/components/decision-log/LogToggle.svelte';
+  import StreamAttempts from '#lib/components/debrid-log/StreamAttempts.svelte';
+  import SearchSessions from '#lib/components/debrid-log/SearchSessions.svelte';
 
   const tabs = [
     { id: 'streams', label: 'Streams' },
     { id: 'searches', label: 'Searches' }
   ] as const;
 
-  const active = $derived(
-    $page.url.searchParams.get('tab') === 'searches' ? 'searches' : 'streams'
-  );
+  const active = $derived(page.url.searchParams.get('tab') === 'searches' ? 'searches' : 'streams');
 
   const select = (id: string) => {
-    const url = new URL($page.url);
+    const url = new URL(page.url.href);
     url.searchParams.set('tab', id);
-    goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+    goto(url, { replace: true, reset: false });
   };
 </script>
 

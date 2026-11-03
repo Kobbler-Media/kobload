@@ -1,7 +1,7 @@
 // UI state store using Svelte 5 runes
 
 export { registerOverlay, unregisterOverlay, closeTopOverlay, hasOpenOverlays } from '@koblibs/ui';
-import type { PageKey } from '$lib/types';
+import type { PageKey } from '#lib/types.js';
 
 let currentPage = $state<PageKey>('downloads');
 let theme = $state<'dark' | 'light'>('dark');

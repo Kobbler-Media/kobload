@@ -8,13 +8,13 @@
     dismissReviewItem,
     listLearnedAliases,
     deleteLearnedAlias
-  } from '$lib/api/client';
-  import type { AliasScope, LearnedAlias, ReviewItem } from '$lib/types';
-  import { learnedNames } from '$lib/learnedAliases';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import { refreshReviewCount } from '$lib/stores/review.svelte';
-  import ReviewItemCard from '$lib/components/review/ReviewItemCard.svelte';
-  import LearnedAliasList from '$lib/components/review/LearnedAliasList.svelte';
+  } from '#lib/api/client.js';
+  import type { AliasScope, LearnedAlias, ReviewItem } from '#lib/types.js';
+  import { learnedNames } from '#lib/learnedAliases.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import { refreshReviewCount } from '#lib/stores/review.svelte.js';
+  import ReviewItemCard from '#lib/components/review/ReviewItemCard.svelte';
+  import LearnedAliasList from '#lib/components/review/LearnedAliasList.svelte';
 
   let loading = $state(true);
   let busy = $state(false);

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { DeleteConfirmModal, ScrollToTop } from '@koblibs/ui';
-  import { getDecisionLogSessions, deleteDecisionLogSessions } from '$lib/api/client';
-  import type { DecisionLogSession } from '$lib/types';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import LogToggle from '$lib/components/decision-log/LogToggle.svelte';
+  import { getDecisionLogSessions, deleteDecisionLogSessions } from '#lib/api/client.js';
+  import type { DecisionLogSession } from '#lib/types.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import LogToggle from '#lib/components/decision-log/LogToggle.svelte';
 
   const TRIGGER_TYPES = 'backlog_search,immediate_search,want';
 
@@ -19,7 +19,7 @@
   let clearing = $state(false);
 
   // URL filter: watch_pattern_id
-  const patternFilter = $derived($page.url.searchParams.get('watch_pattern_id') ?? '');
+  const patternFilter = $derived(page.url.searchParams.get('watch_pattern_id') ?? '');
 
   const PAGE_SIZE = 50;
 
@@ -51,9 +51,9 @@
   }
 
   function clearPatternFilter() {
-    const url = new URL($page.url);
+    const url = new URL(page.url.href);
     url.searchParams.delete('watch_pattern_id');
-    goto(url.toString(), { replaceState: true });
+    goto(url.toString(), { replace: true });
     loadSessions(true);
   }
 
@@ -190,6 +190,7 @@
       {@const displayName = meta?.title
         ? `${meta.title}${meta.author ? ` — ${meta.author}` : ''}`
         : (session.pattern_name ?? 'Unknown pattern')}
+
       <a class="session-card" href="/watch/decision-log/{session.id}">
         <div class="session-top">
           <div class="session-left">

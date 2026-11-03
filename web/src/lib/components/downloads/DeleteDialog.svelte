@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DownloadItem } from '$lib/api/client';
+  import type { DownloadItem } from '#lib/api/client.js';
 
   type DeleteMode =
     { kind: 'single'; item: DownloadItem } | { kind: 'clear'; downloads: DownloadItem[] };

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { DecisionLogRelease } from '$lib/types';
-  import { learnedIn } from '$lib/learnedAliases';
+  import type { DecisionLogRelease } from '#lib/types.js';
+  import { learnedIn } from '#lib/learnedAliases.js';
   import MatchExplanationView from './MatchExplanationView.svelte';
 
   let {

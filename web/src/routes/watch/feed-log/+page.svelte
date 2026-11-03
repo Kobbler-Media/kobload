@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { DeleteConfirmModal, ScrollToTop } from '@koblibs/ui';
-  import { getDecisionLogSessions, deleteDecisionLogSessions } from '$lib/api/client';
-  import type { DecisionLogSession } from '$lib/types';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import LogToggle from '$lib/components/decision-log/LogToggle.svelte';
+  import { getDecisionLogSessions, deleteDecisionLogSessions } from '#lib/api/client.js';
+  import type { DecisionLogSession } from '#lib/types.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import LogToggle from '#lib/components/decision-log/LogToggle.svelte';
 
   let loading = $state(false);
   let error = $state('');

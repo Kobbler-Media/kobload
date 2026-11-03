@@ -1,4 +1,4 @@
-import { getAuthToken } from '$lib/stores/auth.svelte';
+import { getAuthToken } from '#lib/stores/auth.svelte.js';
 import {
   createSseConnection as createSseConnectionBase,
   type SseConnection,

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { StreamAttempt, StreamAttemptEvent } from '$lib/api/client';
-  import { getStreamAttemptStatusStyle } from '$lib/styles/statusColors';
-  import { streamEventTones } from '$lib/styles/eventTones';
+  import type { StreamAttempt, StreamAttemptEvent } from '#lib/api/client.js';
+  import { getStreamAttemptStatusStyle } from '#lib/styles/statusColors.js';
+  import { streamEventTones } from '#lib/styles/eventTones.js';
   import EventTimeline from '../EventTimeline.svelte';
 
   interface Props {

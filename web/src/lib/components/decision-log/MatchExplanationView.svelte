@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { MatchExplanation } from '$lib/types';
-  import { learnedIn } from '$lib/learnedAliases';
+  import type { MatchExplanation } from '#lib/types.js';
+  import { learnedIn } from '#lib/learnedAliases.js';
 
   let { explanation, learned = [] }: { explanation: MatchExplanation; learned?: string[] } =
     $props();

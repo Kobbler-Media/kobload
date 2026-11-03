@@ -11,11 +11,11 @@
     type DebridProvider,
     type DebridTestResult,
     type HashIndexStats
-  } from '$lib/api/client';
-  import { showToast } from '$lib/stores/toast.svelte';
+  } from '#lib/api/client.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
   import type { SearchSelectItem } from '@koblibs/ui';
-  import DebridProviderEditModal from '$lib/components/settings/DebridProviderEditModal.svelte';
-  import DebridTestResultView from '$lib/components/settings/DebridTestResultView.svelte';
+  import DebridProviderEditModal from '#lib/components/settings/DebridProviderEditModal.svelte';
+  import DebridTestResultView from '#lib/components/settings/DebridTestResultView.svelte';
 
   let loading = $state(false);
   let error = $state('');

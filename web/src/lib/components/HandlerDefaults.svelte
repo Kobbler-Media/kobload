@@ -5,7 +5,7 @@
     listIndexerHandlers,
     type HandlerTypeDefault,
     type IndexerHandlerInfo
-  } from '$lib/api/client';
+  } from '#lib/api/client.js';
 
   interface Props {
     mediaTypeId: string;

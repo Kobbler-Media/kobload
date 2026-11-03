@@ -3,7 +3,7 @@
 #
 # Rebuild with: make tools
 
-FROM rust:1.97-trixie
+FROM rust:1.99-trixie
 
 # Install runtime dependencies:
 # - ca-certificates: for HTTPS requests

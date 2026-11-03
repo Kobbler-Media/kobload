@@ -8,8 +8,8 @@
     type DownloadClientConfig,
     type TestConnectionResult,
     type DownloadClientTypeInfo
-  } from '$lib/api/client';
-  import DownloadClientEditModal from '$lib/components/settings/DownloadClientEditModal.svelte';
+  } from '#lib/api/client.js';
+  import DownloadClientEditModal from '#lib/components/settings/DownloadClientEditModal.svelte';
 
   let loading = $state(false);
   let error = $state('');

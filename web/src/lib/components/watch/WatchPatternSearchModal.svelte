@@ -1,8 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { Modal, SearchSelect, type SearchSelectItem } from '@koblibs/ui';
-  import { searchAndDownload, createDownload, listQualityProfiles } from '$lib/api/client';
-  import type { MediaWant, QualityProfile, ProcessedRelease, WatchPattern } from '$lib/types';
+  import { searchAndDownload, createDownload, listQualityProfiles } from '#lib/api/client.js';
+  import type { MediaWant, QualityProfile, ProcessedRelease, WatchPattern } from '#lib/types.js';
   import { getPatternTitle } from './grouping';
 
   let {

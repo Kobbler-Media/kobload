@@ -5,7 +5,7 @@
     setKoblemSettings,
     testKoblemConnection,
     type KoblemTestResult
-  } from '$lib/api/client';
+  } from '#lib/api/client.js';
 
   let loading = $state(false);
   let saving = $state(false);

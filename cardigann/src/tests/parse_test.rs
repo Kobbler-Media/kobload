@@ -52,3 +52,43 @@ fn bulk_parse_definitions() {
         "{fail} definitions failed to parse (max allowed: {max_fail})"
     );
 }
+
+#[test]
+fn plain_scalars_keep_their_source_spelling() {
+    let def = crate::load_definition(
+        r#"
+id: t
+name: T
+caps:
+  categorymappings:
+    - { id: 1_0, cat: Other }
+    - { id: 01, cat: Movies }
+    - { id: 7, cat: TV }
+search:
+  path: /browse
+  inputs:
+    search: "{{ .Keywords }}"
+    incldead: on
+    nonboolean: yes
+  rows:
+    selector: tr
+login:
+  inputs:
+    keeplogged: yes
+    remember: off
+"#,
+    )
+    .unwrap();
+    let ids: Vec<&str> = def
+        .caps
+        .categorymappings
+        .iter()
+        .map(|m| m.id.as_str())
+        .collect();
+    assert_eq!(ids, ["1_0", "01", "7"]);
+    assert_eq!(def.search.inputs["incldead"].as_str(), "on");
+    assert_eq!(def.search.inputs["nonboolean"].as_str(), "yes");
+    let login = def.login.unwrap();
+    assert_eq!(login.inputs["keeplogged"].as_str(), "yes");
+    assert_eq!(login.inputs["remember"].as_str(), "off");
+}

@@ -8,10 +8,10 @@
     reingestDownload,
     type DownloadItem,
     type DownloadEvent
-  } from '$lib/api/client';
+  } from '#lib/api/client.js';
   import { InfiniteScroll, ScrollToTop, SearchSelect, type SearchSelectItem } from '@koblibs/ui';
-  import { createSseConnection, type SseConnection } from '$lib/sse';
-  import { showToast } from '$lib/stores/toast.svelte';
+  import { createSseConnection, type SseConnection } from '#lib/sse.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
   import DownloadCard from '../downloads/DownloadCard.svelte';
   import ReingestDialog from '../downloads/ReingestDialog.svelte';
   import DeleteDialog from '../downloads/DeleteDialog.svelte';

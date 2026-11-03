@@ -34,7 +34,7 @@ jobs:
             clang libclang-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.96"
+          toolchain: "1.99"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { listUsers, type UserSummary } from '$lib/api/client';
-  import UserEditModal from '$lib/components/settings/UserEditModal.svelte';
+  import { listUsers, type UserSummary } from '#lib/api/client.js';
+  import UserEditModal from '#lib/components/settings/UserEditModal.svelte';
 
   let loading = $state(false);
   let error = $state('');

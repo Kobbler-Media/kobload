@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import {
     InfiniteScroll,
@@ -17,23 +17,23 @@
     patchWatchPattern,
     bulkDeleteWatchPatterns,
     testWatchPattern
-  } from '$lib/api/client';
-  import type { MediaType } from '$lib/api/client';
-  import { createSseConnection, type SseConnection } from '$lib/sse';
-  import { showToast } from '$lib/stores/toast.svelte';
-  import type { WatchPattern } from '$lib/types';
-  import WatchPatternCard from '$lib/components/watch/WatchPatternCard.svelte';
-  import WatchPatternEditModal from '$lib/components/watch/WatchPatternEditModal.svelte';
-  import WatchPatternSearchModal from '$lib/components/watch/WatchPatternSearchModal.svelte';
+  } from '#lib/api/client.js';
+  import type { MediaType } from '#lib/api/client.js';
+  import { createSseConnection, type SseConnection } from '#lib/sse.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
+  import type { WatchPattern } from '#lib/types.js';
+  import WatchPatternCard from '#lib/components/watch/WatchPatternCard.svelte';
+  import WatchPatternEditModal from '#lib/components/watch/WatchPatternEditModal.svelte';
+  import WatchPatternSearchModal from '#lib/components/watch/WatchPatternSearchModal.svelte';
 
-  import WatchPatternDetailSidebar from '$lib/components/watch/WatchPatternDetailSidebar.svelte';
+  import WatchPatternDetailSidebar from '#lib/components/watch/WatchPatternDetailSidebar.svelte';
   import {
     deriveGroups,
     getEffectiveStatus,
     getPatternTitle,
     type PatternGroup
-  } from '$lib/components/watch/grouping';
-  import { getMediaKindIcon } from '$lib/components/watch/mediaIcons';
+  } from '#lib/components/watch/grouping.js';
+  import { getMediaKindIcon } from '#lib/components/watch/mediaIcons.js';
 
   // State
   let patterns = $state<WatchPattern[]>([]);
@@ -202,13 +202,13 @@
 
   // URL state
   function updateUrlParams() {
-    const url = new URL($page.url);
+    const url = new URL(page.url.href);
     if (detailPattern) {
       url.searchParams.set('detail', `${detailPattern.source_system}/${detailPattern.source_id}`);
     } else {
       url.searchParams.delete('detail');
     }
-    goto(url.toString(), { replaceState: true, keepFocus: true });
+    goto(url.toString(), { replace: true, reset: false });
   }
 
   // Group actions
@@ -353,7 +353,7 @@
 
   // Restore detail from URL on mount
   function restoreFromUrl() {
-    const detailParam = $page.url.searchParams.get('detail');
+    const detailParam = page.url.searchParams.get('detail');
     if (detailParam) {
       const [sourceSystem, sourceId] = detailParam.split('/');
       if (sourceSystem && sourceId) {
@@ -479,9 +479,8 @@
     class="btn compact ghost select-toggle"
     type="button"
     onclick={() => (selectionCount > 0 ? clearSelection() : selectAll())}
+    >{selectionCount > 0 ? 'Clear' : 'Select All'}</button
   >
-    {selectionCount > 0 ? 'Clear' : 'Select All'}
-  </button>
 </div>
 
 <!-- Grouped Pattern List -->
@@ -585,6 +584,7 @@
 </div>
 
 <InfiniteScroll {hasMore} {loading} onLoadMore={() => loadPatterns()} />
+
 <ScrollToTop />
 
 <MultiSelectBar

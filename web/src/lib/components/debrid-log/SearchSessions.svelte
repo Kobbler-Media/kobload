@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { DeleteConfirmModal } from '@koblibs/ui';
-  import { getDecisionLogSessions, deleteDecisionLogSessions } from '$lib/api/client';
-  import type { DecisionLogSession } from '$lib/types';
-  import { showToast } from '$lib/stores/toast.svelte';
+  import { getDecisionLogSessions, deleteDecisionLogSessions } from '#lib/api/client.js';
+  import type { DecisionLogSession } from '#lib/types.js';
+  import { showToast } from '#lib/stores/toast.svelte.js';
 
   const TRIGGER_TYPES = 'debrid_search';
 

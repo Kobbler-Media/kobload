@@ -3,6 +3,6 @@
   import { onMount } from 'svelte';
 
   onMount(() => {
-    goto('/watch/patterns', { replaceState: true });
+    goto('/watch/patterns', { replace: true });
   });
 </script>

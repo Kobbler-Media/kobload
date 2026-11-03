@@ -8,15 +8,15 @@
     type DownloadItem,
     type MediaType,
     type DashboardSummary
-  } from '$lib/api/client';
-  import { createSseConnection, type SseConnection } from '$lib/sse';
-  import { getPatternTitle } from '$lib/components/watch/grouping';
-  import LoadingState from '$lib/components/LoadingState.svelte';
+  } from '#lib/api/client.js';
+  import { createSseConnection, type SseConnection } from '#lib/sse.js';
+  import { getPatternTitle } from '#lib/components/watch/grouping.js';
+  import LoadingState from '#lib/components/LoadingState.svelte';
   import {
     getDownloadStatusStyle,
     getWatchStatusSolid,
     getMatchActionStyle
-  } from '$lib/styles/statusColors';
+  } from '#lib/styles/statusColors.js';
 
   let loading = $state(true);
   let downloadClients = $state.raw<DownloadClientConfig[]>([]);

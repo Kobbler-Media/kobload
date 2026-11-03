@@ -43,7 +43,7 @@ services:
       - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
 
   bitmagnet:
-    image: ghcr.io/bitmagnet-io/bitmagnet:latest
+    image: ghcr.io/bitmagnet-io/bitmagnet:v0.10.1
     logging:
       driver: json-file
       options:

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { Modal, SearchSelect, type SearchSelectItem } from '@koblibs/ui';
-  import DirectoryBrowser from '$lib/components/DirectoryBrowser.svelte';
-  import { createWatchDirectory, updateWatchDirectory } from '$lib/api/client';
-  import { discardGuard } from '$lib/discardGuard';
-  import type { WatchDirectory } from '$lib/types';
+  import DirectoryBrowser from '#lib/components/DirectoryBrowser.svelte';
+  import { createWatchDirectory, updateWatchDirectory } from '#lib/api/client.js';
+  import { discardGuard } from '#lib/discardGuard.js';
+  import type { WatchDirectory } from '#lib/types.js';
 
   let {
     directory,

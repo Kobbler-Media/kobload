@@ -1,4 +1,4 @@
-import { clearAuth, getAuthToken } from '$lib/stores/auth.svelte';
+import { clearAuth, getAuthToken } from '#lib/stores/auth.svelte.js';
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -515,7 +515,7 @@ import type {
   QualityProfile,
   MediaWant,
   PaginatedResponse
-} from '$lib/types';
+} from '#lib/types.js';
 
 export async function listWatchPatterns(params?: {
   source_system?: string;
@@ -1009,7 +1009,7 @@ export async function getDecisionLogSessions(params?: {
   watch_pattern_id?: string;
   limit?: number;
   offset?: number;
-}): Promise<import('$lib/types').DecisionLogSession[]> {
+}): Promise<import('#lib/types.js').DecisionLogSession[]> {
   const searchParams = new URLSearchParams();
   if (params?.trigger_type) searchParams.set('trigger_type', params.trigger_type);
   if (params?.is_test !== undefined) searchParams.set('is_test', String(params.is_test));
@@ -1022,7 +1022,7 @@ export async function getDecisionLogSessions(params?: {
 
 export async function getDecisionLogSession(
   id: string
-): Promise<import('$lib/types').DecisionLogSessionDetail> {
+): Promise<import('#lib/types.js').DecisionLogSessionDetail> {
   return request(`/api/v1/decision-logs/sessions/${id}`);
 }
 
@@ -1090,12 +1090,14 @@ export async function clearStreamAttempts(): Promise<{ deleted: number }> {
   return request('/api/v1/stream-attempts', { method: 'DELETE' });
 }
 
-export async function getDecisionLogSettings(): Promise<import('$lib/types').DecisionLogSettings> {
+export async function getDecisionLogSettings(): Promise<
+  import('#lib/types.js').DecisionLogSettings
+> {
   return request('/api/v1/decision-logs/settings');
 }
 
 export async function updateDecisionLogSettings(
-  settings: Partial<import('$lib/types').DecisionLogSettings>
+  settings: Partial<import('#lib/types.js').DecisionLogSettings>
 ): Promise<void> {
   await request('/api/v1/decision-logs/settings', {
     method: 'PUT',
@@ -1379,7 +1381,7 @@ export async function confirmProwlarrMigration(
 }
 
 // Review queue and learned aliases
-export async function listReviewItems(): Promise<{ items: import('$lib/types').ReviewItem[] }> {
+export async function listReviewItems(): Promise<{ items: import('#lib/types.js').ReviewItem[] }> {
   return request('/api/v1/review');
 }
 
@@ -1406,9 +1408,9 @@ export async function rejectReviewRelease(id: string, releaseKey: string): Promi
 
 export async function rememberReviewName(
   id: string,
-  scope: import('$lib/types').AliasScope,
+  scope: import('#lib/types.js').AliasScope,
   alias: string
-): Promise<import('$lib/types').LearnedAlias> {
+): Promise<import('#lib/types.js').LearnedAlias> {
   return request(`/api/v1/review/${id}/remember`, {
     method: 'POST',
     body: JSON.stringify({ scope, alias })
@@ -1419,7 +1421,7 @@ export async function dismissReviewItem(id: string): Promise<void> {
   await request(`/api/v1/review/${id}/dismiss`, { method: 'POST' });
 }
 
-export async function listLearnedAliases(): Promise<import('$lib/types').LearnedAlias[]> {
+export async function listLearnedAliases(): Promise<import('#lib/types.js').LearnedAlias[]> {
   return request('/api/v1/learned-aliases');
 }
 

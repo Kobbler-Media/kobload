@@ -26,13 +26,8 @@ pub struct Definition {
     #[serde(default)]
     pub settings: Vec<SettingDef>,
     pub download: Option<DownloadDef>,
-    // Extra fields we don't use but must accept
-    #[serde(rename = "requestDelay")]
-    pub request_delay: Option<serde_yaml::Value>,
     pub followredirect: Option<bool>,
-    pub certificates: Option<serde_yaml::Value>,
     pub testlinktorrent: Option<bool>,
-    pub replaces: Option<serde_yaml::Value>,
 }
 
 /// Capabilities section.
@@ -63,16 +58,12 @@ pub struct Login {
     #[serde(rename = "method")]
     pub method: Option<String>,
     pub cookie: Option<String>,
-    pub cookies: Option<serde_yaml::Value>,
     #[serde(default)]
     pub inputs: HashMap<String, YamlString>,
-    pub selectorinputs: Option<serde_yaml::Value>,
     pub error: Option<Vec<SelectorBlock>>,
-    pub selectors: Option<serde_yaml::Value>,
     pub test: Option<LoginTest>,
     pub form: Option<String>,
     pub captcha: Option<CaptchaDef>,
-    pub headers: Option<serde_yaml::Value>,
     pub submitpath: Option<String>,
 }
 
@@ -117,7 +108,6 @@ pub struct SearchPathDef {
     #[serde(default)]
     pub inputs: HashMap<String, YamlString>,
     pub followredirect: Option<bool>,
-    pub categorydesc: Option<serde_yaml::Value>,
     pub inheritinputs: Option<bool>,
 }
 
@@ -340,9 +330,6 @@ pub struct DownloadDef {
     pub filters: Vec<FilterDef>,
     pub method: Option<String>,
     pub before: Option<DownloadBeforeDef>,
-    pub selectors: Option<serde_yaml::Value>,
-    pub infohash: Option<serde_yaml::Value>,
-    pub headers: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

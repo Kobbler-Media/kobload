@@ -1,14 +1,14 @@
 <script lang="ts">
   import { ExpandableSidebar } from '@koblibs/ui';
-  import { getPatternDetail, searchPatternNow, grabHeldMatch } from '$lib/api/client';
-  import type { WatchPattern, WatchMatch } from '$lib/types';
+  import { getPatternDetail, searchPatternNow, grabHeldMatch } from '#lib/api/client.js';
+  import type { WatchPattern, WatchMatch } from '#lib/types.js';
   import { getEffectiveStatus, getPatternTitle, getSearchTermsFromMediaWant } from './grouping';
   import { formatAge } from '@koblibs/ui';
   import {
     getDetailStatusColor,
     getDetailStatusLabel,
     getMatchActionStyle
-  } from '$lib/styles/statusColors';
+  } from '#lib/styles/statusColors.js';
 
   let {
     pattern,

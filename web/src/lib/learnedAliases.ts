@@ -1,4 +1,4 @@
-import type { LearnedAlias } from '$lib/types';
+import type { LearnedAlias } from '#lib/types.js';
 
 export function learnedNames(aliases: LearnedAlias[]): string[] {
   return aliases.map((a) => a.alias.toLowerCase());

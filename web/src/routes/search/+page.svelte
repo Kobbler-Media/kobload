@@ -6,9 +6,9 @@
     listQualityProfiles,
     listMediaTypes,
     type MediaType
-  } from '$lib/api/client';
-  import type { ProcessedRelease, QualityProfile } from '$lib/types';
-  import EmptyState from '$lib/components/EmptyState.svelte';
+  } from '#lib/api/client.js';
+  import type { ProcessedRelease, QualityProfile } from '#lib/types.js';
+  import EmptyState from '#lib/components/EmptyState.svelte';
   import { SearchSelect, type SearchSelectItem } from '@koblibs/ui';
 
   let query = $state('');

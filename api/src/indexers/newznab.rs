@@ -465,19 +465,19 @@ pub fn parse_caps_xml(xml: &str) -> Result<NewznabCaps, String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "searching" {
                     in_searching = true;
                 }
             }
             Ok(Event::End(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "searching" {
                     in_searching = false;
                 }
             }
             Ok(Event::Empty(e)) if in_searching => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let target = match name.as_str() {
                     "search" => Some(&mut caps.search),
                     "tv-search" => Some(&mut caps.tv_search),
@@ -504,8 +504,8 @@ fn parse_search_type_attrs(e: &quick_xml::events::BytesStart<'_>) -> SearchTypeC
     let mut params = Vec::new();
 
     for attr in e.attributes().flatten() {
-        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-        let val = String::from_utf8_lossy(&attr.value).to_string();
+        let key = attr.key.as_ref().to_string();
+        let val = attr.value.to_string();
         match key.as_str() {
             "available" => available = val == "yes",
             "supportedParams" => {

@@ -2,7 +2,7 @@
 name = "kobload-api"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.99"
 default-run = "kobload-api"
 license = "AGPL-3.0-only"
 
@@ -33,44 +33,43 @@ path = "tests/integration/main.rs"
 [dependencies]
 axum = { version = "0.8.9", features = ["json", "multipart"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["full"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["full"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "uuid", "time"] }
-uuid = { version = "1.24.0", features = ["v7", "serde"] }
+uuid = { version = "1.29.0", features = ["v7", "serde"] }
 time = { version = "0.3.55", features = ["serde"] }
 dotenvy = "0.15.7"
-thiserror = "2.0.20"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "multipart", "query", "gzip", "brotli", "deflate", "stream"] }
-tower-http = { version = "0.7.0", features = ["trace", "cors", "fs"] }
-tokio-util = { version = "0.7.19", features = ["io"] }
-argon2 = "0.5.3"
-password-hash = "0.5.0"
-rand = "0.10.2"
+thiserror = "2.0.21"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "multipart", "query", "gzip", "brotli", "deflate", "stream"] }
+tower-http = { version = "0.7.1", features = ["trace", "cors", "fs"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
+argon2 = "0.6.0"
+rand = "0.10.3"
 base64 = "0.23.1"
-sha2 = "0.11.0"
-const-hex = "1.19.1"
+sha2 = "0.11.1"
+const-hex = "1.19.3"
 subtle = "2.6.1"
 infer = "0.22.0"
-zip = "8.6.0"
-flate2 = "1.1.9"
+zip = "9.3.0"
+flate2 = "1.1.10"
 bzip2 = "0.6.1"
-liblzma = "0.4.8"
+liblzma = "0.4.9"
 tar = "0.4.46"
 csv = "1.4.0"
 tempfile = "3.27.0"
 # statvfs for the temp-extraction free-space guard (already in the tree via tempfile)
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs"] }
 dashmap = "6.2.1"
-futures = "0.3.33"
+futures = "0.3.34"
 chrono = { version = "0.4.45", features = ["serde"] }
-quick-xml = { version = "0.41.0", features = ["serialize"] }
+quick-xml = { version = "0.42.0", features = ["serialize"] }
 
 # OpenAPI documentation
-utoipa = { version = "5.5.0", features = ["axum_extras", "uuid", "time", "chrono"] }
-utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+utoipa = { version = "6.0.0", features = ["axum_extras", "uuid", "time", "chrono"] }
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum"] }
 
 # NATS job system
 nats-jobs = { path = "../../koblibs/nats-jobs", features = ["openapi"] }
@@ -78,15 +77,17 @@ kob-ffmpeg = { path = "../../koblibs/kob-ffmpeg" }
 koblem-client = { path = "../../koblibs/koblem-client" }
 kob-providers = { path = "../../koblibs/kob-providers" }
 kob-normalize = { path = "../../koblibs/kob-normalize" }
-async-nats = "0.50.0"
+async-nats = "0.51.0"
 async-trait = "0.1.92"
 regex = "1.13.1"
-fancy-regex = "0.19.0"
-unicode-normalization = "0.1.25"
+fancy-regex = "0.20.0"
+unicode-normalization = "0.1.26"
 walkdir = "2.5.0"
 rayon = "1.12.0"
 
-# SQLite reading for bulk hash index imports (RARBG, MagnetDB dumps)
+# SQLite reading for bulk hash index imports (RARBG, MagnetDB dumps).
+# Held at 0.39: newer rusqlite needs libsqlite3-sys >=0.38, and sqlx 0.9.0's (unused)
+# sqlx-sqlite caps it below that, which cargo still enforces via `links = "sqlite3"`.
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 
 # LZ-string decompression for DMM hashlist parsing
@@ -98,16 +99,16 @@ aho-corasick = "1.1.5"
 
 [dev-dependencies]
 regex = "1.13.1"
-tokio-test = "0.4.5"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+tokio-test = "0.4.6"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 # Build reqwest::Response values directly, to test status classification without a server.
 http = "1.5.0"
-rustls = "0.23.43"
+rustls = "0.23.46"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 nats-jobs = { path = "../../koblibs/nats-jobs" }
 # Scoring benchmarks and allocation profiling over a captured corpus
 # (docs/scoring-performance.md).
-criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 dhat = "0.3.3"
 proptest = "1.12.0"
 

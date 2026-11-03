@@ -1,6 +1,5 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash};
 use axum::http::{HeaderMap, StatusCode};
-use password_hash::SaltString;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -76,9 +75,8 @@ pub async fn validate_token(state: &AppState, token: &str) -> Result<(), StatusC
 }
 
 pub fn hash_password(password: &str) -> Result<String, password_hash::Error> {
-    let salt = SaltString::generate(&mut password_hash::rand_core::OsRng);
     Ok(Argon2::default()
-        .hash_password(password.as_bytes(), &salt)?
+        .hash_password(password.as_bytes())?
         .to_string())
 }
 
@@ -128,6 +126,13 @@ mod tests {
         let hash = hash_password(password).expect("hash");
         assert!(verify_password(password, &hash));
         assert!(!verify_password("wrong", &hash));
+    }
+
+    #[test]
+    fn verifies_hashes_stored_by_argon2_0_5() {
+        let stored = "$argon2id$v=19$m=19456,t=2,p=1$OAnByyAv7i+dsjQ56HpdLQ$t5NliI+qUKuQospwbYvP5e4IiOQ1vln0OmaqHF10Ad8";
+        assert!(verify_password("kobload-secret", stored));
+        assert!(!verify_password("wrong", stored));
     }
 
     #[test]

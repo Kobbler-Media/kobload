@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { LoginHandler } from '$lib/types';
+  import type { LoginHandler } from '#lib/types.js';
 
   interface Props {
     onLogin: LoginHandler;

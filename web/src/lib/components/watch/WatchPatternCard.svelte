@@ -1,8 +1,8 @@
 <script lang="ts">
-  import type { WatchPattern } from '$lib/types';
+  import type { WatchPattern } from '#lib/types.js';
   import { getEffectiveStatus, getPatternTitle } from './grouping';
   import { getMediaKindIcon, getStatusIcon } from './mediaIcons';
-  import { getWatchStatusStyle, getScoreColor } from '$lib/styles/statusColors';
+  import { getWatchStatusStyle, getScoreColor } from '#lib/styles/statusColors.js';
 
   let {
     pattern,

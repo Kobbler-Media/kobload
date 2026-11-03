@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DebridTestResult } from '$lib/api/client';
+  import type { DebridTestResult } from '#lib/api/client.js';
 
   let { result }: { result: DebridTestResult } = $props();
 

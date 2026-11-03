@@ -6,8 +6,8 @@
     getProtocolDefaults,
     type MediaType,
     type ProtocolDefaults
-  } from '$lib/api/client';
-  import HandlerDefaults from '$lib/components/HandlerDefaults.svelte';
+  } from '#lib/api/client.js';
+  import HandlerDefaults from '#lib/components/HandlerDefaults.svelte';
   import { MultiSearchSelect, type MultiSearchSelectItem } from '@koblibs/ui';
 
   let loading = $state(false);

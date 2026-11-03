@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getUpgradeDefaults, setUpgradeDefaults } from '$lib/api/client';
+  import { getUpgradeDefaults, setUpgradeDefaults } from '#lib/api/client.js';
 
   let loading = $state(false);
   let saving = $state(false);

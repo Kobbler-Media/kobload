@@ -10,9 +10,9 @@
     type DefinitionSummary,
     type IndexerHandlerInfo,
     type MediaType
-  } from '$lib/api/client';
-  import { discardGuard } from '$lib/discardGuard';
-  import type { IndexerSource } from '$lib/types';
+  } from '#lib/api/client.js';
+  import { discardGuard } from '#lib/discardGuard.js';
+  import type { IndexerSource } from '#lib/types.js';
 
   let {
     source,

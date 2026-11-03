@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 
   interface NavItem {
     href: string;
@@ -20,7 +20,7 @@
   let { title, items, expanded, collapsed, onToggle, onNavigate }: Props = $props();
 
   function isActive(href: string): boolean {
-    return $page.url.pathname.startsWith(href);
+    return page.url.pathname.startsWith(href);
   }
 
   const hasActiveItem = $derived(items.some((item) => isActive(item.href)));

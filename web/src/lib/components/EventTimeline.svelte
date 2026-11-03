@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { EventTone, TimelineEvent } from '$lib/styles/eventTones';
+  import type { EventTone, TimelineEvent } from '#lib/styles/eventTones.js';
 
   interface Props {
     events: TimelineEvent[] | undefined;
