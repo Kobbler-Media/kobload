@@ -77,7 +77,11 @@ fn resolution_len(token: &str) -> Option<usize> {
         return None;
     }
     i -= 1;
-    let digits = b[..i].iter().rev().take_while(|c| c.is_ascii_digit()).count();
+    let digits = b[..i]
+        .iter()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .count();
     if !(3..=4).contains(&digits) {
         return None;
     }
@@ -183,11 +187,20 @@ mod tests {
             ("clayface.2026.1080p.telesyndl.x264-cleanup", "telesync"),
             ("Movie.2026.1080p.TeleSyncDL.x264-GRP", "telesync"),
             ("Movie.2026.1080p.TeelSync.x264-GRP", "telesync"),
-            ("Captain Miller (2024) Hindi 720p - HQ HDTSRip - x264 - AAC", "telesync"),
+            (
+                "Captain Miller (2024) Hindi 720p - HQ HDTSRip - x264 - AAC",
+                "telesync",
+            ),
             ("Posledniy.bogatir.2026.O.TELECINERip.avi", "telecine"),
-            ("Kurup (2021) [Malayalam - HQ-PreDVDRip - x264 - MP3]", "cam"),
+            (
+                "Kurup (2021) [Malayalam - HQ-PreDVDRip - x264 - MP3]",
+                "cam",
+            ),
             ("Alone (2015) Hindi 1CD DvdScrRip x264 Team DDH", "dvdscr"),
-            ("The Ghazi Attack (2017) - 1CD -Desi ScrRip - x264 - AAC", "screener"),
+            (
+                "The Ghazi Attack (2017) - 1CD -Desi ScrRip - x264 - AAC",
+                "screener",
+            ),
             // ...and overrules the WEB tag next to it.
             ("Movie.2026.1080p.WEB-DL.telesyndl-GRP", "telesync"),
             ("Movie.2026.1080p.WEB-DL.PreDVDRip-GRP", "cam"),
@@ -208,14 +221,23 @@ mod tests {
             ("Motel Hell.1980.HDTVRip_by_Bathory.avi", "hdtv"),
             ("WWE.RAW.2015.12.14.720p.AHDTV.x264-WaLMaRT", "hdtv"),
             ("FBI.s01e13.WEBDLRip.NewStudio.TV.avi", "webrip"),
-            ("The.Rook.S01E01.Chapter.1.1080p.HEVC.WEBMux.AC3.ITA-G66", "webrip"),
+            (
+                "The.Rook.S01E01.Chapter.1.1080p.HEVC.WEBMux.AC3.ITA-G66",
+                "webrip",
+            ),
             ("The.IT.Crowd.S04.Ger.Eng.DL.720p.WebHD.x264-iND", "web-dl"),
             ("Peacemaker.S01E01-08.ITA.BDMux.x264-UBi", "bluray"),
             ("Jumanji.2017.BDRip1080p.60FPS.mkv", "bluray"),
             ("The Getaway (1994).HDDVDRip.1080p.10bit.HEVC", "hddvd"),
-            ("Volleyball 2014 / Final [Sport, SATRip, XviD, RU]", "satellite"),
+            (
+                "Volleyball 2014 / Final [Sport, SATRip, XviD, RU]",
+                "satellite",
+            ),
             ("WWE RAW 21.11.2016 [Wrestling, HDTV/1080i, x264]", "hdtv"),
-            ("Philadelphia Experiment 2 [1993] (DVDRip, DivX, Rus).avi", "dvdrip"),
+            (
+                "Philadelphia Experiment 2 [1993] (DVDRip, DivX, Rus).avi",
+                "dvdrip",
+            ),
         ] {
             assert_eq!(source(title).as_deref(), Some(want), "{title}");
         }

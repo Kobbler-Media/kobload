@@ -1343,10 +1343,6 @@ fn contextual_analysis(results: &mut [ProcessedRelease]) {
     }
 }
 
-/// conflict with the MediaWant. This catches false positives that fuzzy matching
-/// cannot (e.g., "Toy Story 1995" matching against want for "Toy Story 5 2026").
-///
-/// Returns `Some("reason")` to reject, `None` to accept.
 /// Released within [`UNSOURCED_NEW_MOVIE_DAYS`] or not yet; without a release
 /// date, from this year or later.
 fn movie_is_new(year: Option<u32>, release_date: Option<&str>, today: time::Date) -> bool {
@@ -1356,6 +1352,11 @@ fn movie_is_new(year: Option<u32>, release_date: Option<&str>, today: time::Date
     year.is_some_and(|y| y as i32 >= today.year())
 }
 
+/// Structural rejection: whether the release's parsed fields conflict with
+/// the MediaWant. This catches false positives that fuzzy matching cannot
+/// (e.g., "Toy Story 1995" matching against want for "Toy Story 5 2026").
+///
+/// Returns `Some(reason)` to reject, `None` to accept.
 pub fn structural_reject(
     release: &Release,
     media_want: Option<&MediaWant>,
@@ -5642,10 +5643,10 @@ mod tests {
         let mw = dated_movie_want(this_year(), Some(iso_days_from_today(-20)));
         let title = format!("clayface.{}.1080p.unlabelled.x264-cleanup", this_year());
         let release = make_release_dated(&title, &format!("{}T00:00:00Z", iso_days_from_today(0)));
-        assert_eq!(
-            structural_reject(&release, Some(&mw), SearchContext::Rss),
-            Some(StructuralRejectReason::UnsourcedNewMovie)
-        );
+        let reason = structural_reject(&release, Some(&mw), SearchContext::Rss);
+        assert_eq!(reason, Some(StructuralRejectReason::UnsourcedNewMovie));
+        // koblem only sees the title, so it must not get to approve the cam.
+        assert!(reason.unwrap().is_hard_reject());
     }
 
     #[test]
@@ -5664,7 +5665,10 @@ mod tests {
         let mw = dated_movie_want(this_year(), Some(iso_days_from_today(-20)));
         let title = format!("Clayface.{}.1080p.WEB-DL.DDP5.1.H.264-GRP", this_year());
         let release = make_release_dated(&title, &format!("{}T00:00:00Z", iso_days_from_today(0)));
-        assert_eq!(structural_reject(&release, Some(&mw), SearchContext::Rss), None);
+        assert_eq!(
+            structural_reject(&release, Some(&mw), SearchContext::Rss),
+            None
+        );
     }
 
     /// An old movie's unlabelled release is just poorly named, not a cam.
@@ -5672,13 +5676,19 @@ mod tests {
     fn test_unsourced_release_of_old_movie_allowed() {
         let mw = dated_movie_want(2001, Some("2001-06-01".to_string()));
         let release = make_release_dated("Clayface.2001.1080p.x264-GRP", "2026-01-01T00:00:00Z");
-        assert_eq!(structural_reject(&release, Some(&mw), SearchContext::Rss), None);
+        assert_eq!(
+            structural_reject(&release, Some(&mw), SearchContext::Rss),
+            None
+        );
 
         // A release date over a year back clears it even in a later year's want.
         let mw = dated_movie_want(this_year(), Some(iso_days_from_today(-400)));
         let title = format!("Clayface.{}.1080p.x264-GRP", this_year());
         let release = make_release_dated(&title, &format!("{}T00:00:00Z", iso_days_from_today(0)));
-        assert_eq!(structural_reject(&release, Some(&mw), SearchContext::Rss), None);
+        assert_eq!(
+            structural_reject(&release, Some(&mw), SearchContext::Rss),
+            None
+        );
     }
 
     fn movie_want(title: &str, year: Option<u32>, alternates: Option<Vec<String>>) -> MediaWant {
