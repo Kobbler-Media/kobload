@@ -18,6 +18,7 @@ use nats_jobs::QualityOverrides;
 use crate::repositories::quality_profiles::QualityProfileRow;
 use crate::trash_filters::TrashFilterSet;
 
+mod salvage;
 mod words;
 use words::TitleWords;
 
@@ -966,7 +967,7 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
     let resolution = detect_resolution(&words);
 
     // Source - use specialized detection for ambiguous patterns
-    let source = detect_source(&words);
+    let source = salvage::refine_source(detect_source(&words), &lower);
 
     // Streaming service
     let streaming_service = find_match(&words, STREAMING_SERVICES).map(String::from);

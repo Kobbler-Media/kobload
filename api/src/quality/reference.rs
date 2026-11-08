@@ -168,7 +168,8 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
     let resolution = detect_resolution(&lower);
 
     // Source - use specialized detection for ambiguous patterns
-    let source = detect_source(&lower);
+    // Not part of what this reference pins down: both parsers share it.
+    let source = super::salvage::refine_source(detect_source(&lower), &lower);
 
     // Streaming service
     let streaming_service = find_match(&lower, STREAMING_SERVICES).map(String::from);
