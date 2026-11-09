@@ -1013,7 +1013,11 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
         || words.has("hardsub")
         || words.has("hardsubs")
         || words.has("korsub") // Korean subs burned in
-        || words.has("chtsub"); // Chinese traditional subs
+        || words.has("chtsub") // Chinese traditional subs
+        // Spanish scene tags for subtitles burned into an original-language picture
+        || words.has("subtitulado")
+        || words.has("subtitulada")
+        || words.has("vose");
 
     // Advanced audio flags
     let is_atmos = words.has("atmos") || words.has("dolby.atmos");

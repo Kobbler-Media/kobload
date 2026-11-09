@@ -72,8 +72,18 @@ pub struct RankPreferences<'a> {
     pub audio_languages: &'a [String],
 }
 
-/// (group, wrong language, suspect fake, continuity, risk bucket, not RD+)
-type RankKey = (StreamGroup, bool, bool, continuity::Rank, u8, bool);
+/// (cannot start now, hardcoded subtitles, group, wrong language, suspect fake, continuity,
+/// risk bucket, not RD+)
+type RankKey = (
+    bool,
+    bool,
+    StreamGroup,
+    bool,
+    bool,
+    continuity::Rank,
+    u8,
+    bool,
+);
 
 /// A release that played starts again; its availability only matters once a probe says
 /// it is gone. Below the played and on-account releases the rest run by quality, with
@@ -102,7 +112,9 @@ fn exposed(availability: KnownAvailability, played: bool) -> StreamAvailability 
     }
 }
 
-/// Order is: the group; then releases without a preferred audio language sink; then fakes
+/// Order is: releases that can start now; then hardcoded subtitles sink, ahead of the group,
+/// as a picture with burned-in subtitles is no use however readily it plays; then the
+/// group; then releases without a preferred audio language sink; then fakes
 /// sink; then continuity with what the caller played before; then learned name risk; then
 /// Torrentio's RD+ ahead of releases nobody has vouched for; then
 /// score, discounted for releases many devices cannot play, whose default audio track is
@@ -223,6 +235,8 @@ pub async fn rank_options(
             );
             option.group = Some(group);
             let key = (
+                group >= StreamGroup::Uncached,
+                quality.is_hardcoded_subs,
                 group,
                 language_fit == LanguageFit::Missing,
                 fit.suspect,

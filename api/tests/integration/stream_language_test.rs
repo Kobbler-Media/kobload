@@ -145,3 +145,82 @@ async fn test_listed_audio_languages_are_exposed_as_iso_codes() {
     );
     server.cleanup().await;
 }
+
+/// Subtitles burned into the picture cannot be turned off, so a clean release that can
+/// start now wins, wherever it sits; one that would have to be fetched first does not.
+#[tokio::test]
+async fn test_hardcoded_subtitles_sink_below_clean_releases_that_can_start() {
+    let server = TestServer::start().await;
+    let p = create_provider(&server.pool, "real_debrid").await;
+    let cases: &[(&[Release], &[&str])] = &[
+        (
+            &[
+                (
+                    "Nocturne.S01E03.1080p.HDTV.Subtitulado.Esp.SC",
+                    20.0,
+                    KnownAvailability::InAccount,
+                ),
+                (
+                    "Nocturne.S01E03.Eyes.on.the.Inside.1080p.HEVC.x265-MeGusta",
+                    5.0,
+                    KnownAvailability::Unknown,
+                ),
+            ],
+            &[
+                "Nocturne.S01E03.Eyes.on.the.Inside.1080p.HEVC.x265-MeGusta",
+                "Nocturne.S01E03.1080p.HDTV.Subtitulado.Esp.SC",
+            ],
+        ),
+        (
+            &[
+                (
+                    "Show.S01E01.1080p.HC.WEBRip-AAA",
+                    20.0,
+                    KnownAvailability::Unknown,
+                ),
+                (
+                    "Show.S01E01.1080p.VOSE.WEB-BBB",
+                    15.0,
+                    KnownAvailability::Unknown,
+                ),
+                ("Show.S01E01.720p.WEB-CCC", 4.0, KnownAvailability::Unknown),
+            ],
+            &[
+                "Show.S01E01.720p.WEB-CCC",
+                "Show.S01E01.1080p.HC.WEBRip-AAA",
+                "Show.S01E01.1080p.VOSE.WEB-BBB",
+            ],
+        ),
+        (
+            &[
+                (
+                    "Show.S01E01.1080p.WEB-AAA",
+                    20.0,
+                    KnownAvailability::LikelyDead,
+                ),
+                (
+                    "Show.S01E01.1080p.HC.WEBRip-BBB",
+                    5.0,
+                    KnownAvailability::Available,
+                ),
+            ],
+            &[
+                "Show.S01E01.1080p.HC.WEBRip-BBB",
+                "Show.S01E01.1080p.WEB-AAA",
+            ],
+        ),
+    ];
+    for (i, (releases, want)) in cases.iter().enumerate() {
+        let options: Vec<_> = releases
+            .iter()
+            .enumerate()
+            .map(|(j, (title, score, availability))| {
+                let h = hash(char::from(b'a' + (i * 4 + j) as u8));
+                (option(&p, &h, title, *score), *availability)
+            })
+            .collect();
+        let ranked = rank(&server, &p, &options, &["english"]).await;
+        assert_eq!(titles(&ranked), *want, "case {i}");
+    }
+    server.cleanup().await;
+}

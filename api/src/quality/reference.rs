@@ -215,7 +215,10 @@ pub fn parse_quality(title: &str) -> ParsedQuality {
         || has_word(&lower, "hardsub")
         || has_word(&lower, "hardsubs")
         || has_word(&lower, "korsub") // Korean subs burned in
-        || has_word(&lower, "chtsub"); // Chinese traditional subs
+        || has_word(&lower, "chtsub") // Chinese traditional subs
+        || has_word(&lower, "subtitulado")
+        || has_word(&lower, "subtitulada")
+        || has_word(&lower, "vose");
 
     // Advanced audio flags
     let is_atmos = has_word(&lower, "atmos") || has_word(&lower, "dolby.atmos");
@@ -530,7 +533,7 @@ mod equivalence {
             "(web|web-dl|web.dl|webrip|hdtv|bluray|blu-ray|remux|dvdrip|ts|hdts|cam|tc|telecine|scr|r5|wp|ppv|vod)",
             "(x264|x265|h264|h.264|hevc|avc|av1|xvid|aac|ac3|ddp|dd\\+|dts|dts-hd|dts:x|truehd|atmos|flac|opus)",
             "(hdr|hdr10|hdr10\\+|hdr10plus|dv|dovi|dolby.vision|hlg|3d|sbs|hsbs|ou)",
-            "(proper|repack|real|internal|nuked|subbed|dubbed|hc|korsub|multi|dual|english|vostfr|nf|amzn|dsnp|atvp)",
+            "(proper|repack|real|internal|nuked|subbed|dubbed|hc|korsub|subtitulado|vose|multi|dual|english|vostfr|nf|amzn|dsnp|atvp)",
             "[\\[(][A-Za-z0-9 .-]{1,8}[\\])]",
             "(Café|Pokémon|日本|C\\+\\+|Rock&Roll|It's|ÆON|straße)",
         ]
