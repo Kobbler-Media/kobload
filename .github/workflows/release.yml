@@ -26,6 +26,7 @@ jobs:
     name: build ${{ matrix.arch }}
     if: github.ref_type != 'tag'
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { arch: amd64, runner: ubuntu-latest }
