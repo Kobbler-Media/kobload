@@ -18,7 +18,7 @@ Warnings are errors. Clippy `collapsible_if`: use let-chains, not nested `if let
 
 `make sqlx-check` and `make test` start a throwaway Postgres via Docker. A stale cache means `make sqlx-prepare`.
 
-koblibs must be checked out as a sibling directory; `Cargo.toml` patches its crates to `../koblibs/*` and `web/package.json` pulls `@koblibs/ui` from `file:../../koblibs`. Override the location with `KOBLIBS_DIR`.
+koblibs must be checked out as a sibling directory; `api/Cargo.toml` depends on its crates by relative path (`../../koblibs/*`) and `web/package.json` pulls `@koblibs/ui` from `file:../../koblibs`. `KOBLIBS_DIR` relocates it for Docker builds only.
 
 ## Patterns
 

@@ -32,7 +32,7 @@ do with what it retrieves, is your responsibility under the laws that apply to y
   # you should end up with ./kobload and ./koblibs next to each other
   ```
 
-  If you keep koblibs somewhere else, set `KOBLIBS_DIR` in `.env`.
+  Docker builds can use a koblibs checkout elsewhere via `KOBLIBS_DIR` in `.env`; builds outside Docker need it at `../koblibs`.
 
 - For building outside Docker: a recent stable Rust toolchain and Node.js 24+.
 
@@ -40,13 +40,13 @@ do with what it retrieves, is your responsibility under the laws that apply to y
 
 ```bash
 cd kobload
-cp .env.example .env        # edit it — at minimum set ADMIN_PASSWORD and NATS_TOKEN
+cp .env.example .env        # edit it — at minimum set NATS_TOKEN
 make up                     # builds the kobload-tools base image first if missing, then starts everything
 ```
 
 `make up` is `make tools` (builds the `kobload-tools` base image — FFmpeg, chromaprint, archive tools) then `docker compose up -d --build`. Doing that second step alone on a fresh clone fails with a "pull access denied" error that looks like a registry problem — it's really just the missing base image; run `make tools` (or `make up`) first.
 
-Then open the web UI at <http://localhost:5174>. If you left `ADMIN_PASSWORD` blank, the generated one is in the logs:
+Then open the web UI at <http://localhost:5174>. The admin account is created on first boot from `ADMIN_EMAIL` / `ADMIN_PASSWORD`; if you left `ADMIN_PASSWORD` blank, a random one is generated and logged once:
 
 ```bash
 docker compose logs api | grep -i password
@@ -95,21 +95,37 @@ Copy `.env.example` to `.env`. It documents every variable the compose files con
 
 | Variable | Default | Description |
 |---|---|---|
-| `KOBLIBS_DIR` | `../koblibs` | Path to the koblibs sibling checkout |
+| `KOBLIBS_DIR` | `../koblibs` | koblibs checkout used by Docker builds |
 | `KOBLOAD_DOWNLOADS` | `./data/downloads` | Host directory with your download client's completed files |
 | `KOBLOAD_API_KEY` | *(none)* | Shared secret callers present to this API |
 | `KOBLOAD_PUBLIC_URL` | `http://localhost:7080` | Public base URL of this service |
 | `POSTGRES_PASSWORD` | `kobload` | Database password |
-| `NATS_TOKEN` | `changeme` | Auth token for the bundled NATS |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@localhost` / *(generated)* | First-boot admin account |
+| `NATS_TOKEN` | *(required)* | Auth token for the bundled NATS; compose refuses to start without it |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@localhost` / *(generated)* | Admin account created on first boot; ignored once any user exists |
 | `PROWLARR_BASE_URL` / `PROWLARR_API_KEY` | *(none)* | Optional Prowlarr aggregator |
 | `KOBLOAD_PORT` / `KOBLOAD_WEB_PORT` | `7080` / `5174` | Host ports |
 
 Indexers, download clients and quality profiles are configured in the web UI under Settings, not through environment variables.
 
+### Advanced
+
+The API also reads these. `docker-compose.yml` does not pass them through, so add them to the `api` service's `environment:` (e.g. in a `docker-compose.override.yml`) if you need them:
+
+| Variable | Default | Description |
+|---|---|---|
+| `UNRAR_PATH` | `unrar` on `PATH` | unrar binary used to list and stream files inside RAR archives |
+| `SEVENZ_PATH` | `7z` on `PATH` | 7-Zip binary used for 7z archives |
+| `CARDIGANN_DEFINITIONS_DIR` | `/app/definitions` in the image (`/data/definitions` outside it) | Cardigann YAML definitions; downloaded from Prowlarr's repo on startup if empty and refreshed weekly |
+| `CARDIGANN_DEFINITIONS_OVERRIDE_DIR` | *(none)* | Extra definitions that take precedence over same-named ones in the main directory |
+| `KOBLEM_UI_ENABLED` | *(off)* | Set to `1` to show the Koblem page in the web UI. Optional and experimental: LLM review of search results via a [koblem](https://github.com/Kobbler-Media/koblem) instance on the same NATS |
+
 ## API overview
 
-Everything is under `/api/v1`. Authenticate with an API key (`X-API-Key`) or an admin session.
+Everything is under `/api/v1`. Authenticate with `Authorization: Bearer <key>`, where the key is `KOBLOAD_API_KEY`, a named key from Settings, or a web UI session token. SSE endpoints (`.../stream`) also accept it as a `?token=` query parameter, for clients that can't set headers.
+
+```bash
+curl -H "Authorization: Bearer $KOBLOAD_API_KEY" http://localhost:7080/api/v1/downloads
+```
 
 **Downloads** — `POST /downloads`, `GET /downloads`, `GET /downloads/{id}`, `DELETE /downloads/{id}`, `GET /downloads/{id}/file`, `GET /downloads/{id}/files/{file_id}`, `GET /downloads/stream` (SSE)
 

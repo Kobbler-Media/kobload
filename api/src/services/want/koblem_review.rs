@@ -289,7 +289,6 @@ fn extract_want_context(media_want: Option<&MediaWant>) -> ReviewCtx {
             // event info (round, location, session_type, event_title) lives in
             // the structured `WantContext::SportEvent` variant so koblem can
             // use it without gate-keeping the shortlist.
-            // See feedback_koblem_loose_filter.md.
             wanted_title: format!("{} {}", league_name.trim(), season.trim())
                 .trim()
                 .to_string(),

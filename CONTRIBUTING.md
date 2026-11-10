@@ -19,7 +19,7 @@ make tools        # one-off: builds the kobload-tools base image
 npm --prefix web ci
 ```
 
-`koblibs` is a shared Rust + Svelte workspace that is not published to crates.io or npm yet. `Cargo.toml` patches its crates to `../koblibs/*` and `web/package.json` references it as `file:../../koblibs`, so the sibling checkout is mandatory. Set `KOBLIBS_DIR` in `.env` if you keep it elsewhere.
+`koblibs` is a shared Rust + Svelte workspace that is not published to crates.io or npm yet. `api/Cargo.toml` depends on its crates by relative path (`../../koblibs/*`) and `web/package.json` references it as `file:../../koblibs`, so the sibling checkout is mandatory for local builds. `KOBLIBS_DIR` in `.env` relocates it for Docker builds only.
 
 ## Build and test
 

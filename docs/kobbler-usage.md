@@ -1,12 +1,12 @@
 # Kobbler's Kobload Integration
 
-This document details how Kobbler integrates with Kobload for book acquisition.
+How Kobbler drives Kobload for book acquisition. Source references are to the [kobbler](https://github.com/Kobbler-Media/kobbler) repo: Rust paths are relative to `api/src/`, web paths to the repo root.
 
 ## 1. Want Request (Automated Book Search)
 
 **Call Site**: User marks a book as "wanted"
 - UI: Click "Want" button on book detail page, series page, or author page
-- Route: `POST /api/v1/library/books/{book_id}/want` → `routes/library/wanted.rs:18-67`
+- Route: `POST /api/v1/library/books/{book_id}/want` → `want_book()` in `routes/library/wanted.rs`
 - Job: `book_want` job enqueued → `jobs/handlers/book_want.rs`
 
 **Method**: NATS job `enqueue_job("kobload", "want_request", payload)`
@@ -56,9 +56,9 @@ This document details how Kobbler integrates with Kobload for book acquisition.
 ## 2. Want Response Handler
 
 **Call Site**: NATS subscriber receives response from Kobload
-- Subscriber: `subscribe_want_response_events()` in `nats.rs:636-713`
+- Subscriber: `subscribe_want_response_events()` in `nats.rs`
 - Subject: `events.want.response.kobbler`
-- Handler: `handle_want_response()` in `nats.rs:716-832`
+- Handler: `handle_want_response()` in `nats.rs`
 
 **Payload** (`nats_jobs::WantResponse`):
 ```json
@@ -88,8 +88,8 @@ This document details how Kobbler integrates with Kobload for book acquisition.
 
 **Call Site**: Kobload completes a download and POSTs to callback URL
 - Route: `POST /api/v1/ingest/{token}`
-- Handler: `kobload_ingest()` in `routes/ingest/kobload.rs:214-232`
-- Implementation: `process_kobload_ingest_impl()` in `routes/ingest/kobload.rs:250-997`
+- Handler: `kobload_ingest()` in `routes/ingest/kobload.rs`
+- Implementation: `process_kobload_ingest_impl()` in `routes/ingest/kobload.rs`
 
 **Payload** (`KobloadCallbackRequest`):
 ```json
@@ -141,17 +141,13 @@ This document details how Kobbler integrates with Kobload for book acquisition.
 ## 4. Manual Search & Download
 
 **Call Site**: User searches for releases in ReleaseSearchModal
-- UI Components:
-  - `/library` page: Click search icon on BookCard → `web/src/routes/library/+page.svelte:1153`
-  - `/library/books/[id]` page: Search button → `web/src/routes/(details)/library/books/[id]/+page.svelte:351`
-  - `/series/[id]` page: Search button on book → `web/src/routes/(details)/series/[id]/+page.svelte:282`
-  - `/authors/[id]` page: Search button on book → `web/src/routes/(details)/authors/[id]/+page.svelte:275`
+- UI: search buttons on the `/library`, `/library/books/[id]`, `/series/[id]` and `/authors/[id]` pages
 - Component: `ReleaseSearchModal.svelte`
 
 ### 4a. Search Releases
 
 **Route**: `GET /api/v1/library/search/releases?q=<query>&book_id=<optional>`
-**Handler**: `search_library_releases()` in `routes/library/search_download.rs:74-205`
+**Handler**: `search_library_releases()` in `routes/library/search_download.rs`
 
 **Method**: HTTP via KobloadClient
 ```rust
@@ -173,7 +169,7 @@ client.search(&query.q, None, None).await
 ### 4b. Download Selected Release
 
 **Route**: `POST /api/v1/library/search/download`
-**Handler**: `download_to_library()` in `routes/library/search_download.rs:209-443`
+**Handler**: `download_to_library()` in `routes/library/search_download.rs`
 
 **Request Payload**:
 ```json
@@ -230,7 +226,7 @@ client.create_download(&request).await
 ### 5a. Delete Watch Pattern (on book acquired)
 
 **Call Site**: Book is successfully ingested
-- Handler: `on_book_acquired()` in `wanted/acquisition.rs:19-41`
+- Handler: `on_book_acquired()` in `wanted/acquisition.rs`
 - Called from: `process_kobload_ingest_impl()` after successful ingest
 
 **Method**: NATS job `enqueue_job("kobload", "watch_pattern_delete", payload)`
@@ -247,11 +243,9 @@ client.create_download(&request).await
 
 ### 5b. Delete Watch Pattern (on skip/unwant)
 
-**Call Sites**:
-- Skip book: `routes/library/wanted.rs:143`
-- Unwant book: `routes/library/books.rs:883`
+**Call Sites**: `skip_book()`, `unwant_all_for_author()` and `unwant_all_for_series()` in `routes/library/wanted.rs`, and `delete_book()` in `routes/library/books.rs`, all via `wanted::book_source::delete_book_patterns()`
 
-**Method**: Same NATS job as above
+**Method**: Same NATS job as above, sent once per key the book may be wanted under (`<book_id>`, `<book_id>:ebook`, `<book_id>:audiobook`)
 
 ---
 
@@ -259,7 +253,6 @@ client.create_download(&request).await
 
 **Call Site**: On application startup
 - Startup: `main.rs` spawns `kobload_bridge::run_kobload_bridge()`
-- Handler: `kobload_bridge.rs:30-82`
 
 **Method**: SSE subscription to `GET {kobload}/api/v1/downloads/stream`
 
@@ -285,7 +278,7 @@ client.create_download(&request).await
 ## 7. Download File Retrieval
 
 **Call Site**: During ingest webhook processing (section 3)
-- Handler: `ingest_single_book()` in `routes/ingest/kobload.rs:504-997`
+- Handler: `ingest_single_book()` in `routes/ingest/kobload.rs`
 
 **Method**: HTTP GET via reqwest
 ```rust
@@ -300,7 +293,7 @@ Authorization: Bearer {api_key}
 ## 8. Confirm Import
 
 **Call Site**: After successful file ingest (section 3)
-- Handler: `ingest_single_book()` in `routes/ingest/kobload.rs:947-956`
+- Handler: `ingest_single_book()` in `routes/ingest/kobload.rs`
 
 **Method**: HTTP POST via KobloadClient (inline request)
 ```rust
@@ -317,7 +310,7 @@ Authorization: Bearer {api_key}
 **Call Site**: Settings > Obtain page
 - UI: `web/src/routes/settings/obtain/+page.svelte`
 - Route: `POST /api/v1/admin/test-kobload`
-- Handler: `test_kobload_connection()` in `routes/wanted/kobload.rs:58-90`
+- Handler: `test_kobload_connection()` in `routes/wanted/kobload.rs`
 
 **Method**: HTTP via KobloadClient
 ```rust
@@ -338,7 +331,7 @@ Kobbler requires these runtime config values (stored in `config/kobbler.toml`):
 | `kobload_base_url` | Kobload API URL | `http://kobload-api:7080` |
 | `kobload_api_key` | API key for auth | `<api_key>` |
 | `kobload_ingest_url` | Callback URL with token | `http://kobbler-api:8080/api/v1/ingest/<token>` |
-| `kobload_watch_directory_id` | Default watch dir for downloads | `<uuid>` |
+| `kobload_communication_mode` | Transport for Kobbler → Kobload actions | `nats` (default) or `http` |
 | `wanted_min_score` | Fuzzy match threshold | `0.65` |
 
 ---

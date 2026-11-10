@@ -1,40 +1,32 @@
 # RSS scoring performance
 
 How RSS scoring is made faster without changing its decisions. Every
-optimisation is checked against a golden snapshot of real production data, and
-nothing merges unless it reproduces that snapshot exactly.
+optimisation is checked against a golden snapshot of captured real-world data,
+and nothing merges unless it reproduces that snapshot exactly.
 
 ## Background
 
 Each watch cycle polls every indexer source in turn and scores every release
-against every enabled watch pattern (`watch/service.rs::score_prepared`). In
-October 2026 production had 157 enabled patterns, and busy feeds returned
-200–1400 releases.
+against every enabled watch pattern (`watch/service.rs::score_prepared`). With
+a hundred-plus patterns and busy feeds returning 200–1400 releases per poll,
+that is hundreds of thousands of release × pattern pairs per cycle.
 
-What we found:
+Where the cost goes:
 
-- **One source took 6–10 minutes of a pegged core.** A cycle took about 25
-  minutes against a 15-minute poll interval. `last_check_at` is written per
-  source, so the real interval was the cycle length plus 60 s, and a release
-  found by the first source waited up to 25 minutes before winners were picked.
-- **The main cost was `has_word` in `quality.rs`.** It compiled a regex on
-  almost every call. `parse_quality` makes about 90 such calls, and ran around
-  4 times per release × pattern pair, so roughly 20 regex compiles per pair.
-  The tokens were also unescaped, so `hdr10+`, `disney+`, `appletv+` and
-  `paramount+` could never match.
-- **The second cost was running every gate on every pair.** That includes
-  quality, about 196 TRaSH regexes, and the structural and sport parses, even
-  though nearly every pair is a no-match whose result is discarded.
-- **Memory.** Every pair's `ProcessedRelease`, including the full `Release`
-  and `raw_data`, was held for koblem review across the whole cycle, even with
-  koblem disabled. That pushed API RSS to 3.6–5.6 GB.
-
-Fixed so far:
-
-- `224cbbc`: collect review releases only when koblem is enabled, and
-  pre-filter them with `worth_reviewing`.
-- `1b327d7`: literal `has_word`; skip full scoring for no-match pairs; reuse
-  the quality parse in `score_release`.
+- **Cycle length.** `last_check_at` is written per source, so the real poll
+  interval is the cycle length plus 60 s. A slow source delays every source
+  after it, and a release found by the first source waits for the whole cycle
+  before winners are picked.
+- **Token matching in `quality.rs`.** `parse_quality` makes about 90
+  `has_word` probes and runs several times per pair. `has_word` is a literal
+  boundary match; it must not compile a regex per call, and tokens containing
+  `+` (`hdr10+`, `disney+`) have to match literally.
+- **Running every gate on every pair.** Quality, about 196 TRaSH regexes, and
+  the structural and sport parses only need to run on pairs that pass the
+  match check; nearly every pair is a no-match.
+- **Memory.** Releases held for koblem review are collected only when koblem
+  is enabled and pre-filtered with `worth_reviewing`; holding every pair's
+  `ProcessedRelease` for the whole cycle costs gigabytes of RSS.
 
 ## The harness
 
@@ -63,8 +55,7 @@ database and compare the result to a golden snapshot. Each replay records:
 - **review**: what would be queued for koblem if reviews were on.
 
 Fetches replay in parallel, with progress every 100 fetches under
-`--nocapture`; the October capture (3,620 fetches) takes about 11 minutes on
-16 cores.
+`--nocapture`. A week-long capture takes minutes on a many-core machine.
 
 Floats are compared to 1e-9. Any difference fails the test and is reported
 with the fetch, the pattern, the release and the field that changed.
@@ -75,9 +66,8 @@ Scoring reads the clock in several places: freshness, air-date gating and pack
 recency. These go through `crate::clock::now_utc()`, and replays pin it to each
 fetch's capture time.
 
-TRaSH categories used to be compiled from a `HashMap`. That made which category
-`check_blocklist` reported, when several matched, vary between restarts. They
-are now compiled in a fixed order.
+TRaSH categories are compiled in a fixed order, so the category
+`check_blocklist` reports when several match is stable across restarts.
 
 ### 1. Capture production data
 
@@ -127,8 +117,8 @@ reference tests. It is read-only against the database and writes to
 
 A week's capture only contains the sport events of that week, while most sport
 wants are for past rounds. `scripts/scoring-corpus/build-sport-supplement.py`
-builds a second capture directory from real 2026 motorsport releases Kobload
-has already seen:
+builds a second capture directory from motorsport releases Kobload has
+already seen:
 
 - releases grabbed for sport wants
 - releases matched to sport wants
@@ -164,9 +154,8 @@ sport.
 
 ### 2d. Sport aliases
 
-The captures predate the place, league and event aliases Kobbler now puts
-on sport wants, so the golden replay can't show what they change.
-`alias_eval_test` gives each captured sport want the aliases Kobbler would
+Captures taken before Kobbler sent place, league and event aliases on sport
+wants can't show what those aliases change. `alias_eval_test` gives each captured sport want the aliases Kobbler would
 send, rebuilt from the same sources (`api/tests/integration/alias_eval_test/kobbler_aliases.rs`
 mirrors Kobbler's `sport_want`), and replays the labels, the sport
 supplement and the main capture with and without them. It needs
@@ -190,7 +179,7 @@ every disagreement to `data/alias-eval/`.
 
 ### 3. Build the golden snapshot
 
-Copy the capture directory to the dev machine. The first run writes
+Copy the capture directory to your build machine. The first run writes
 `golden.jsonl.gz` into it:
 
 ```sh
@@ -201,20 +190,19 @@ KOBLOAD_SCORING_CORPUS=/path/to/scoring-capture \
 ### Is the capture ready?
 
 `scripts/scoring-corpus/capture-stats.sh data/scoring-capture` summarises a
-capture on the server without building anything. Treat it as complete enough
+capture where it was taken, without building anything. Treat it as complete enough
 when all of these hold:
 
 - **Time.** At least 5 days, and ideally the full 7-day window, so it covers a
   weekly TV cycle and at least one F1/MotoGP race weekend (practice,
   qualifying, sprint and race).
-- **Sources.** Every RSS-polled source (8 in October 2026; the Cardigann ones
-  aren't polled) shows fetches on most
-  days, including the 30-minute MyAnonaMouse feed and the busiest Newznab feeds.
+- **Sources.** Every RSS-polled source (Cardigann sources aren't polled)
+  shows fetches on most days, including the slowest and busiest feeds.
 - **Busy periods.** Each day has a few thousand new releases. A quiet day
   usually means an indexer was down, so extend the capture.
 - **Patterns.** More than one pattern set, meaning wants were added or
   fulfilled during the window, and no fetches without TRaSH rows.
-- **Matches** (on the dev machine, from the replay's `--nocapture` output and
+- **Matches** (on the build machine, from the replay's `--nocapture` output and
   the golden file):
   - a few hundred matched pairs and dozens of candidates
   - accepts plus several reject reasons: quality, TRaSH blocklist, structural
@@ -244,15 +232,14 @@ KOBLOAD_SCORING_CORPUS=… systemd-run --user --scope -p MemoryMax=256M \
 KOBLOAD_SCORING_CORPUS=… cargo bench --bench scoring_alloc
 ```
 
-A pass over the whole October capture takes about 15 minutes on one core.
-`KOBLOAD_SCORING_STEP=10` makes both benches use every
-10th fetch, which keeps the mix of sources and times. Compare numbers taken
-with the same step only.
+A pass over a full week's capture takes on the order of 15 minutes on one
+core. `KOBLOAD_SCORING_STEP=10` makes both benches use every 10th fetch, which
+keeps the mix of sources and times. Compare numbers taken with the same step
+only.
 
 Once a number is worth defending, set `KOBLOAD_SCORING_ALLOC_BUDGET` to make the
-allocation count a hard limit.
-The current budget, for the October capture at `KOBLOAD_SCORING_STEP=50`, is
-596,000,000 (measured 595,686,677).
+allocation count a hard limit. A budget only means something for a given
+capture and step, so record both alongside it.
 
 In production, each source logs `Scored source releases` with `pairs`,
 `fully_scored`, `prepare_ms` and `score_ms`.
@@ -278,8 +265,8 @@ In production, each source logs `Scored source releases` with `pairs`,
 
 In rough order of risk against payoff.
 
-1. **Harness.** Done: capture, replay, golden test, benchmark, allocation
-   profile, timing log.
+1. **Harness.** Capture, replay, golden test, benchmark, allocation profile,
+   timing log. In place.
 2. **Do release-only work once per release, and normalise targets once per
    pattern.** The match check still repeats work per pair that depends only on
    the release: lowercasing, `RELEASE_GROUP_RE`, and `canonical()` per target
@@ -308,8 +295,8 @@ In rough order of risk against payoff.
    - Map each distinctive word in a pattern's targets and aliases to the
      patterns that use it.
    - Split each release title into words once, look up its candidate
-     patterns, and run the fuzzy match only on those. That turns 1400 × 157
-     comparisons into 1400 × a few, and cost no longer grows with the number of
+     patterns, and run the fuzzy match only on those. That turns releases ×
+     all patterns into releases × a few, and cost no longer grows with the number of
      wants.
    - Patterns without a distinctive word fall back to a full scan.
    - Typos and alias spellings must still reach their pattern. The check is
@@ -323,9 +310,9 @@ In rough order of risk against payoff.
    - Drop `raw_data` from the scoring path entirely.
    - dhat shows the before and after; set the allocation budget afterwards.
 
-   Done: `ProcessedRelease` holds an `Arc<Release>` shared from the fetch.
+   `ProcessedRelease` now holds an `Arc<Release>` shared from the fetch.
    `raw_data` stays on `Release`, because matches, holds and downloads
-   forward it, but scoring no longer copies it.
+   forward it, but scoring doesn't copy it.
 
 ## Further ideas
 
