@@ -35,6 +35,9 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: build + push :latest
         working-directory: kobload
+        # Compose interpolates the whole file even to build; the token is a runtime secret.
+        env:
+          NATS_TOKEN: unused-at-build
         run: make docker-push REGISTRY=$REGISTRY
       - name: push :sha-<short> and :<tag>
         run: |

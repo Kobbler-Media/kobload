@@ -94,4 +94,6 @@ jobs:
         run: make tools
       - name: docker compose build
         working-directory: kobload
+        env:
+          NATS_TOKEN: unused-at-build
         run: docker compose build api web
