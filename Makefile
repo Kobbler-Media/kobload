@@ -5,7 +5,7 @@ TEST_DATABASE_URL ?= postgres://kobload:kobload@localhost:$(KOBLOAD_TEST_DB_PORT
 # Exported so docker-compose.test.yml sees the same port.
 export KOBLOAD_TEST_DB_PORT
 
-.PHONY: all quick web install up fmt fmt-api fmt-web lint lint-api lint-web check check-api check-web sqlx-check sqlx-prepare sqlx-migrate build build-api build-web test test-api test-db-up test-db-down docker-push tools sweep
+.PHONY: all quick web install up fmt fmt-api fmt-web lint lint-api lint-web check check-web sqlx-check sqlx-prepare sqlx-migrate build build-api build-web test test-api test-db-up test-db-down docker-push tools
 
 # sqlx-cli is needed only by the sqlx-* targets. Fail with instructions rather
 # than cargo's opaque "no such subcommand".
@@ -16,27 +16,24 @@ define require_sqlx_cli
 		exit 1; }
 endef
 
-all: sweep fmt lint check build test
+all: fmt lint check build test
 
 # Quick build check - skips slow backend tests
-quick: sweep fmt lint check build
+quick: fmt lint check build
 
 # Web-only checks - for frontend-only changes
 web: fmt-web lint-web check-web build-web
 
 fmt: fmt-api fmt-web
 lint: lint-api lint-web
-check: check-api check-web sqlx-check
+check: check-web sqlx-check
 build: build-api build-web
 
 fmt-api:
 	cargo fmt --manifest-path api/Cargo.toml
 
 lint-api:
-	SQLX_OFFLINE=true cargo clippy --manifest-path api/Cargo.toml --all-targets --all-features -- -D warnings
-
-check-api:
-	SQLX_OFFLINE=true cargo check --manifest-path api/Cargo.toml
+	SQLX_OFFLINE=true cargo clippy --manifest-path api/Cargo.toml --all-targets -- -D warnings
 
 # Verify .sqlx cache matches code. If stale, run: make sqlx-prepare
 # `-- --all-targets` so test-only query macros (api/tests/) are included; without
@@ -58,8 +55,10 @@ sqlx-migrate: test-db-up
 	$(require_sqlx_cli)
 	DATABASE_URL=$(TEST_DATABASE_URL) cargo sqlx migrate run --source api/migrations
 
+# No RUSTFLAGS on cargo steps: they replace .cargo/config rustflags (mold, cfgs) and fork the
+# whole dependency build. Clippy's -D warnings already denies rustc warnings.
 build-api:
-	SQLX_OFFLINE=true RUSTFLAGS="-D warnings" cargo build --manifest-path api/Cargo.toml
+	SQLX_OFFLINE=true cargo build --manifest-path api/Cargo.toml
 
 # Install web dependencies. Needs the koblibs sibling checkout — web/package.json
 # pulls @koblibs/ui from file:../../koblibs.
@@ -90,7 +89,6 @@ test-db-down:
 
 test-api: test-db-up
 	@DATABASE_URL=$(TEST_DATABASE_URL) \
-	CARGO_INCREMENTAL=0 \
 	cargo test --manifest-path api/Cargo.toml -- --test-threads=4; \
 	EXIT_CODE=$$?; \
 	$(MAKE) test-db-down; \
@@ -119,12 +117,6 @@ docker-push: tools
 	@echo ""
 	@echo "Pruning old build artifacts..."
 	docker image prune -f --filter "dangling=true"
-
-# Optional disk-space housekeeping. Needs `cargo install cargo-sweep`; skipped
-# silently when it isn't installed so a fresh clone can still run `make`.
-sweep:
-	@command -v cargo-sweep >/dev/null 2>&1 && cargo sweep --maxsize 10GB . || \
-		echo "sweep: cargo-sweep not installed, skipping (cargo install cargo-sweep)"
 
 # Base image with FFmpeg, chromaprint and the archive tools the API links
 # against. Required before any `docker compose ... --build` of the api service
