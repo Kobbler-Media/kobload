@@ -29,7 +29,7 @@ make quick  # everything except tests, for the inner loop
 make web    # frontend only: format, lint, svelte-check, build
 ```
 
-`make` must be clean. Warnings are errors (`RUSTFLAGS="-D warnings"`, `clippy -D warnings`), and `svelte-check` must report zero warnings.
+`make` must be clean. Warnings are errors (`clippy -D warnings`), and `svelte-check` must report zero warnings.
 
 Individual targets:
 
