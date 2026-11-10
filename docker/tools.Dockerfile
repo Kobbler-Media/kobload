@@ -27,7 +27,9 @@ RUN echo "deb http://deb.debian.org/debian trixie non-free" >> /etc/apt/sources.
 
 # Install latest FFmpeg shared build from BtbN/FFmpeg-Builds.
 # Provides shared libraries + headers for kob-ffmpeg (replaces mediainfo CLI).
-RUN curl -sL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl-shared.tar.xz \
+ARG TARGETARCH
+RUN case "$TARGETARCH" in arm64) build=linuxarm64 ;; *) build=linux64 ;; esac \
+    && curl -sL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-$build-gpl-shared.tar.xz" \
     | tar -xJ --strip-components=1 -C /usr/local/ \
     && ldconfig
 

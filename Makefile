@@ -104,14 +104,18 @@ ifdef REGISTRY
 export KOBLOAD_REGISTRY := $(REGISTRY)
 endif
 REGISTRY ?= $(KOBLOAD_REGISTRY)
+KOBLOAD_TAG ?= latest
+ifdef TAG
+export KOBLOAD_TAG := $(TAG)
+endif
 
 docker-push: tools
 	docker compose build api web
 	docker compose push api web
 	@echo ""
 	@echo "=== Pushed digests ==="
-	@docker inspect $(REGISTRY)/kobload:latest --format '  api: {{index .RepoDigests 0}}' 2>/dev/null || true
-	@docker inspect $(REGISTRY)/kobload-web:latest --format '  web: {{index .RepoDigests 0}}' 2>/dev/null || true
+	@docker inspect $(REGISTRY)/kobload:$(KOBLOAD_TAG) --format '  api: {{index .RepoDigests 0}}' 2>/dev/null || true
+	@docker inspect $(REGISTRY)/kobload-web:$(KOBLOAD_TAG) --format '  web: {{index .RepoDigests 0}}' 2>/dev/null || true
 	@echo ""
 	@echo "Pruning old build artifacts..."
 	docker image prune -f --filter "dangling=true"

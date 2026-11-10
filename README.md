@@ -25,7 +25,7 @@ do with what it retrieves, is your responsibility under the laws that apply to y
 
 - Docker with Compose v2
 
-Images are published to `ghcr.io/kobbler-media` (linux/amd64) on every push to `main`: `:latest`, plus `:sha-<commit>` to pin one. Everything below this line is only for building from source:
+Images are published to `ghcr.io/kobbler-media` for linux/amd64 and linux/arm64. `:latest` follows `main`; each [release](https://github.com/Kobbler-Media/kobload/releases) is also tagged `:0.1.0` and `:0.1`, and `:sha-<commit>` pins any build. Set `KOBLOAD_TAG` in `.env` to stay on one. Everything below this line is only for building from source:
 
 - Docker BuildKit
 - [koblibs](https://github.com/Kobbler-Media/koblibs) cloned as a **sibling directory** of this repo. It is a shared Rust + Svelte workspace that Kobload depends on and it is not published to crates.io or npm yet, so the checkout is required:

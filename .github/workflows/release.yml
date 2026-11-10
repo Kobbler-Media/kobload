@@ -11,16 +11,26 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
   REGISTRY: ghcr.io/kobbler-media
+  IMAGES: kobload kobload-web
 
+# Each arch builds natively and pushes :sha-<short>-<arch>; `manifest` joins them
+# under :latest and :sha-<short>. A v* tag builds nothing: `release` points the
+# version tags at the image main already built for that commit.
 jobs:
   images:
-    name: build + push to ghcr
-    runs-on: ubuntu-latest
+    name: build ${{ matrix.arch }}
+    if: github.ref_type != 'tag'
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Free runner disk for the image builds
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/swift
@@ -33,19 +43,44 @@ jobs:
           path: koblibs
       - name: docker login
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: build + push :latest
+      - name: build + push :sha-<short>-${{ matrix.arch }}
         working-directory: kobload
         # Compose interpolates the whole file even to build; the token is a runtime secret.
         env:
           NATS_TOKEN: unused-at-build
-        run: make docker-push REGISTRY=$REGISTRY
-      - name: push :sha-<short> and :<tag>
+        run: make docker-push REGISTRY=$REGISTRY TAG=sha-${GITHUB_SHA::7}-${{ matrix.arch }}
+
+  manifest:
+    name: multi-arch :latest
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - name: docker login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: join the arch images
         run: |
-          tags="sha-${GITHUB_SHA::7}"
-          [ "$GITHUB_REF_TYPE" = tag ] && tags="$tags $GITHUB_REF_NAME"
-          for img in kobload kobload-web; do
-            for t in $tags; do
-              docker tag "$REGISTRY/$img:latest" "$REGISTRY/$img:$t"
-              docker push "$REGISTRY/$img:$t"
-            done
+          sha="sha-${GITHUB_SHA::7}"
+          for img in $IMAGES; do
+            docker buildx imagetools create -t "$REGISTRY/$img:latest" -t "$REGISTRY/$img:$sha" \
+              "$REGISTRY/$img:$sha-amd64" "$REGISTRY/$img:$sha-arm64"
           done
+
+  release:
+    name: release ${{ github.ref_name }}
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: docker login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: tag the images built from this commit
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for img in $IMAGES; do
+            docker buildx imagetools create -t "$REGISTRY/$img:$version" -t "$REGISTRY/$img:${version%.*}" \
+              "$REGISTRY/$img:sha-${GITHUB_SHA::7}" \
+              || { echo "::error::no $img image for ${GITHUB_SHA::7}; tag a commit main has built"; exit 1; }
+          done
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
