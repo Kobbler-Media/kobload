@@ -37,6 +37,7 @@ RUN curl -sL https://github.com/Prowlarr/Indexers/archive/refs/heads/master.tar.
     && find /tmp -name '*.yml' -exec cp {} /definitions/ \;
 
 FROM kobload-tools:latest AS prod
+LABEL org.opencontainers.image.source="https://github.com/Kobbler-Media/kobload"
 WORKDIR /app
 COPY --from=builder /app/kobload-api-binary /app/kobload-api
 # Bundle one-off ops tools next to the main binary so they're runnable in prod

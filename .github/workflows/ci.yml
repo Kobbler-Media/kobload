@@ -78,6 +78,8 @@ jobs:
 
   docker:
     name: docker build (smoke test)
+    # main is built and pushed by release.yml.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

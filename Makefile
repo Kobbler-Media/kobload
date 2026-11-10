@@ -96,16 +96,18 @@ test-api: test-db-up
 	$(MAKE) test-db-down; \
 	exit $$EXIT_CODE
 
-# Publish release images. Maintainers only — needs push rights on REGISTRY.
-# Contributors never need this target.
-REGISTRY ?= ghcr.io/kobbler-media
+# Publish release images. Maintainers only — needs push rights on the registry.
+# Same variable docker-compose.yml uses, so a fork can set KOBLOAD_REGISTRY once
+# in .env and it applies to both.
+KOBLOAD_REGISTRY ?= ghcr.io/kobbler-media
+ifdef REGISTRY
+export KOBLOAD_REGISTRY := $(REGISTRY)
+endif
+REGISTRY ?= $(KOBLOAD_REGISTRY)
 
 docker-push: tools
 	docker compose build api web
-	docker tag kobload:local $(REGISTRY)/kobload:latest
-	docker tag kobload-web:local $(REGISTRY)/kobload-web:latest
-	docker push $(REGISTRY)/kobload:latest
-	docker push $(REGISTRY)/kobload-web:latest
+	docker compose push api web
 	@echo ""
 	@echo "=== Pushed digests ==="
 	@docker inspect $(REGISTRY)/kobload:latest --format '  api: {{index .RepoDigests 0}}' 2>/dev/null || true

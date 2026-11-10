@@ -54,7 +54,9 @@ services:
       start_period: 5s
 
   api:
-    image: kobload:local
+    # `docker compose pull` fetches the published image; `make up` builds it
+    # from this checkout instead. Set KOBLOAD_REGISTRY to use a fork's registry.
+    image: ${KOBLOAD_REGISTRY:-ghcr.io/kobbler-media}/kobload:latest
     build:
       context: .
       dockerfile: api/Dockerfile
@@ -87,7 +89,7 @@ services:
         condition: service_started
 
   web:
-    image: kobload-web:local
+    image: ${KOBLOAD_REGISTRY:-ghcr.io/kobbler-media}/kobload-web:latest
     build:
       context: ./web
       additional_contexts:

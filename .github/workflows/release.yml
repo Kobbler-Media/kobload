@@ -1,0 +1,48 @@
+name: Release images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/kobbler-media
+
+jobs:
+  images:
+    name: build + push to ghcr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free runner disk for the image builds
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/swift
+      - uses: actions/checkout@v7
+        with:
+          path: kobload
+      - uses: actions/checkout@v7
+        with:
+          repository: Kobbler-Media/koblibs
+          path: koblibs
+      - name: docker login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: build + push :latest
+        working-directory: kobload
+        run: make docker-push REGISTRY=$REGISTRY
+      - name: push :sha-<short> and :<tag>
+        run: |
+          tags="sha-${GITHUB_SHA::7}"
+          [ "$GITHUB_REF_TYPE" = tag ] && tags="$tags $GITHUB_REF_NAME"
+          for img in kobload kobload-web; do
+            for t in $tags; do
+              docker tag "$REGISTRY/$img:latest" "$REGISTRY/$img:$t"
+              docker push "$REGISTRY/$img:$t"
+            done
+          done

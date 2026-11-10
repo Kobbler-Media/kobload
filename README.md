@@ -23,7 +23,11 @@ do with what it retrieves, is your responsibility under the laws that apply to y
 
 ## Prerequisites
 
-- Docker with Compose v2 and BuildKit
+- Docker with Compose v2
+
+Images are published to `ghcr.io/kobbler-media` (linux/amd64) on every push to `main`: `:latest`, plus `:sha-<commit>` to pin one. Everything below this line is only for building from source:
+
+- Docker BuildKit
 - [koblibs](https://github.com/Kobbler-Media/koblibs) cloned as a **sibling directory** of this repo. It is a shared Rust + Svelte workspace that Kobload depends on and it is not published to crates.io or npm yet, so the checkout is required:
 
   ```bash
@@ -39,12 +43,14 @@ do with what it retrieves, is your responsibility under the laws that apply to y
 ## Quickstart
 
 ```bash
+git clone https://github.com/Kobbler-Media/kobload.git
 cd kobload
 cp .env.example .env        # edit it — at minimum set NATS_TOKEN
-make up                     # builds the kobload-tools base image first if missing, then starts everything
+docker compose pull
+docker compose up -d
 ```
 
-`make up` is `make tools` (builds the `kobload-tools` base image — FFmpeg, chromaprint, archive tools) then `docker compose up -d --build`. Doing that second step alone on a fresh clone fails with a "pull access denied" error that looks like a registry problem — it's really just the missing base image; run `make tools` (or `make up`) first.
+To build from source instead, `make up`. It is `make tools` (builds the `kobload-tools` base image — FFmpeg, chromaprint, archive tools) then `docker compose up -d --build`. Doing that second step alone on a fresh clone fails with a "pull access denied" error that looks like a registry problem — it's really just the missing base image; run `make tools` (or `make up`) first.
 
 Then open the web UI at <http://localhost:5174>. The admin account is created on first boot from `ADMIN_EMAIL` / `ADMIN_PASSWORD`; if you left `ADMIN_PASSWORD` blank, a random one is generated and logged once:
 
