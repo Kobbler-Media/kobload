@@ -108,6 +108,90 @@ async fn test_failed_release_sinks_and_both_verdicts_are_annotated() {
     server.cleanup().await;
 }
 
+async fn report_bad(server: &TestServer, provider: &RankProvider, info_hash: &str, bad: bool) {
+    server
+        .admin_client()
+        .post_json(
+            "/api/v1/stream/bad",
+            &json!({ "debrid_provider_id": provider.id, "info_hash": info_hash, "bad": bad }),
+        )
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
+
+/// A copy with drifting audio plays, so nothing but the viewer can say it is bad, and a
+/// later play of it must not talk the ranking back round.
+#[tokio::test]
+async fn test_a_release_reported_bad_stays_sunk_until_the_report_is_withdrawn() {
+    let server = TestServer::start().await;
+    let provider = create_provider(&server.pool, "torbox").await;
+    let options = [
+        option(&provider, &hash('a'), "Drifting.1080p-AAA", 9.0),
+        option(&provider, &hash('b'), "Fine.720p-BBB", 7.0),
+    ];
+    let ranked = async || {
+        rank_options(
+            &server.pool,
+            &provider,
+            unknown(&options),
+            &RankPreferences::default(),
+        )
+        .await
+        .into_iter()
+        .map(|o| (o.release_title, o.playback, o.reported_bad))
+        .collect::<Vec<_>>()
+    };
+    let played = json!({ "debrid_provider_id": provider.id, "info_hash": hash('a'), "ok": true });
+    report(&server, played.clone()).await;
+    assert_eq!(ranked().await[0].0, "Drifting.1080p-AAA");
+
+    report_bad(&server, &provider, &hash('a').to_uppercase(), true).await;
+    report(&server, played).await;
+    sqlx::query(
+        "UPDATE stream_release_outcomes SET
+            reported_bad_at = reported_bad_at - INTERVAL '400 days',
+            last_success_at = last_success_at - INTERVAL '400 days'",
+    )
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    CacheCleanupHandler::new(server.pool.clone())
+        .execute(
+            Uuid::new_v4(),
+            json!({}),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ranked().await,
+        vec![
+            ("Fine.720p-BBB".to_string(), None, false),
+            (
+                "Drifting.1080p-AAA".to_string(),
+                Some(StreamPlayback::Failed),
+                true
+            ),
+        ]
+    );
+
+    report_bad(&server, &provider, &hash('a'), false).await;
+    assert_eq!(
+        ranked().await[0],
+        ("Drifting.1080p-AAA".to_string(), None, false)
+    );
+
+    server
+        .anon_client()
+        .post_json(
+            "/api/v1/stream/bad",
+            &json!({ "info_hash": hash('a'), "bad": true }),
+        )
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server.cleanup().await;
+}
+
 #[tokio::test]
 async fn test_release_failure_expires_and_the_option_returns_to_rank() {
     let server = TestServer::start().await;

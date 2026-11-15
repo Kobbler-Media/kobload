@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM stream_release_outcomes\n        WHERE reported_bad_at IS NULL\n          AND (last_failure_at IS NULL\n               OR last_failure_at < NOW() - make_interval(hours => $1))\n          AND (last_success_at IS NULL\n               OR last_success_at < NOW() - make_interval(days => $2))\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa03ebf3a36fdb75a3381aaf7c301ddfb941776372037075f7f61a0779f844fb"
+}

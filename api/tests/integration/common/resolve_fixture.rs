@@ -140,6 +140,7 @@ impl Fixture {
             publish_date: None,
             binge_group: None,
             playback: None,
+            reported_bad: false,
             availability: None,
             group: None,
             audio_languages: Vec::new(),
@@ -195,6 +196,19 @@ impl Fixture {
             .admin_client()
             .get(&format!(
                 "/api/v1/stream/resolve/status?provider_id={}&torrent_id={torrent_id}",
+                self.provider_id
+            ))
+            .await;
+        resp.assert_ok();
+        resp.json()
+    }
+
+    pub async fn pause(&self) -> Value {
+        let resp = self
+            .server
+            .admin_client()
+            .get(&format!(
+                "/api/v1/stream/pause?provider_id={}",
                 self.provider_id
             ))
             .await;

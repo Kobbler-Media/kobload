@@ -10,6 +10,7 @@ pub struct ReleaseOutcomeRow {
     pub file_id: Option<i32>,
     pub last_success_at: Option<OffsetDateTime>,
     pub last_failure_at: Option<OffsetDateTime>,
+    pub reported_bad_at: Option<OffsetDateTime>,
     pub binge_group: Option<String>,
 }
 
@@ -87,6 +88,34 @@ where
     Ok(())
 }
 
+pub async fn set_reported_bad<'e, E>(
+    exec: E,
+    provider_id: Uuid,
+    info_hash: &str,
+    file_id: Option<i32>,
+    bad: bool,
+) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query!(
+        r#"
+        INSERT INTO stream_release_outcomes (provider_id, info_hash, file_id, reported_bad_at)
+        VALUES ($1, $2, $3, CASE WHEN $4 THEN NOW() END)
+        ON CONFLICT (provider_id, info_hash, file_id) DO UPDATE SET
+            reported_bad_at = EXCLUDED.reported_bad_at,
+            updated_at = NOW()
+        "#,
+        provider_id,
+        info_hash,
+        file_id,
+        bad,
+    )
+    .execute(exec)
+    .await?;
+    Ok(())
+}
+
 pub async fn releases_for<'e, E>(
     exec: E,
     provider_id: Uuid,
@@ -98,7 +127,8 @@ where
     let rows = sqlx::query_as!(
         ReleaseOutcomeRow,
         r#"
-        SELECT info_hash, file_id, last_success_at, last_failure_at, binge_group
+        SELECT info_hash, file_id, last_success_at, last_failure_at, reported_bad_at,
+               binge_group
         FROM stream_release_outcomes
         WHERE provider_id = $1 AND info_hash = ANY($2)
         "#,
@@ -190,7 +220,8 @@ where
     let result = sqlx::query!(
         r#"
         DELETE FROM stream_release_outcomes
-        WHERE (last_failure_at IS NULL
+        WHERE reported_bad_at IS NULL
+          AND (last_failure_at IS NULL
                OR last_failure_at < NOW() - make_interval(hours => $1))
           AND (last_success_at IS NULL
                OR last_success_at < NOW() - make_interval(days => $2))

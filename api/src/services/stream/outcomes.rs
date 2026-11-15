@@ -148,6 +148,33 @@ pub async fn record_report(
     Ok(())
 }
 
+/// A viewer's report that a copy is bad, or its withdrawal. It says nothing about the
+/// release's name, so no trait learns from it.
+pub async fn record_bad_report(
+    pool: &PgPool,
+    provider_id: Option<Uuid>,
+    info_hash: &str,
+    file_id: Option<i32>,
+    bad: bool,
+) -> Result<(), RepositoryError> {
+    let provider_id = match provider_id {
+        Some(id) => id,
+        None => match repo::default_provider(pool).await? {
+            Some(id) => id,
+            None => return Ok(()),
+        },
+    };
+    let info_hash = info_hash.trim().to_lowercase();
+    if bad {
+        warm_cache::forget(&WarmCacheKey {
+            debrid_provider_id: provider_id,
+            info_hash: info_hash.clone(),
+            file_id,
+        });
+    }
+    repo::set_reported_bad(pool, provider_id, &info_hash, file_id, bad).await
+}
+
 /// Persists the availability verdict and, when it is news, learns from the release name.
 /// A dead torrent says nothing about its name, so only acceptance and refusal count.
 pub async fn record_probe(

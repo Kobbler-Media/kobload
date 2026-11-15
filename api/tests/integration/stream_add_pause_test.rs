@@ -8,6 +8,7 @@ use common::stream_fixtures::hash;
 use common::tv_watch::{TvWatch, episode_want, torrent_release};
 use kobload_api::services::stream::{KnownAvailability, known_availability, vouched};
 use nats_jobs::types::StreamGroup;
+use serde_json::json;
 
 const HOLD: Duration = Duration::from_millis(60);
 
@@ -37,6 +38,28 @@ async fn test_a_refusal_while_rd_pauses_adds_is_retried_after_the_hold() {
         known(&f, &hash('a')).await,
         Some(KnownAvailability::Available)
     );
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_a_held_account_says_so_while_a_resolve_waits_it_out() {
+    let f = Fixture::with_mock(
+        MockDebrid::new(Duration::from_millis(5)).with_add_pauses(Duration::from_millis(600)),
+    )
+    .await;
+    assert_eq!(f.pause().await, json!({"pause": null}));
+    f.mock.refuse_next_adds(1);
+    let release = hash('a');
+    let (resolved, seen) = tokio::join!(f.resolve(&release), async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        f.pause().await
+    });
+    assert!(resolved.unwrap().cached);
+    assert_eq!(
+        seen,
+        json!({"pause": {"reason": "adds_paused", "seconds": 1}})
+    );
+    assert_eq!(f.pause().await, json!({"pause": null}));
     f.server.cleanup().await;
 }
 

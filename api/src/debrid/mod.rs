@@ -11,7 +11,7 @@ pub mod types;
 
 pub use provider::DebridProvider;
 pub use registry::{DebridProviderResolver, DefaultDebridProviderResolver};
-pub use throttle::{Lane, Throttled};
+pub use throttle::{Lane, PauseReason, Throttled};
 pub use types::{
     AddPauses, CachedAvailability, DebridAccountStatus, DebridError, DebridFile,
     DebridProviderType, DebridTorrent, DebridTorrentStatus, ExistingTorrent, UnrestrictedLink,

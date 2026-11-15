@@ -9,7 +9,10 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::require_auth;
-use crate::debrid::{DebridProvider, DebridProviderType, DebridTorrentStatus, Lane, Throttled};
+use crate::debrid::throttle::gate;
+use crate::debrid::{
+    DebridProvider, DebridProviderType, DebridTorrentStatus, Lane, PauseReason, Throttled,
+};
 use crate::repositories::stream_attempts::Change;
 use crate::services::stream::attempt_log::{AttemptLog, Step, raw_torrent_id};
 use crate::services::stream::{
@@ -23,6 +26,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/stream/search", post(stream_search_handler))
         .route("/api/v1/stream/resolve", post(stream_resolve_handler))
         .route("/api/v1/stream/outcome", post(stream_outcome_handler))
+        .route("/api/v1/stream/pause", get(stream_pause_handler))
+        .route("/api/v1/stream/bad", post(stream_bad_handler))
         .route(
             "/api/v1/stream/resolve/status",
             get(stream_resolve_status_handler),
@@ -124,6 +129,97 @@ async fn log_playback(state: &AppState, report: &StreamOutcomeReport) {
         log.record(Step::PlaybackFailed, &message, Change::failed(&message))
             .await;
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct BadReport {
+    #[serde(default)]
+    debrid_provider_id: Option<Uuid>,
+    info_hash: String,
+    #[serde(default)]
+    file_id: Option<i32>,
+    bad: bool,
+}
+
+/// POST /api/v1/stream/bad
+async fn stream_bad_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(report): Json<BadReport>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if require_auth(&state, &headers).await.is_err() {
+        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
+    }
+    crate::services::stream::outcomes::record_bad_report(
+        &state.pool,
+        report.debrid_provider_id,
+        &report.info_hash,
+        report.file_id,
+        report.bad,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let log = AttemptLog::for_release(
+        &state.pool,
+        report.debrid_provider_id,
+        &report.info_hash.to_lowercase(),
+        report.file_id,
+    )
+    .await;
+    let message = if report.bad {
+        "A viewer reported this copy as bad"
+    } else {
+        "The bad-copy report was withdrawn"
+    };
+    log.record(Step::PlaybackFailed, message, Change::default())
+        .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct PauseQuery {
+    provider_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderPause {
+    reason: PauseReason,
+    seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct PauseResponse {
+    pause: Option<ProviderPause>,
+}
+
+/// GET /api/v1/stream/pause?provider_id={uuid}
+///
+/// A resolve blocks while the account's throttle waits a provider out; this is how
+/// whoever is waiting on one learns that, and for how long.
+async fn stream_pause_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PauseQuery>,
+) -> Result<Json<PauseResponse>, (StatusCode, String)> {
+    if require_auth(&state, &headers).await.is_err() {
+        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".to_string()));
+    }
+    let config = load_provider_config(&state.pool, query.provider_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    let provider = DebridProviderType::parse(&config.provider_type).ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Unknown provider type: {}", config.provider_type),
+        )
+    })?;
+    let pause = gate(provider, &config.api_key)
+        .pause()
+        .map(|(reason, left)| ProviderPause {
+            reason,
+            seconds: left.as_secs_f64().ceil() as u64,
+        });
+    Ok(Json(PauseResponse { pause }))
 }
 
 // =============================================================================

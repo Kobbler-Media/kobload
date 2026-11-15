@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT info_hash, file_id, last_success_at, last_failure_at, binge_group\n        FROM stream_release_outcomes\n        WHERE provider_id = $1 AND info_hash = ANY($2)\n        ",
+  "query": "\n        SELECT info_hash, file_id, last_success_at, last_failure_at, reported_bad_at,\n               binge_group\n        FROM stream_release_outcomes\n        WHERE provider_id = $1 AND info_hash = ANY($2)\n        ",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,17 @@
       },
       {
         "ordinal": 4,
+        "name": "reported_bad_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "stream_release_outcomes",
+            "name": "reported_bad_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "binge_group",
         "type_info": "Text",
         "origin": {
@@ -70,8 +81,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "bedd1b559b77c958920a58570f8c0c24016943dee5d1ee61ccf9a68c5baf9a22"
+  "hash": "969790d3c5a1ee433cfc92ffd17ebea702dc7beb5b41692df3b48416b56b893c"
 }

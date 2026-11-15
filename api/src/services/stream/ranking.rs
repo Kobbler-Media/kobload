@@ -158,9 +158,17 @@ pub async fn rank_options(
     let verdicts: HashMap<ReleaseKey, StreamPlayback> = rows
         .iter()
         .filter_map(|r| {
-            outcomes::verdict(r.last_success_at, r.last_failure_at, now)
-                .map(|v| ((r.info_hash.clone(), r.file_id), v))
+            let verdict = match r.reported_bad_at {
+                Some(_) => Some(StreamPlayback::Failed),
+                None => outcomes::verdict(r.last_success_at, r.last_failure_at, now),
+            };
+            verdict.map(|v| ((r.info_hash.clone(), r.file_id), v))
         })
+        .collect();
+    let reported: HashSet<ReleaseKey> = rows
+        .iter()
+        .filter(|r| r.reported_bad_at.is_some())
+        .map(|r| (r.info_hash.clone(), r.file_id))
         .collect();
 
     let continuity = prefer.map(|p| {
@@ -190,7 +198,9 @@ pub async fn rank_options(
         .zip(traits)
         .map(|(c, traits)| {
             let mut option = c.option;
-            option.playback = release_key(&option).and_then(|k| verdicts.get(&k).copied());
+            let key = release_key(&option);
+            option.playback = key.as_ref().and_then(|k| verdicts.get(k).copied());
+            option.reported_bad = key.is_some_and(|k| reported.contains(&k));
             let quality = crate::quality::parse_quality(&option.release_title);
             let continuity_rank = continuity
                 .as_ref()

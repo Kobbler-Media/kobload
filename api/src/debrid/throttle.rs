@@ -229,6 +229,13 @@ pub fn gate(provider: DebridProviderType, api_key: &str) -> Arc<Gate> {
         .clone()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    AddsPaused,
+    RateLimited,
+}
+
 pub struct UserSession(Arc<Gate>);
 
 impl Drop for UserSession {
@@ -308,6 +315,20 @@ impl Gate {
             }
             tokio::time::sleep(if user { wait } else { wait.min(YIELD_TICK) }).await;
         }
+    }
+
+    /// What a user's call on this account is waiting out right now, and for how long.
+    pub fn pause(&self) -> Option<(PauseReason, Duration)> {
+        let b = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let left = |until: Option<Instant>| until.filter(|u| *u > now).map(|u| u - now);
+        [
+            (PauseReason::AddsPaused, left(b.adds_held_until)),
+            (PauseReason::RateLimited, left(b.paused_until)),
+        ]
+        .into_iter()
+        .filter_map(|(reason, left)| Some((reason, left?)))
+        .max_by_key(|(_, left)| *left)
     }
 
     /// The provider refused an add the way it does while pausing the account's adds, so
@@ -752,6 +773,7 @@ mod tests {
             retry_after: Some(Duration::from_millis(200)),
         });
         assert!(gate.observe(&limited));
+        assert!(matches!(gate.pause(), Some((PauseReason::RateLimited, _))));
         let started = Instant::now();
         gate.acquire(&Lane::user(), Call::Other, None)
             .await
