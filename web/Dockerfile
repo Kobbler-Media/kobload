@@ -27,7 +27,7 @@ ARG VITE_API_BASE_URL
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
-FROM nginx:1.31.8-alpine AS prod
+FROM nginx:1.31.9-alpine AS prod
 LABEL org.opencontainers.image.source="https://github.com/Kobbler-Media/kobload"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /src/mono/web/build /usr/share/nginx/html
