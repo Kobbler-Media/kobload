@@ -2237,6 +2237,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2261,6 +2262,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2285,6 +2287,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -3116,6 +3119,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4262,6 +4266,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -4284,6 +4289,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4305,6 +4311,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4327,6 +4334,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4351,6 +4359,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         };
         // Audiobook parser may extract the author from `Author-Title` style
         // names; either a title_mismatch or author_mismatch is acceptable as
@@ -5686,6 +5695,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         }
     }
 
@@ -5702,6 +5712,7 @@ mod tests {
             release_date: None,
             alternate_titles: None,
             other_titles: None,
+            language: None,
         }
     }
 
@@ -5942,6 +5953,7 @@ mod tests {
         year: Option<&'static str>,
         position: Option<&'static str>,
         others: &'static [&'static str],
+        language: Option<&'static str>,
     }
 
     impl BookCase {
@@ -5955,6 +5967,7 @@ mod tests {
                     release_date,
                     series_position,
                     other_titles,
+                    language,
                     ..
                 }
                 | MediaWant::Audiobook {
@@ -5962,6 +5975,7 @@ mod tests {
                     release_date,
                     series_position,
                     other_titles,
+                    language,
                     ..
                 } = want
                 {
@@ -5969,6 +5983,7 @@ mod tests {
                     *release_date = self.year.map(|y| format!("{y}-06-01"));
                     *series_position = self.position.map(str::to_string);
                     *other_titles = Some(self.others.iter().map(|t| t.to_string()).collect());
+                    *language = self.language.map(str::to_string);
                 }
             }
             [ebook, audiobook]
@@ -5985,6 +6000,7 @@ mod tests {
             "The Clementine Complex",
             "And Away...",
         ],
+        language: Some("english"),
     };
     const DUNE: BookCase = BookCase {
         title: "Dune",
@@ -5997,7 +6013,9 @@ mod tests {
             "Chapterhouse: Dune",
             "Dune Messiah & Children Of Dune",
             "Eye",
+            "Dune: Deluxe Edition",
         ],
+        language: Some("english"),
     };
     const DUNE_MESSIAH: BookCase = BookCase {
         title: "Dune Messiah",
@@ -6005,6 +6023,7 @@ mod tests {
         year: Some("1969"),
         position: Some("2"),
         others: &["Dune", "Children of Dune"],
+        language: Some("english"),
     };
     const SOMETHING: BookCase = BookCase {
         title: "Something",
@@ -6012,6 +6031,7 @@ mod tests {
         year: None,
         position: None,
         others: &[],
+        language: None,
     };
     const AUTHORLESS_WANT: BookCase = BookCase {
         title: "Michael",
@@ -6019,6 +6039,16 @@ mod tests {
         year: None,
         position: None,
         others: &[],
+        language: None,
+    };
+
+    const GERMAN_GIRL: BookCase = BookCase {
+        title: "The German Girl",
+        author: Some("Armando Lucas Correa"),
+        year: Some("2016"),
+        position: None,
+        others: &[],
+        language: Some("english"),
     };
 
     fn release_by(title: &str, indexer_author: Option<&str>) -> Release {
@@ -6220,6 +6250,45 @@ mod tests {
                 "Frank.Herbert.Dune.1965.RETAiL.ePub.eBOOK-GRP",
                 None,
                 &DUNE_MESSIAH,
+                false,
+            ),
+            // A separate Hardcover entry for an edition is still this book.
+            (
+                "Frank.Herbert.Dune.Deluxe.Edition.2019.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                true,
+            ),
+            // A language tag outside the title is another edition; a language
+            // word inside the title is just a word.
+            (
+                "Bob.Mortimer.Michael.2025.DANiSH.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Bob.Mortimer.Michael.2025.GERMAN.MP3-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Bob.Mortimer.Michael.2025.ENGLiSH.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            (
+                "Armando.Lucas.Correa.The.German.Girl.2016.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &GERMAN_GIRL,
+                true,
+            ),
+            (
+                "Armando.Lucas.Correa.The.German.Girl.2016.FRENCH.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &GERMAN_GIRL,
                 false,
             ),
         ];

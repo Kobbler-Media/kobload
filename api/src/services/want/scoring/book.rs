@@ -7,11 +7,12 @@
 //! it the title must match exactly and the year must sit near publication:
 //! "Michael.Katz.Krefeld.Mumien.2026" is not "Michael" by Bob Mortimer.
 //! Either way a release that names another of the author's books, or a series
-//! number other than this book's, is that other book.
+//! number other than this book's, is that other book, and one tagged for
+//! another language than the want's is another edition.
 
 use nats_jobs::{MediaWant, StructuralRejectReason};
 
-use super::{any_title_similar, normalize_author_tokens};
+use super::{any_title_similar, is_edition_word, normalize_author_tokens};
 use crate::parsing::{ParsedMedia, ParsedRelease};
 use crate::watch::Release;
 use crate::watch::types::ReleaseMedia;
@@ -23,6 +24,7 @@ struct Want<'a> {
     others: &'a [String],
     position: Option<&'a str>,
     year: Option<i32>,
+    language: Option<&'a str>,
 }
 
 impl<'a> Want<'a> {
@@ -34,6 +36,7 @@ impl<'a> Want<'a> {
             other_titles,
             series_position,
             release_date,
+            language,
             ..
         }
         | MediaWant::Audiobook {
@@ -43,6 +46,7 @@ impl<'a> Want<'a> {
             other_titles,
             series_position,
             release_date,
+            language,
             ..
         }) = media_want
         else {
@@ -58,6 +62,7 @@ impl<'a> Want<'a> {
                 .as_deref()
                 .and_then(|d| d.get(..4))
                 .and_then(|y| y.parse().ok()),
+            language: language.as_deref(),
         })
     }
 
@@ -117,6 +122,14 @@ pub(super) fn reject(
     }
     let candidate = stripped.unwrap_or_else(|| title.to_string());
 
+    if let Some(wanted) = want.language.and_then(crate::language::profile_name)
+        && let Some(tagged) = tagged_language(&release.title, title)
+        && tagged != "multi"
+        && tagged != wanted
+    {
+        return Some(StructuralRejectReason::LanguageMismatch);
+    }
+
     if let (Some(released), Some(published)) = (year, want.year) {
         let released = released as i32;
         // Reprints come later, never earlier. A name with no author has only
@@ -136,6 +149,17 @@ pub(super) fn reject(
         return Some(StructuralRejectReason::TitleMismatch);
     }
     None
+}
+
+/// A language named among the release's tags. Words of the parsed title are
+/// left out: "The German Girl" names no edition.
+fn tagged_language(release_title: &str, parsed_title: &str) -> Option<&'static str> {
+    let title = tokens(parsed_title);
+    let tags: Vec<String> = tokens(release_title)
+        .into_iter()
+        .filter(|t| !title.contains(t))
+        .collect();
+    crate::language::title_language(|word| tags.iter().any(|t| t == word))
 }
 
 /// `None` when either side has no comparable words.
@@ -181,7 +205,7 @@ fn names_other_book(want: &Want, candidate: &str) -> bool {
     let candidate = tokens(candidate);
     let wanted: Vec<Vec<String>> = want.titles().map(tokens).collect();
     want.others.iter().map(|o| tokens(o)).any(|other| {
-        if other.is_empty() || wanted.contains(&other) {
+        if other.is_empty() || wanted.iter().any(|w| edition_of(w, &other)) {
             return false;
         }
         if other == candidate {
@@ -190,6 +214,12 @@ fn names_other_book(want: &Want, candidate: &str) -> bool {
         let inside_wanted = wanted.iter().any(|w| find_span(w, &other).is_some());
         !inside_wanted && find_span(&candidate, &other).is_some()
     })
+}
+
+/// `other` is `wanted` with nothing but edition words after it: Hardcover
+/// sometimes lists "Dune: Deluxe Edition" as a book of its own.
+fn edition_of(wanted: &[String], other: &[String]) -> bool {
+    other.starts_with(wanted) && other[wanted.len()..].iter().all(|t| is_edition_word(t))
 }
 
 const SERIES_MARKERS: &[&str] = &["book", "bk", "volume", "vol", "part", "no", "number"];
