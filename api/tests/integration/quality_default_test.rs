@@ -63,6 +63,7 @@ fn test_quality_media_kind_mapping() {
         series_position: None,
         release_date: None,
         alternate_titles: None,
+        other_titles: None,
     };
     assert_eq!(quality_media_kind(&book), None);
 
@@ -77,6 +78,7 @@ fn test_quality_media_kind_mapping() {
         series_position: None,
         release_date: None,
         alternate_titles: None,
+        other_titles: None,
     };
     assert_eq!(quality_media_kind(&audiobook), None);
 

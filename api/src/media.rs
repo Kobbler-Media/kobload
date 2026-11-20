@@ -982,6 +982,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
 
         let terms = search_terms_from_media_want(&want);
@@ -1080,6 +1081,7 @@ mod tests {
                     series_position: None,
                     release_date: None,
                     alternate_titles: None,
+                    other_titles: None,
                 },
                 "ebooks",
             ),
@@ -1095,6 +1097,7 @@ mod tests {
                     series_position: None,
                     release_date: None,
                     alternate_titles: None,
+                    other_titles: None,
                 },
                 "audiobooks",
             ),
@@ -1259,6 +1262,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(targets.len(), 3, "Expected 3 targets, got: {targets:?}");
@@ -1279,6 +1283,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(targets.len(), 1);
@@ -1297,6 +1302,7 @@ mod tests {
             series_position: Some("1".to_string()),
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(terms.len(), 3, "Expected 3 terms, got: {terms:?}");
@@ -1325,6 +1331,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
 
         let ids = external_ids_from_media_want(&want);
@@ -1354,6 +1361,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
 
         let ids = external_ids_from_media_want(&want);
@@ -1773,6 +1781,7 @@ mod tests {
             series_position: Some("1".to_string()),
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(targets.len(), 4, "Expected 4 targets, got: {targets:?}");
@@ -1796,6 +1805,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert_eq!(
@@ -1821,6 +1831,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let terms = search_terms_from_media_want(&want);
         assert_eq!(
@@ -1845,6 +1856,7 @@ mod tests {
             series_position: Some("1".to_string()),
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         let targets = match_targets_from_media_want(&want);
         assert!(

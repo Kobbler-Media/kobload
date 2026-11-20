@@ -9,7 +9,10 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::common::{RELEASE_GROUP_RE, extract_year, normalize_spaces, remove_extension};
+use super::common::{
+    RELEASE_GROUP_RE, cut_book_tags, cut_book_year, extract_year, normalize_spaces,
+    remove_extension,
+};
 use super::types::{BookParsed, ParsedMedia};
 
 // =============================================================================
@@ -20,10 +23,10 @@ use super::types::{BookParsed, ParsedMedia};
 static SERIES_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?ix)
         (?:
-            \((?P<s1>[^)]+?)(?:\s*(?:\#|Book|Bk\.?|Vol\.?|Volume|No\.?)\s*)?(?P<n1>[\d.]+(?:-[\d.]+)?|[IVXLCDM]+)\)|
-            \[(?P<s2>[^\]]+?)(?:\s*(?:\#|Book|Bk\.?|Vol\.?|Volume|No\.?)\s*)?(?P<n2>[\d.]+(?:-[\d.]+)?|[IVXLCDM]+)\]|
-            (?P<s3>(?:Series|Saga|Chronicles?|Trilogy|Duology)\s+[\w\s]+?)(?:\s*(?:\#|Book|Bk\.?|Vol\.?|Volume|No\.?)\s*)?(?P<n3>[\d.]+(?:-[\d.]+)?|[IVXLCDM]+)|
-            (?:Book|Bk\.?|Vol\.?|Volume|No\.?)\s*(?P<n4>[\d.]+(?:-[\d.]+)?|[IVXLCDM]+)
+            \((?P<s1>[^)]*?[^\d\s)][^)]*?)(?:\s*(?:\#|Book|Bk\.?|Vol\.?|Volume|No\.?)\s*|\s+)(?P<n1>\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?|[IVXLCDM]+)\)|
+            \[(?P<s2>[^\]]*?[^\d\s\]][^\]]*?)(?:\s*(?:\#|Book|Bk\.?|Vol\.?|Volume|No\.?)\s*|\s+)(?P<n2>\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?|[IVXLCDM]+)\]|
+            (?P<s3>(?:Series|Saga|Chronicles?|Trilogy|Duology)\s+[\w\s]+?)(?:\s*(?:\#|Book|Bk\.?|Vol\.?|Volume|No\.?)\s*)?(?P<n3>\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?|[IVXLCDM]+)\b|
+            \b(?:Book|Bk|Vol|Volume)\b\.?[\s._]*(?P<n4>\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?|[IVXLCDM]+)\b
         )
     ").unwrap()
 });
@@ -115,9 +118,7 @@ fn clean_book_title(name: &str) -> String {
     let name = name.replace(['.', '_'], " ");
     let name = name.replace(" - ", " ");
     let name = normalize_spaces(&name);
-    name.trim_end_matches(['-', '–', '—', '.', '_'])
-        .trim()
-        .to_string()
+    cut_book_year(name.trim_end_matches(['-', '–', '—', '.', '_']).trim())
 }
 
 /// Try to extract author and title.
@@ -126,7 +127,7 @@ fn extract_author_title(name: &str) -> (Option<String>, String) {
     let cleaned = FORMAT_HINT_RE.replace_all(name, " ");
     let cleaned = SERIES_RE.replace_all(&cleaned, " ");
     let cleaned = RELEASE_GROUP_RE.replace(&cleaned, "");
-    let cleaned = normalize_spaces(&cleaned);
+    let cleaned = normalize_spaces(cut_book_tags(&cleaned));
 
     // Try splitting on " - " first (most reliable)
     if let Some(pos) = cleaned.find(" - ") {

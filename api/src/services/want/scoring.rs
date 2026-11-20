@@ -249,6 +249,16 @@ const EDITION_WORDS: &[&str] = &[
     "hybrid",
     "open",
     "matte",
+    "first",
+    "second",
+    "third",
+    "revised",
+    "expanded",
+    "updated",
+    "illustrated",
+    "annotated",
+    "deluxe",
+    "and",
 ];
 
 fn is_edition_word(token: &str) -> bool {
@@ -1460,30 +1470,8 @@ fn structural_reject_judged(
         return Some(StructuralRejectReason::TitleMismatch);
     }
 
-    if let MediaWant::Book {
-        title: wanted,
-        alternate_titles,
-        ..
-    } = media_want
-        && let ParsedMedia::Book(book) = &parsed.media
-        && !wanted.is_empty()
-        && !book.title.is_empty()
-        && !any_title_similar(wanted, alternate_titles.as_deref(), &book.title, false)
-    {
-        return Some(StructuralRejectReason::TitleMismatch);
-    }
-
-    if let MediaWant::Audiobook {
-        title: wanted,
-        alternate_titles,
-        ..
-    } = media_want
-        && let ParsedMedia::Audiobook(ab) = &parsed.media
-        && !wanted.is_empty()
-        && !ab.title.is_empty()
-        && !any_title_similar(wanted, alternate_titles.as_deref(), &ab.title, false)
-    {
-        return Some(StructuralRejectReason::TitleMismatch);
+    if let Some(reason) = book::reject(release, parsed, media_want) {
+        return Some(reason);
     }
 
     if let MediaWant::Game { title: wanted, .. } = media_want
@@ -1788,35 +1776,6 @@ fn structural_reject_judged(
         return Some(StructuralRejectReason::YearMismatch);
     }
 
-    // Book/Audiobook: reject if parsed author has no token overlap with wanted author
-    if let Some(wanted_author) = match media_want {
-        MediaWant::Book { author, .. } | MediaWant::Audiobook { author, .. } => author.as_deref(),
-        _ => None,
-    } && !wanted_author.is_empty()
-    {
-        let parsed_author = match &parsed.media {
-            ParsedMedia::Book(book) => book.author.as_deref(),
-            ParsedMedia::Audiobook(ab) => ab.author.as_deref(),
-            _ => None,
-        };
-        if let Some(parsed_author) = parsed_author
-            && !parsed_author.is_empty()
-        {
-            let wanted_tokens = normalize_author_tokens(wanted_author);
-            let parsed_tokens = normalize_author_tokens(parsed_author);
-            if !wanted_tokens.is_empty()
-                && !parsed_tokens.is_empty()
-                && wanted_tokens
-                    .iter()
-                    .filter(|t| parsed_tokens.iter().any(|pt| pt == *t))
-                    .count()
-                    == 0
-            {
-                return Some(StructuralRejectReason::AuthorMismatch);
-            }
-        }
-    }
-
     if let Some(verdict) = sport {
         return verdict.reject;
     }
@@ -2091,6 +2050,7 @@ pub fn group_by_target_id(
     by_target
 }
 
+mod book;
 #[cfg(test)]
 mod reference;
 mod sport;
@@ -2276,6 +2236,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2299,6 +2260,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -2322,6 +2284,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
 
         let bonus = structural_bonus(&release, Some(&media_want), None);
@@ -3152,6 +3115,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4297,6 +4261,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         assert_eq!(
             structural_reject(&release, Some(&mw), SearchContext::default()),
@@ -4318,6 +4283,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4338,6 +4304,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4348,7 +4315,7 @@ mod tests {
     #[test]
     fn test_structural_reject_book_no_parsed_author() {
         // Release with no author separator — parser can't extract author
-        let release = make_release("Mistborn.The.Final.Empire.EPUB");
+        let release = make_release("Brandon.Sanderson.Mistborn.The.Final.Empire.EPUB");
         let mw = MediaWant::Book {
             title: "Mistborn".to_string(),
             author: Some("Brandon Sanderson".to_string()),
@@ -4359,6 +4326,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         assert!(
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
@@ -4382,6 +4350,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         };
         // Audiobook parser may extract the author from `Author-Title` style
         // names; either a title_mismatch or author_mismatch is acceptable as
@@ -5716,6 +5685,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         }
     }
 
@@ -5731,6 +5701,7 @@ mod tests {
             series_position: None,
             release_date: None,
             alternate_titles: None,
+            other_titles: None,
         }
     }
 
@@ -5963,6 +5934,314 @@ mod tests {
         let release = make_release("J.K.Rowling-Harry.Potter.and.the.Philosophers.Stone.EPUB");
         let mw = book_want("Harry Potter and the Philosophers Stone");
         assert!(structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),);
+    }
+
+    struct BookCase {
+        title: &'static str,
+        author: Option<&'static str>,
+        year: Option<&'static str>,
+        position: Option<&'static str>,
+        others: &'static [&'static str],
+    }
+
+    impl BookCase {
+        /// The same want as an ebook and as an audiobook: every rule applies to both.
+        fn wants(&self) -> [MediaWant; 2] {
+            let mut ebook = book_want(self.title);
+            let mut audiobook = audiobook_want(self.title);
+            for want in [&mut ebook, &mut audiobook] {
+                if let MediaWant::Book {
+                    author,
+                    release_date,
+                    series_position,
+                    other_titles,
+                    ..
+                }
+                | MediaWant::Audiobook {
+                    author,
+                    release_date,
+                    series_position,
+                    other_titles,
+                    ..
+                } = want
+                {
+                    *author = self.author.map(str::to_string);
+                    *release_date = self.year.map(|y| format!("{y}-06-01"));
+                    *series_position = self.position.map(str::to_string);
+                    *other_titles = Some(self.others.iter().map(|t| t.to_string()).collect());
+                }
+            }
+            [ebook, audiobook]
+        }
+    }
+
+    const MICHAEL: BookCase = BookCase {
+        title: "Michael",
+        author: Some("Bob Mortimer"),
+        year: Some("2025"),
+        position: None,
+        others: &[
+            "The Satsuma Complex",
+            "The Clementine Complex",
+            "And Away...",
+        ],
+    };
+    const DUNE: BookCase = BookCase {
+        title: "Dune",
+        author: Some("Frank Herbert"),
+        year: Some("1965"),
+        position: Some("1"),
+        others: &[
+            "Dune Messiah",
+            "Children of Dune",
+            "Chapterhouse: Dune",
+            "Dune Messiah & Children Of Dune",
+            "Eye",
+        ],
+    };
+    const DUNE_MESSIAH: BookCase = BookCase {
+        title: "Dune Messiah",
+        author: Some("Frank Herbert"),
+        year: Some("1969"),
+        position: Some("2"),
+        others: &["Dune", "Children of Dune"],
+    };
+    const SOMETHING: BookCase = BookCase {
+        title: "Something",
+        author: Some("Bob Mortimer"),
+        year: None,
+        position: None,
+        others: &[],
+    };
+    const AUTHORLESS_WANT: BookCase = BookCase {
+        title: "Michael",
+        author: None,
+        year: None,
+        position: None,
+        others: &[],
+    };
+
+    fn release_by(title: &str, indexer_author: Option<&str>) -> Release {
+        let mut release = make_release(title);
+        release.media = indexer_author.map(|a| crate::watch::types::ReleaseMedia::Book {
+            author: Some(a.to_string()),
+        });
+        release
+    }
+
+    #[test]
+    fn test_book_release_matching_rules() {
+        // (release, indexer author, want, accept). Regression: a want for
+        // "Michael" by Bob Mortimer grabbed the Danish "Mumien" by Michael Katz
+        // Krefeld at score 1.0.
+        let cases: &[(&str, Option<&str>, &BookCase, bool)] = &[
+            // No author in the release: exact title, and a year near publication.
+            (
+                "Michael.Katz.Krefeld.Mumien.2026.DANiSH.RETAiL.ePub.eBOOK-DECiPHER-FTP",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Michael.Katz.Krefeld.Mumien.DANiSH.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Michael.Katz.Krefeld.Mumien.2026.MP3-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Michael.Katz.Krefeld.Mumien.2026.DANiSH.RETAiL.ePub.eBOOK-DECiPHER-FTP",
+                None,
+                &AUTHORLESS_WANT,
+                false,
+            ),
+            (
+                "Michael.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            ("Michael.RETAiL.ePub.eBOOK-DECiPHER", None, &MICHAEL, true),
+            (
+                "Michael.2019.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Michael.2031.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Something.First.Edition.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &SOMETHING,
+                true,
+            ),
+            (
+                "Something.Revised.and.Expanded.Edition.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &SOMETHING,
+                true,
+            ),
+            // The indexer's author is evidence either way.
+            (
+                "Michael.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                Some("Michael Katz Krefeld"),
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Michael.A.Novel.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                Some("Bob Mortimer"),
+                &MICHAEL,
+                true,
+            ),
+            // Author in the name: extra words are fine, a pre-publication year is not.
+            (
+                "Bob.Mortimer.Michael.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            (
+                "Bob.Mortimer.Michael.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            (
+                "Bob.Mortimer-Michael.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            ("Bob Mortimer - Michael (2025) [EPUB]", None, &MICHAEL, true),
+            (
+                "Michael.Bob.Mortimer.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            (
+                "Bob.Mortimer.Michael.2025.UNABRIDGED.MP3-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            (
+                "Bob.Mortimer.Michael.A.Novel.2025.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                true,
+            ),
+            (
+                "Bob.Mortimer.Michael.2019.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            (
+                "Bob.Mortimer.The.Satsuma.Complex.2022.RETAiL.ePub.eBOOK-DECiPHER",
+                None,
+                &MICHAEL,
+                false,
+            ),
+            // Reprints are later than the original; other books in the series are not this one.
+            (
+                "Frank.Herbert.Dune.1965.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                true,
+            ),
+            (
+                "Frank.Herbert.Dune.2019.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                true,
+            ),
+            (
+                "Frank.Herbert.Dune.40th.Anniversary.Edition.2005.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                true,
+            ),
+            (
+                "Frank.Herbert.Dune.1.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                true,
+            ),
+            (
+                "Frank.Herbert.Dune.Messiah.1969.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                false,
+            ),
+            (
+                "Frank.Herbert.Dune.Messiah.and.Children.of.Dune.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                false,
+            ),
+            (
+                "Frank.Herbert-Dune.2.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                false,
+            ),
+            (
+                "Frank.Herbert.Dune.Book.2.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                false,
+            ),
+            ("Frank Herbert - Dune Part Two [EPUB]", None, &DUNE, false),
+            (
+                "Frank.Herbert.Dune.II.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE,
+                false,
+            ),
+            (
+                "Frank.Herbert.Dune.Messiah.1969.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE_MESSIAH,
+                true,
+            ),
+            (
+                "Frank.Herbert.Dune.1965.RETAiL.ePub.eBOOK-GRP",
+                None,
+                &DUNE_MESSIAH,
+                false,
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (title, indexer_author, case, accept) in cases {
+            for want in case.wants() {
+                let verdict = structural_reject(
+                    &release_by(title, *indexer_author),
+                    Some(&want),
+                    SearchContext::default(),
+                );
+                if verdict.is_none() != *accept {
+                    let kind = if matches!(want, MediaWant::Book { .. }) {
+                        "ebook"
+                    } else {
+                        "audiobook"
+                    };
+                    failures.push(format!("{kind} {title} by {indexer_author:?} for {}: expected accept={accept}, got {verdict:?}", case.title));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     // ── Audiobook ────────────────────────────────────────────────────

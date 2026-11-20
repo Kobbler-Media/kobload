@@ -238,6 +238,32 @@ pub fn clean_pre_year_title(name: &str) -> String {
         .to_string()
 }
 
+/// Tags that open the tail of a book/audiobook scene name
+/// (`Author.Title.2026.RETAiL.ePub.eBOOK-GRP`). Language names are left out:
+/// they are real title words ("The English Patient").
+static BOOK_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)[\s._\-\(\[](?:retail|e-?pub|e-?book|mobi|azw3?|kepub|pdf|cbr|cbz|fb2|unabridged|abridged|audiobook|m4b|mp3|flac)(?:[\s._\-\)\]]|$)",
+    )
+    .unwrap()
+});
+
+pub fn cut_book_tags(name: &str) -> &str {
+    BOOK_TAG_RE.find(name).map_or(name, |m| &name[..m.start()])
+}
+
+/// A year after the first word ends a book title; a leading one is the title
+/// ("1984", "1922").
+pub fn cut_book_year(title: &str) -> String {
+    let title = match YEAR_RE.find(title) {
+        Some(m) if m.start() > 0 => &title[..m.start()],
+        _ => title,
+    };
+    title
+        .trim_end_matches(['-', '–', '—', '.', '_', '(', '[', ' '])
+        .to_string()
+}
+
 /// Clean an audiobook title — lighter than `clean_title`, only removes
 /// extensions, release groups, and normalizes spacing. Does NOT strip
 /// quality tokens (which would false-positive on words like "Greek",

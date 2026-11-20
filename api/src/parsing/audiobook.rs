@@ -9,7 +9,10 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::common::{clean_audiobook_title, extract_year, normalize_spaces, remove_extension};
+use super::common::{
+    clean_audiobook_title, cut_book_tags, cut_book_year, extract_year, normalize_spaces,
+    remove_extension,
+};
 use super::types::{AudiobookParsed, ParsedMedia};
 
 // =============================================================================
@@ -59,7 +62,7 @@ static SERIES_RE: LazyLock<Regex> = LazyLock::new(|| {
         (?:
             \((?P<s1>[^)]+?)(?:\s*(?:\#|Book|Vol\.?)\s*)?(?P<n1>\d+(?:-\d+)?)\)|
             \[(?P<s2>[^\]]+?)(?:\s*(?:\#|Book|Vol\.?)\s*)?(?P<n2>\d+(?:-\d+)?)\]|
-            (?:Book|Vol\.?)\s*(?P<n3>\d+(?:-\d+)?)
+            \b(?:Book|Vol)\b\.?[\s._]*(?P<n3>\d+(?:-\d+)?)\b
         )
     ",
     )
@@ -173,7 +176,7 @@ fn extract_author_title(name: &str) -> (Option<String>, String) {
     let cleaned = UNABRIDGED_RE.replace_all(&cleaned, " ");
     let cleaned = ABRIDGED_RE.replace_all(&cleaned, " ");
     let cleaned = EMPTY_PARENS_RE.replace_all(&cleaned, " ");
-    let cleaned = normalize_spaces(&cleaned);
+    let cleaned = normalize_spaces(cut_book_tags(&cleaned));
 
     // Try splitting on " - " (Author - Title)
     if let Some(pos) = cleaned.find(" - ") {
@@ -183,7 +186,7 @@ fn extract_author_title(name: &str) -> (Option<String>, String) {
         // Reject if "author" is purely digits (it's a track number, not a name)
         let is_digit_only = author.chars().all(|c| c.is_ascii_digit());
         if !is_digit_only && author.split_whitespace().count() <= 5 && !title.is_empty() {
-            return (Some(author), clean_audiobook_title(&title));
+            return (Some(author), cut_book_year(&clean_audiobook_title(&title)));
         }
     }
 
@@ -192,11 +195,11 @@ fn extract_author_title(name: &str) -> (Option<String>, String) {
         let by_pos = BY_AUTHOR_RE.find(&cleaned).unwrap().start();
         let title = normalize_spaces(&cleaned[..by_pos]);
         if !title.is_empty() {
-            return (Some(author), clean_audiobook_title(&title));
+            return (Some(author), cut_book_year(&clean_audiobook_title(&title)));
         }
     }
 
-    (None, clean_audiobook_title(&cleaned))
+    (None, cut_book_year(&clean_audiobook_title(&cleaned)))
 }
 
 /// Extract author from "Title by Author.Name" pattern.
