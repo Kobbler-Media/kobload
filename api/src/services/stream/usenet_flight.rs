@@ -129,6 +129,7 @@ async fn run(job: ImportJob) -> Imported {
             }
             match usenet_nzb::fetch(&job.http_client, &job.download_url).await {
                 Ok(nzb) => {
+                    remember_par2(&job, usenet_nzb::has_par2(&nzb)).await;
                     request.nzb_base64 = Some(STANDARD.encode(nzb));
                     job.handler.usenet_import(&request).await
                 }
@@ -193,6 +194,12 @@ async fn remember_import(job: &ImportJob, imported: &ImportResponse) {
     usenet_files::store(key, imported.outputs.clone());
     record_probe(&job.pool, job.provider_id, key, Some(&job.name), None).await;
     info!(release_key = %key, outputs = imported.outputs.len(), "Usenet release imported");
+}
+
+async fn remember_par2(job: &ImportJob, has_par2: bool) {
+    if let Err(e) = usenet_releases::set_has_par2(&job.pool, &job.nzb_ref, has_par2).await {
+        warn!(error = %e, "Failed to remember whether an NZB has PAR2 files");
+    }
 }
 
 async fn remember_refusal(job: &ImportJob, message: &str) {

@@ -21,7 +21,9 @@ use kobload_api::usenet::{EngineSettings, UsenetEngine};
 use kobload_api::watch::Release;
 use nats_jobs::NzbRef;
 use nats_jobs::types::{StreamOption, StreamSourceType};
-use usenet_proto::{ImportRequest, ImportResponse, OutputInfo, Purpose, StreamClaims};
+use usenet_proto::{
+    HealthSample, ImportRequest, ImportResponse, OutputInfo, Purpose, StreamClaims,
+};
 
 pub const CONTROL_KEY: &str = "control-key-under-test-control-key-under-test";
 pub const STREAM_SECRET: &str = "stream-secret-under-test-stream-secret-under-test";
@@ -44,6 +46,10 @@ struct EngineState {
     rejected: HashMap<String, (StatusCode, String)>,
     delay: Duration,
     release_delay: Duration,
+    guid_of: HashMap<String, String>,
+    health: HashMap<String, HealthSample>,
+    health_calls: Vec<(String, Option<u8>)>,
+    health_delay: Duration,
 }
 
 fn posted_guid(nzb: &[u8]) -> String {
@@ -111,8 +117,49 @@ async fn import(
         outputs,
     };
     s.by_cache_key.insert(req.cache_key, response.clone());
-    s.by_release_key.insert(release_key, response.clone());
+    s.by_release_key
+        .insert(release_key.clone(), response.clone());
+    s.guid_of.insert(release_key, guid);
     Json(response).into_response()
+}
+
+const HEALTHY: HealthSample = HealthSample {
+    checked: 20,
+    missing: 0,
+};
+
+async fn health(
+    State(state): State<Arc<Mutex<EngineState>>>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> axum::response::Response {
+    if !authorized(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let percent = query.get("percent").and_then(|p| p.parse().ok());
+    let delay = {
+        let mut s = state.lock().unwrap();
+        let guid = s.guid_of.get(&key).cloned().unwrap_or_default();
+        s.health_calls.push((guid, percent));
+        s.health_delay
+    };
+    tokio::time::sleep(delay).await;
+    let s = state.lock().unwrap();
+    if !s.by_release_key.contains_key(&key) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_release" })),
+        )
+            .into_response();
+    }
+    let sample = s
+        .guid_of
+        .get(&key)
+        .and_then(|guid| s.health.get(guid))
+        .copied()
+        .unwrap_or(HEALTHY);
+    Json(sample).into_response()
 }
 
 async fn release(
@@ -137,6 +184,7 @@ impl MockEngine {
         let app = Router::new()
             .route("/v1/import", post(import))
             .route("/v1/releases/{key}", get(release))
+            .route("/v1/releases/{key}/health", post(health))
             .route("/healthz", get(|| async { "ok" }))
             .with_state(state.clone());
         Self {
@@ -202,6 +250,22 @@ impl MockEngine {
         );
     }
 
+    pub fn health(&self, guid: &str, sample: HealthSample) {
+        self.state
+            .lock()
+            .unwrap()
+            .health
+            .insert(guid.to_string(), sample);
+    }
+
+    pub fn health_delay(&self, delay: Duration) {
+        self.state.lock().unwrap().health_delay = delay;
+    }
+
+    pub fn health_calls(&self) -> Vec<(String, Option<u8>)> {
+        self.state.lock().unwrap().health_calls.clone()
+    }
+
     pub fn delay(&self, delay: Duration) {
         self.state.lock().unwrap().delay = delay;
     }
@@ -231,6 +295,7 @@ impl MockEngine {
 pub enum Served {
     Status(StatusCode),
     Huge,
+    WithPar2,
 }
 
 #[derive(Default)]
@@ -266,6 +331,10 @@ async fn nzb(
                 (0..130).map(move |_| Ok::<_, std::io::Error>(chunk.clone())),
             );
             axum::body::Body::from_stream(body).into_response()
+        }
+        Some(Served::WithPar2) => {
+            format!("<nzb><file subject=\"{guid}\"/><file subject=\"{guid}.vol00+01.PAR2\"/></nzb>")
+                .into_response()
         }
         None => format!("<nzb><file subject=\"{guid}\"/></nzb>").into_response(),
     }

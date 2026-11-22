@@ -4,12 +4,14 @@
 //! engine without either side sharing provider credentials or indexer keys.
 
 mod config;
+mod health;
 mod import;
 mod jobs;
 mod secret;
 mod token;
 
 pub use config::{EngineConfigResponse, IpPreference, UsenetServer};
+pub use health::HealthSample;
 pub use import::{ImportMode, ImportRequest, ImportResponse, OutputInfo};
 pub use jobs::{JobFailure, JobRequest, JobState, JobStatus};
 pub use secret::{MIN_SECRET_BYTES, SecretError, check_secrets, keys_match};

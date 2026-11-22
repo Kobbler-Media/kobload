@@ -38,5 +38,6 @@ usenet-proto = { path = "../usenet-proto" }
 [dev-dependencies]
 http-body-util = "0.1.5"
 kob-usenet = { path = "../../koblibs/kob-usenet", features = ["testkit"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "query"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }

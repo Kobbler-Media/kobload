@@ -16,6 +16,14 @@ async fn control_routes_need_the_bearer() {
     let routes = [
         ("POST", "/v1/import".to_owned()),
         ("GET", format!("/v1/releases/nzb-{}", "0".repeat(64))),
+        (
+            "POST",
+            format!("/v1/releases/nzb-{}/health", "0".repeat(64)),
+        ),
+        ("POST", "/v1/jobs".to_owned()),
+        ("GET", "/v1/jobs".to_owned()),
+        ("GET", "/v1/jobs/some-job".to_owned()),
+        ("DELETE", "/v1/jobs/some-job?delete_files=true".to_owned()),
     ];
 
     for (method, uri) in &routes {

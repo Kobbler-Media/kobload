@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -7,6 +8,7 @@ use kob_usenet::Engine;
 use crate::damage::Damage;
 
 pub const BYTE_GAP: Duration = Duration::from_secs(7);
+pub const DEFAULT_DOWNLOAD_DIR: &str = "/downloads";
 
 #[derive(Clone, Default)]
 pub struct Configured(Arc<AtomicBool>);
@@ -31,6 +33,7 @@ pub struct AppState {
     pub(crate) byte_gap: Duration,
     pub(crate) configured: Configured,
     pub(crate) damage: Arc<Damage>,
+    pub(crate) download_dir: Arc<Path>,
 }
 
 impl AppState {
@@ -44,12 +47,19 @@ impl AppState {
             byte_gap: BYTE_GAP,
             configured: Configured::default(),
             damage: Arc::default(),
+            download_dir: PathBuf::from(DEFAULT_DOWNLOAD_DIR).into(),
         }
     }
 
     #[must_use]
     pub fn with_metrics_key(mut self, metrics_key: Option<&str>) -> Self {
         self.metrics_key = metrics_key.map(Into::into);
+        self
+    }
+
+    #[must_use]
+    pub fn with_download_dir(mut self, download_dir: &Path) -> Self {
+        self.download_dir = download_dir.into();
         self
     }
 

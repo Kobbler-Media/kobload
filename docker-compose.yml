@@ -130,13 +130,18 @@ services:
       USENET_STREAM_SECRET: ${USENET_STREAM_SECRET:-}
       USENET_METRICS_KEY: ${USENET_METRICS_KEY:-}
       USENET_MIN_CONNECTIONS: ${USENET_MIN_CONNECTIONS:-4}
+      # Finished downloads land in <USENET_DOWNLOAD_DIR>/<category>. kobload-api reads them by
+      # the path the engine reports, so this must sit under the api's downloads mount.
+      USENET_DOWNLOAD_DIR: ${USENET_DOWNLOAD_DIR:-/downloads}
+      USENET_FREE_SPACE_FLOOR_GB: ${USENET_FREE_SPACE_FLOOR_GB:-1}
+      USENET_ACTIVE_JOBS: ${USENET_ACTIVE_JOBS:-2}
       RUST_LOG: ${USENET_RUST_LOG:-info}
     # Idle pooled NNTP connections otherwise restart TCP slow start: at ~210 ms RTT that took
     # an import's first articles from 1.5 s to 4.0 s.
     sysctls:
       net.ipv4.tcp_slow_start_after_idle: 0
     # The image runs as uid/gid 10001; set these to the owner of KOBLOAD_DOWNLOADS so the
-    # engine can write finished downloads there (chown the usenet_data volume to match).
+    # engine can write finished downloads there, and chown the usenet_data volume to match.
     user: "${USENET_UID:-10001}:${USENET_GID:-10001}"
     # Loopback by default: the stream port serves anyone holding a signed URL, so publish it
     # only on the LAN address kobbler reaches it at (USENET_BIND), never on all interfaces.

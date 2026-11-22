@@ -1,13 +1,19 @@
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use usenet_proto::{ImportRequest, ImportResponse, JobRequest, JobStatus, Purpose, StreamClaims};
+use usenet_proto::{
+    HealthSample, ImportRequest, ImportResponse, JobRequest, JobStatus, Purpose, StreamClaims,
+};
 
 /// kobbler keeps a resolved URL this long before it resolves again.
 pub const STREAM_TTL: Duration = Duration::from_secs(6 * 3600);
 
 /// A pack import reads the first segment of every file before it answers.
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// A 5% STAT sample of a season pack runs to thousands of STATs on the health lane, which
+/// yields to every other workload.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct EngineSettings {
@@ -125,6 +131,25 @@ impl UsenetEngine {
                 self.settings.engine_url
             ))
             .bearer_auth(&self.settings.control_key)
+            .send()
+            .await?;
+        decode(resp).await
+    }
+
+    pub async fn sample_health(
+        &self,
+        release_key: &str,
+        percent: u8,
+    ) -> Result<HealthSample, EngineError> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/v1/releases/{release_key}/health",
+                self.settings.engine_url
+            ))
+            .query(&[("percent", percent)])
+            .bearer_auth(&self.settings.control_key)
+            .timeout(HEALTH_TIMEOUT)
             .send()
             .await?;
         decode(resp).await

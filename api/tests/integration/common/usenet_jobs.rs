@@ -25,6 +25,7 @@ pub struct EngineJobs {
     pub added: Mutex<Vec<JobRequest>>,
     pub deleted: Mutex<Vec<(String, bool)>>,
     pub unauthorized: Mutex<usize>,
+    pub poll_status: Mutex<Option<StatusCode>>,
 }
 
 impl EngineJobs {
@@ -84,6 +85,9 @@ async fn status(
 ) -> axum::response::Response {
     if !engine.authorized(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if let Some(status) = *engine.poll_status.lock().unwrap() {
+        return (status, Json(json!({ "error": "providers_unavailable" }))).into_response();
     }
     match engine.jobs.lock().unwrap().get(&id) {
         Some(job) => Json(job.clone()).into_response(),
@@ -280,6 +284,10 @@ impl EngineFixture {
                 failure: None,
             },
         );
+    }
+
+    pub fn answer_polls_with(&self, status: Option<StatusCode>) {
+        *self.engine.poll_status.lock().unwrap() = status;
     }
 
     pub fn added(&self) -> Vec<JobRequest> {

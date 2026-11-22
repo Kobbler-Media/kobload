@@ -24,13 +24,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_env()?;
     let mut config = EngineConfig::new(settings.data_dir.clone(), Vec::new());
     config.min_connections = settings.min_connections;
+    config.download.free_space_floor = settings.free_space_floor;
+    config.download.active_jobs = settings.active_jobs;
     let engine = Arc::new(Engine::new(config).await?);
     let state = AppState::new(
         Arc::clone(&engine),
         &settings.control_key,
         settings.stream_secret.as_bytes(),
     )
-    .with_metrics_key(settings.metrics_key.as_deref());
+    .with_metrics_key(settings.metrics_key.as_deref())
+    .with_download_dir(&settings.download_dir);
     let mut pull = ConfigPull::new(
         engine,
         &settings.kobload_url,
@@ -47,7 +50,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = router(state);
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, settings.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, data_dir = %settings.data_dir.display(), kobload = settings.kobload_url, "serving");
+    tracing::info!(
+        %addr,
+        data_dir = %settings.data_dir.display(),
+        download_dir = %settings.download_dir.display(),
+        kobload = settings.kobload_url,
+        "serving"
+    );
     tokio::select! {
         served = axum::serve(listener, app).into_future() => served?,
         () = terminated() => tracing::info!("shutting down"),

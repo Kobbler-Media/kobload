@@ -3,9 +3,9 @@ use std::fmt::Write as _;
 use axum::extract::State;
 use axum::http::header;
 use axum::response::IntoResponse;
-use kob_usenet::ProviderStats;
 use kob_usenet::vendor::core::trace::Outcome;
 use kob_usenet::vendor::nntp::Workload;
+use kob_usenet::{JobStatus, ProviderStats};
 
 use crate::damage::{Damage, ReadFailure};
 use crate::state::AppState;
@@ -13,12 +13,60 @@ use crate::state::AppState;
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        render(&state.engine.stats(), &state.damage),
+        render(
+            &state.engine.stats(),
+            &state.damage,
+            &state.engine.jobs(),
+            state.engine.paused_for_space(),
+        ),
     )
 }
 
-fn render(providers: &[ProviderStats], damage: &Damage) -> String {
+const JOB_STATES: [(kob_usenet::JobState, &str); 7] = {
+    use kob_usenet::JobState as S;
+    [
+        (S::Queued, "queued"),
+        (S::Downloading, "downloading"),
+        (S::Verifying, "verifying"),
+        (S::Repairing, "repairing"),
+        (S::Unpacking, "unpacking"),
+        (S::Completed, "completed"),
+        (S::Failed, "failed"),
+    ]
+};
+
+fn render_jobs(out: &mut String, jobs: &[JobStatus], paused_for_space: bool) {
+    family(
+        out,
+        "kobload_usenet_jobs",
+        "gauge",
+        "Download jobs by state.",
+    );
+    for (state, label) in JOB_STATES {
+        let count = jobs.iter().filter(|j| j.state == state).count();
+        let _ = writeln!(out, "kobload_usenet_jobs{{state=\"{label}\"}} {count}");
+    }
+    family(
+        out,
+        "kobload_usenet_paused_for_space",
+        "gauge",
+        "1 while downloads wait for free space above the floor.",
+    );
+    let _ = writeln!(
+        out,
+        "kobload_usenet_paused_for_space {}",
+        u8::from(paused_for_space)
+    );
+}
+
+fn render(
+    providers: &[ProviderStats],
+    damage: &Damage,
+    jobs: &[JobStatus],
+    paused_for_space: bool,
+) -> String {
     let mut out = String::new();
+    render_jobs(&mut out, jobs, paused_for_space);
     family(
         &mut out,
         "kobload_usenet_stream_failures_total",

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use kob_usenet::vendor::testkit::{Article, LoopbackServer, post};
-use kob_usenet::{Engine, EngineConfig, IpPreference, ServerConfig};
+use kob_usenet::{DownloadConfig, Engine, EngineConfig, IpPreference, ServerConfig};
 use kobload_usenet::{AppState, router};
 use tower::ServiceExt;
 use usenet_proto::{ImportMode, ImportRequest, ImportResponse, Purpose, StreamClaims};
@@ -149,8 +149,19 @@ pub async fn warm_engine(
     Arc::new(Engine::new(config).await.expect("engine"))
 }
 
+pub fn quick_retries(retry_attempts: u32) -> DownloadConfig {
+    DownloadConfig {
+        free_space_floor: 1 << 20,
+        retry_after: Duration::from_millis(100),
+        retry_max: Duration::from_millis(200),
+        retry_attempts,
+        ..DownloadConfig::default()
+    }
+}
+
 pub struct Harness {
     pub app: Router,
+    pub downloads: PathBuf,
 }
 
 impl Harness {
@@ -159,12 +170,36 @@ impl Harness {
     }
 
     pub async fn with_gap(dir: &Path, nntp: &LoopbackServer, gap: Duration) -> Self {
-        let engine = engine(dir, vec![server("a", nntp)]).await;
+        Self::build(dir, nntp, gap, quick_retries(12)).await
+    }
+
+    pub async fn with_download(
+        dir: &Path,
+        nntp: &LoopbackServer,
+        download: DownloadConfig,
+    ) -> Self {
+        Self::build(dir, nntp, kobload_usenet::BYTE_GAP, download).await
+    }
+
+    async fn build(
+        dir: &Path,
+        nntp: &LoopbackServer,
+        gap: Duration,
+        download: DownloadConfig,
+    ) -> Self {
+        let mut config = EngineConfig::new(dir.join("engine"), vec![server("a", nntp)]);
+        config.download = download;
+        let engine = Arc::new(Engine::new(config).await.expect("engine"));
+        let downloads = dir.join("downloads");
         let state = AppState::new(engine, CONTROL, SECRET)
             .with_byte_gap(gap)
-            .with_metrics_key(Some(METRICS));
+            .with_metrics_key(Some(METRICS))
+            .with_download_dir(&downloads);
         state.configured().set();
-        Self { app: router(state) }
+        Self {
+            app: router(state),
+            downloads,
+        }
     }
 
     pub async fn send(&self, request: Request<Body>) -> Response<Body> {

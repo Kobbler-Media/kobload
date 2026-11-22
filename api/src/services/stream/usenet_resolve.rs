@@ -7,6 +7,7 @@ use super::attempt_log::{AttemptLog, Origin, Started, Step};
 use super::resolve::{StreamResolveContext, lane};
 use super::service::StreamSearchError;
 use super::usenet_flight::{self, ImportJob};
+use super::usenet_health::{self, Sampled};
 use super::usenet_warm;
 use crate::debrid::{DebridProvider, Throttled};
 use crate::repositories::stream_attempts::Change;
@@ -117,6 +118,14 @@ pub async fn resolve(
         Purpose::Warm
     };
     let response = response(&engine, &imported, output, purpose);
+    usenet_health::spawn(Sampled {
+        pool: ctx.pool.clone(),
+        engine,
+        provider_id: request.debrid_provider_id,
+        release_key: imported.release_key.clone(),
+        file_id: response.file_id,
+        release_title: request.release_title.clone().or(release.release_title),
+    });
     log.record(
         Step::Ready,
         format!("Stream ready: {}", response.filename),

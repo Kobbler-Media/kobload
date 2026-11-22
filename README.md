@@ -15,6 +15,7 @@ do with what it retrieves, is your responsibility under the laws that apply to y
 
 - **Pluggable indexers** — Prowlarr, direct Newznab/Torznab, MyAnonaMouse, TorrentDay, and Cardigann YAML definitions (auto-downloaded from Prowlarr's definition repo)
 - **Pluggable download clients** — Transmission (torrents), SABnzbd (usenet), and debrid providers (Real-Debrid, AllDebrid, Premiumize, TorBox)
+- **Built-in usenet engine** (optional) — streams usenet releases on demand and downloads NZBs with PAR2 repair and unpacking, over one connection pool with provider priority tiers; see [docs/usenet-engine.md](docs/usenet-engine.md)
 - **Release interpretation** — parses release names and file paths into structured metadata for TV, movies, books, audiobooks, music, games, software and sports
 - **Quality profiles** — resolution, codec, source, audio and language preferences with scoring and upgrade rules
 - **Watch patterns** — standing searches that fire when a matching release appears
@@ -95,6 +96,8 @@ Kobload also needs **filesystem access to completed downloads** so it can stream
 
 Neither side is required: Kobload runs standalone and its API is generic.
 
+The optional usenet engine (compose profile `usenet`) adds usenet streaming for Kobbler and can replace SABnzbd for downloads. Setup, server tiers and connection caps are in [docs/usenet-engine.md](docs/usenet-engine.md).
+
 ## Configuration
 
 Copy `.env.example` to `.env`. It documents every variable the compose files consume; the ones you will actually care about:
@@ -110,6 +113,7 @@ Copy `.env.example` to `.env`. It documents every variable the compose files con
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | `admin@localhost` / *(generated)* | Admin account created on first boot; ignored once any user exists |
 | `PROWLARR_BASE_URL` / `PROWLARR_API_KEY` | *(none)* | Optional Prowlarr aggregator |
 | `KOBLOAD_PORT` / `KOBLOAD_WEB_PORT` | `7080` / `5174` | Host ports |
+| `USENET_*` | *(off)* | Optional built-in usenet engine; see [docs/usenet-engine.md](docs/usenet-engine.md) |
 
 Indexers, download clients and quality profiles are configured in the web UI under Settings, not through environment variables.
 

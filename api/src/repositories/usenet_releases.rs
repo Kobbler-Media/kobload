@@ -134,6 +134,34 @@ where
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn set_has_par2<'e, E>(exec: E, nzb_ref: &NzbRef, has_par2: bool) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query!(
+        "UPDATE usenet_releases SET has_par2 = $2 WHERE ref_key = $1",
+        nzb_ref.guid,
+        has_par2,
+    )
+    .execute(exec)
+    .await?;
+    Ok(())
+}
+
+/// Any listing of the release whose NZB was seen with PAR2 files says the post has them.
+pub async fn has_par2<'e, E>(exec: E, release_key: &str) -> Result<Option<bool>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let has_par2 = sqlx::query_scalar!(
+        "SELECT bool_or(has_par2) FROM usenet_releases WHERE release_key = $1",
+        release_key,
+    )
+    .fetch_one(exec)
+    .await?;
+    Ok(has_par2)
+}
+
 pub async fn aliases<'e, E>(exec: E, release_key: &str) -> Result<Vec<NzbRef>>
 where
     E: Executor<'e, Database = Postgres>,

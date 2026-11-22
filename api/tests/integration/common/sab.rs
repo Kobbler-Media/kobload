@@ -16,12 +16,21 @@ use kobload_api::repositories::downloads as downloads_repo;
 pub struct MockSab {
     pub history: Mutex<Vec<Value>>,
     pub deleted: Mutex<Vec<String>>,
+    pub answer: Mutex<Option<axum::http::StatusCode>>,
 }
 
 async fn sab_api(
     State(sab): State<Arc<MockSab>>,
     Query(q): Query<HashMap<String, String>>,
-) -> Json<Value> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if let Some(status) = *sab.answer.lock().unwrap() {
+        return status.into_response();
+    }
+    sab_answer(&sab, &q).into_response()
+}
+
+fn sab_answer(sab: &MockSab, q: &HashMap<String, String>) -> Json<Value> {
     let mode = q.get("mode").map(String::as_str).unwrap_or_default();
     if q.get("name").map(String::as_str) == Some("delete") {
         let id = q.get("value").cloned().unwrap_or_default();

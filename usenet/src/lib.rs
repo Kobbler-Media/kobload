@@ -1,7 +1,9 @@
 mod auth;
 mod damage;
 mod error;
+mod health;
 mod import;
+mod jobs;
 mod logging;
 mod metrics;
 mod pull;
@@ -15,4 +17,4 @@ pub use logging::init_logging;
 pub use pull::{ConfigPull, PullError, Pulled};
 pub use routes::router;
 pub use settings::{Settings, SettingsError};
-pub use state::{AppState, BYTE_GAP, Configured};
+pub use state::{AppState, BYTE_GAP, Configured, DEFAULT_DOWNLOAD_DIR};

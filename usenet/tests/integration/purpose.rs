@@ -81,3 +81,30 @@ async fn play_reads_land_on_the_stream_workload_and_warm_reads_on_warm() {
         ) > 0
     );
 }
+
+#[tokio::test]
+async fn cache_ahead_reads_land_on_the_cache_workload() {
+    let fixture = Fixture::season();
+    let nntp = LoopbackServer::start(fixture.articles()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Harness::new(dir.path(), &nntp).await;
+    let release = harness.import(&fixture, "idx:guid").await;
+    let (stream, cache) = (
+        attempts(&harness, "stream").await,
+        attempts(&harness, "cache").await,
+    );
+
+    let index = output(&release, "Show.S01E01.mkv");
+    let response = harness
+        .stream(
+            "GET",
+            &token(&release.release_key, index, Purpose::Cache),
+            Some("bytes=40000-"),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(collect(response).await.1, None);
+
+    assert!(attempts(&harness, "cache").await > cache);
+    assert_eq!(attempts(&harness, "stream").await, stream);
+}

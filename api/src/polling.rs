@@ -492,8 +492,7 @@ pub async fn poll_once(state: &AppState) {
         let poll_result = match poll_result {
             Ok(result) => result,
             Err(err) => {
-                let is_connection_error = matches!(&err, DownloadClientError::Request(_));
-                if is_connection_error {
+                if err.is_transient() {
                     let _ = downloads_repo::update_poll_status(
                         &state.pool,
                         download.id,
