@@ -1046,7 +1046,7 @@ export type StreamAttempt = {
   provider_id: string;
   provider_name: string;
   origin: 'play' | 'warm';
-  info_hash: string;
+  release_key: string;
   file_id: number | null;
   release_title: string | null;
   file_name: string | null;

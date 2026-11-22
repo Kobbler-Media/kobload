@@ -14,7 +14,7 @@ pub struct StreamAttempt {
     pub provider_id: Uuid,
     pub provider_name: String,
     pub origin: String,
-    pub info_hash: String,
+    pub release_key: String,
     pub file_id: Option<i32>,
     pub release_title: Option<String>,
     pub file_name: Option<String>,
@@ -43,7 +43,7 @@ pub struct StreamAttemptEvent {
 pub struct NewAttempt<'a> {
     pub provider_id: Uuid,
     pub origin: &'a str,
-    pub info_hash: &'a str,
+    pub release_key: &'a str,
     pub file_id: Option<i32>,
     pub release_title: Option<&'a str>,
     pub file_name: Option<&'a str>,
@@ -79,12 +79,12 @@ pub struct ListFilter<'a> {
 
 pub async fn insert(pool: &PgPool, new: &NewAttempt<'_>) -> Result<Uuid> {
     let id = sqlx::query_scalar!(
-        r#"INSERT INTO stream_attempts (provider_id, origin, info_hash, file_id, release_title, file_name)
+        r#"INSERT INTO stream_attempts (provider_id, origin, release_key, file_id, release_title, file_name)
            VALUES ($1, $2, $3, $4, $5, $6)
            RETURNING id"#,
         new.provider_id,
         new.origin,
-        new.info_hash,
+        new.release_key,
         new.file_id,
         new.release_title,
         new.file_name,
@@ -133,7 +133,7 @@ pub async fn list(pool: &PgPool, filter: &ListFilter<'_>) -> Result<Vec<StreamAt
     let search = filter.search.map(|s| format!("%{s}%"));
     let rows = sqlx::query_as!(
         StreamAttempt,
-        r#"SELECT a.id, a.provider_id, p.name AS provider_name, a.origin, a.info_hash, a.file_id,
+        r#"SELECT a.id, a.provider_id, p.name AS provider_name, a.origin, a.release_key, a.file_id,
                   a.release_title, a.file_name, a.status, a.cached, a.progress, a.torrent_id,
                   a.error, a.created_at, a.updated_at, a.ready_at
            FROM stream_attempts a
@@ -141,7 +141,7 @@ pub async fn list(pool: &PgPool, filter: &ListFilter<'_>) -> Result<Vec<StreamAt
            WHERE ($1::uuid IS NULL OR a.id = $1)
              AND ($2::text IS NULL OR a.status = $2)
              AND ($3::text IS NULL OR a.release_title ILIKE $3 OR a.file_name ILIKE $3
-                  OR a.info_hash ILIKE $3)
+                  OR a.release_key ILIKE $3)
              AND ($4::timestamptz IS NULL OR a.created_at < $4)
            ORDER BY a.created_at DESC
            LIMIT $5"#,
@@ -198,18 +198,18 @@ pub async fn caching_for_torrent(
 pub async fn latest_for_release(
     pool: &PgPool,
     provider_id: Option<Uuid>,
-    info_hash: &str,
+    release_key: &str,
     file_id: Option<i32>,
 ) -> Result<Option<Uuid>> {
     let id = sqlx::query_scalar!(
         r#"SELECT id FROM stream_attempts
-           WHERE info_hash = $1
+           WHERE release_key = $1
              AND ($2::uuid IS NULL OR provider_id = $2)
              AND status IN ('ready', 'caching', 'played')
              AND ($3::int IS NULL OR file_id IS NULL OR file_id = $3)
            ORDER BY (file_id IS NOT DISTINCT FROM $3) DESC, (origin = 'play') DESC, created_at DESC
            LIMIT 1"#,
-        info_hash,
+        release_key,
         provider_id,
         file_id,
     )

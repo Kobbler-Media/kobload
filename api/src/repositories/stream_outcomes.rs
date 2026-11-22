@@ -6,7 +6,7 @@ use super::Result;
 
 #[derive(Debug, Clone)]
 pub struct ReleaseOutcomeRow {
-    pub info_hash: String,
+    pub release_key: String,
     pub file_id: Option<i32>,
     pub last_success_at: Option<OffsetDateTime>,
     pub last_failure_at: Option<OffsetDateTime>,
@@ -29,7 +29,7 @@ pub struct TraitDecay {
 pub async fn record_success<'e, E>(
     exec: E,
     provider_id: Uuid,
-    info_hash: &str,
+    release_key: &str,
     file_id: Option<i32>,
     binge_group: Option<&str>,
 ) -> Result<()>
@@ -39,16 +39,16 @@ where
     sqlx::query!(
         r#"
         INSERT INTO stream_release_outcomes
-            (provider_id, info_hash, file_id, successes, last_success_at, binge_group)
+            (provider_id, release_key, file_id, successes, last_success_at, binge_group)
         VALUES ($1, $2, $3, 1, NOW(), $4)
-        ON CONFLICT (provider_id, info_hash, file_id) DO UPDATE SET
+        ON CONFLICT (provider_id, release_key, file_id) DO UPDATE SET
             successes = stream_release_outcomes.successes + 1,
             last_success_at = NOW(),
             binge_group = COALESCE(EXCLUDED.binge_group, stream_release_outcomes.binge_group),
             updated_at = NOW()
         "#,
         provider_id,
-        info_hash,
+        release_key,
         file_id,
         binge_group,
     )
@@ -60,7 +60,7 @@ where
 pub async fn record_failure<'e, E>(
     exec: E,
     provider_id: Uuid,
-    info_hash: &str,
+    release_key: &str,
     file_id: Option<i32>,
     reason: &str,
 ) -> Result<()>
@@ -70,16 +70,16 @@ where
     sqlx::query!(
         r#"
         INSERT INTO stream_release_outcomes
-            (provider_id, info_hash, file_id, failures, last_failure_at, last_failure_reason)
+            (provider_id, release_key, file_id, failures, last_failure_at, last_failure_reason)
         VALUES ($1, $2, $3, 1, NOW(), $4)
-        ON CONFLICT (provider_id, info_hash, file_id) DO UPDATE SET
+        ON CONFLICT (provider_id, release_key, file_id) DO UPDATE SET
             failures = stream_release_outcomes.failures + 1,
             last_failure_at = NOW(),
             last_failure_reason = EXCLUDED.last_failure_reason,
             updated_at = NOW()
         "#,
         provider_id,
-        info_hash,
+        release_key,
         file_id,
         reason,
     )
@@ -91,7 +91,7 @@ where
 pub async fn set_reported_bad<'e, E>(
     exec: E,
     provider_id: Uuid,
-    info_hash: &str,
+    release_key: &str,
     file_id: Option<i32>,
     bad: bool,
 ) -> Result<()>
@@ -100,14 +100,14 @@ where
 {
     sqlx::query!(
         r#"
-        INSERT INTO stream_release_outcomes (provider_id, info_hash, file_id, reported_bad_at)
+        INSERT INTO stream_release_outcomes (provider_id, release_key, file_id, reported_bad_at)
         VALUES ($1, $2, $3, CASE WHEN $4 THEN NOW() END)
-        ON CONFLICT (provider_id, info_hash, file_id) DO UPDATE SET
+        ON CONFLICT (provider_id, release_key, file_id) DO UPDATE SET
             reported_bad_at = EXCLUDED.reported_bad_at,
             updated_at = NOW()
         "#,
         provider_id,
-        info_hash,
+        release_key,
         file_id,
         bad,
     )
@@ -119,7 +119,7 @@ where
 pub async fn releases_for<'e, E>(
     exec: E,
     provider_id: Uuid,
-    info_hashes: &[String],
+    release_keys: &[String],
 ) -> Result<Vec<ReleaseOutcomeRow>>
 where
     E: Executor<'e, Database = Postgres>,
@@ -127,13 +127,13 @@ where
     let rows = sqlx::query_as!(
         ReleaseOutcomeRow,
         r#"
-        SELECT info_hash, file_id, last_success_at, last_failure_at, reported_bad_at,
+        SELECT release_key, file_id, last_success_at, last_failure_at, reported_bad_at,
                binge_group
         FROM stream_release_outcomes
-        WHERE provider_id = $1 AND info_hash = ANY($2)
+        WHERE provider_id = $1 AND release_key = ANY($2)
         "#,
         provider_id,
-        info_hashes,
+        release_keys,
     )
     .fetch_all(exec)
     .await?;
@@ -287,7 +287,7 @@ where
         SELECT c.available, t.original_title AS title,
                EXTRACT(EPOCH FROM NOW() - c.checked_at)::float8 AS "age_secs!"
         FROM debrid_availability_cache c
-        JOIN torrent_hash_index t USING (info_hash)
+        JOIN torrent_hash_index t ON t.info_hash = c.release_key
         WHERE c.provider_id = $1
           AND (c.available OR c.reason = 'blocked')
           AND c.checked_at > NOW() - make_interval(days => $2)

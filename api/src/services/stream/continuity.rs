@@ -58,7 +58,7 @@ impl Style {
 }
 
 pub struct Continuity {
-    info_hash: String,
+    release_key: String,
     binge_group: Option<String>,
     release_group: Option<String>,
     style: Option<Style>,
@@ -66,13 +66,13 @@ pub struct Continuity {
 
 impl Continuity {
     pub fn new(
-        info_hash: String,
+        release_key: String,
         binge_group: Option<String>,
         release_title: Option<&str>,
     ) -> Self {
         let parsed = release_title.map(|t| (t, parse_quality(t)));
         Self {
-            info_hash,
+            release_key,
             binge_group,
             release_group: parsed
                 .as_ref()
@@ -84,9 +84,9 @@ impl Continuity {
     pub fn rank(&self, option: &StreamOption, quality: &ParsedQuality) -> Rank {
         let group = quality.release_group.as_deref().map(str::to_lowercase);
         if option
-            .info_hash
+            .release_key
             .as_deref()
-            .is_some_and(|h| h.eq_ignore_ascii_case(&self.info_hash))
+            .is_some_and(|h| h.eq_ignore_ascii_case(&self.release_key))
         {
             Rank::SamePack
         } else if self.binge_group.is_some() && option.binge_group == self.binge_group {

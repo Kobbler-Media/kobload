@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO usenet_releases (indexer_id, guid, download_url, release_title)\n        SELECT DISTINCT ON (indexer_id, guid) indexer_id, guid, download_url, release_title\n        FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[])\n            AS l(indexer_id, guid, download_url, release_title)\n        ON CONFLICT (indexer_id, guid) DO UPDATE SET\n            download_url = EXCLUDED.download_url,\n            release_title = EXCLUDED.release_title,\n            updated_at = NOW()\n        RETURNING indexer_id, guid, release_key\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "indexer_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "usenet_releases",
+            "name": "indexer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "guid",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "usenet_releases",
+            "name": "guid"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "release_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "usenet_releases",
+            "name": "release_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "9ff324d658d2821e57836e58b66cf5d76f551fdc92d610c4fc4e363bad95c9ad"
+}

@@ -52,12 +52,12 @@ pub struct RankCandidate {
     pub availability: KnownAvailability,
 }
 
-type ReleaseKey = (String, Option<i32>);
+type OutcomeKey = (String, Option<i32>);
 
 /// Clients resolve the first listed file, so that is the file an option stands for.
-fn release_key(option: &StreamOption) -> Option<ReleaseKey> {
+fn outcome_key(option: &StreamOption) -> Option<OutcomeKey> {
     Some((
-        option.info_hash.as_deref()?.to_lowercase(),
+        option.release_key.as_deref()?.to_lowercase(),
         option.files.first().map(|f| f.id),
     ))
 }
@@ -134,20 +134,20 @@ pub async fn rank_options(
     let prefer = preferences.prefer;
     let audio_languages = language::normalise(preferences.audio_languages);
     for c in &candidates {
-        if let (Some(hash), Some(group)) = (&c.option.info_hash, &c.option.binge_group) {
-            binge::remember(hash, group);
+        if let (Some(key), Some(group)) = (&c.option.release_key, &c.option.binge_group) {
+            binge::remember(key, group);
         }
     }
 
-    let mut hashes: HashSet<String> = candidates
+    let mut keys: HashSet<String> = candidates
         .iter()
-        .filter_map(|c| c.option.info_hash.as_deref().map(str::to_lowercase))
+        .filter_map(|c| c.option.release_key.as_deref().map(str::to_lowercase))
         .collect();
     if let Some(p) = prefer {
-        hashes.insert(p.info_hash.to_lowercase());
+        keys.insert(p.release_key.to_lowercase());
     }
-    let hashes: Vec<String> = hashes.into_iter().collect();
-    let rows = repo::releases_for(pool, provider.id, &hashes)
+    let keys: Vec<String> = keys.into_iter().collect();
+    let rows = repo::releases_for(pool, provider.id, &keys)
         .await
         .unwrap_or_else(|e| {
             warn!(error = %e, "release outcome lookup failed; ranking without history");
@@ -155,33 +155,33 @@ pub async fn rank_options(
         });
 
     let now = OffsetDateTime::now_utc();
-    let verdicts: HashMap<ReleaseKey, StreamPlayback> = rows
+    let verdicts: HashMap<OutcomeKey, StreamPlayback> = rows
         .iter()
         .filter_map(|r| {
             let verdict = match r.reported_bad_at {
                 Some(_) => Some(StreamPlayback::Failed),
                 None => outcomes::verdict(r.last_success_at, r.last_failure_at, now),
             };
-            verdict.map(|v| ((r.info_hash.clone(), r.file_id), v))
+            verdict.map(|v| ((r.release_key.clone(), r.file_id), v))
         })
         .collect();
-    let reported: HashSet<ReleaseKey> = rows
+    let reported: HashSet<OutcomeKey> = rows
         .iter()
         .filter(|r| r.reported_bad_at.is_some())
-        .map(|r| (r.info_hash.clone(), r.file_id))
+        .map(|r| (r.release_key.clone(), r.file_id))
         .collect();
 
     let continuity = prefer.map(|p| {
-        let hash = p.info_hash.to_lowercase();
+        let key = p.release_key.to_lowercase();
         let binge_group = rows
             .iter()
-            .find(|r| r.info_hash == hash && r.binge_group.is_some())
+            .find(|r| r.release_key == key && r.binge_group.is_some())
             .and_then(|r| r.binge_group.clone())
-            .or_else(|| binge::lookup(&hash));
-        Continuity::new(hash, binge_group, p.release_title.as_deref())
+            .or_else(|| binge::lookup(&key));
+        Continuity::new(key, binge_group, p.release_title.as_deref())
     });
     let previous_failed = prefer.is_some_and(|p| {
-        verdicts.get(&(p.info_hash.to_lowercase(), p.file_id)) == Some(&StreamPlayback::Failed)
+        verdicts.get(&(p.release_key.to_lowercase(), p.file_id)) == Some(&StreamPlayback::Failed)
     });
 
     let traits: Vec<Vec<String>> = candidates
@@ -198,7 +198,7 @@ pub async fn rank_options(
         .zip(traits)
         .map(|(c, traits)| {
             let mut option = c.option;
-            let key = release_key(&option);
+            let key = outcome_key(&option);
             option.playback = key.as_ref().and_then(|k| verdicts.get(k).copied());
             option.reported_bad = key.is_some_and(|k| reported.contains(&k));
             let quality = crate::quality::parse_quality(&option.release_title);

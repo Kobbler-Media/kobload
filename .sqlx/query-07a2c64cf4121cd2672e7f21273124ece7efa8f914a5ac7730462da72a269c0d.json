@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO stream_release_outcomes\n            (provider_id, release_key, file_id, successes, last_success_at, binge_group)\n        VALUES ($1, $2, $3, 1, NOW(), $4)\n        ON CONFLICT (provider_id, release_key, file_id) DO UPDATE SET\n            successes = stream_release_outcomes.successes + 1,\n            last_success_at = NOW(),\n            binge_group = COALESCE(EXCLUDED.binge_group, stream_release_outcomes.binge_group),\n            updated_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07a2c64cf4121cd2672e7f21273124ece7efa8f914a5ac7730462da72a269c0d"
+}

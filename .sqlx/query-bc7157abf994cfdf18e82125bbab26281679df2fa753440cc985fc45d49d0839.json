@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT file_data FROM debrid_availability_cache WHERE provider_id = $1 AND info_hash = $2",
+  "query": "SELECT file_data FROM debrid_availability_cache WHERE provider_id = $1 AND release_key = $2",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       true
     ]
   },
-  "hash": "ca4896c87d9fcc16dd7126b76dfa0892a0d84cf3f8fc89c57b71c033465438a5"
+  "hash": "bc7157abf994cfdf18e82125bbab26281679df2fa753440cc985fc45d49d0839"
 }

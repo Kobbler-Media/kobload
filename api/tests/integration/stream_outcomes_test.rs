@@ -61,7 +61,7 @@ async fn test_outcome_endpoint_requires_auth() {
         .anon_client()
         .post_json(
             "/api/v1/stream/outcome",
-            &json!({ "info_hash": hash('a'), "ok": true }),
+            &json!({ "release_key": hash('a'), "ok": true }),
         )
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -83,14 +83,14 @@ async fn test_failed_release_sinks_and_both_verdicts_are_annotated() {
     ];
     report(
         &server,
-        json!({ "debrid_provider_id": provider.id, "info_hash": hash('a').to_uppercase(),
+        json!({ "debrid_provider_id": provider.id, "release_key": hash('a').to_uppercase(),
                 "file_id": 1, "ok": false, "reason": "decoder_error",
                 "release_title": "Broken.1080p-AAA" }),
     )
     .await;
     report(
         &server,
-        json!({ "info_hash": hash('c'), "ok": true, "release_title": "Played.720p-CCC" }),
+        json!({ "release_key": hash('c'), "ok": true, "release_title": "Played.720p-CCC" }),
     )
     .await;
 
@@ -108,12 +108,12 @@ async fn test_failed_release_sinks_and_both_verdicts_are_annotated() {
     server.cleanup().await;
 }
 
-async fn report_bad(server: &TestServer, provider: &RankProvider, info_hash: &str, bad: bool) {
+async fn report_bad(server: &TestServer, provider: &RankProvider, release_key: &str, bad: bool) {
     server
         .admin_client()
         .post_json(
             "/api/v1/stream/bad",
-            &json!({ "debrid_provider_id": provider.id, "info_hash": info_hash, "bad": bad }),
+            &json!({ "debrid_provider_id": provider.id, "release_key": release_key, "bad": bad }),
         )
         .await
         .assert_status(StatusCode::NO_CONTENT);
@@ -141,7 +141,7 @@ async fn test_a_release_reported_bad_stays_sunk_until_the_report_is_withdrawn() 
         .map(|o| (o.release_title, o.playback, o.reported_bad))
         .collect::<Vec<_>>()
     };
-    let played = json!({ "debrid_provider_id": provider.id, "info_hash": hash('a'), "ok": true });
+    let played = json!({ "debrid_provider_id": provider.id, "release_key": hash('a'), "ok": true });
     report(&server, played.clone()).await;
     assert_eq!(ranked().await[0].0, "Drifting.1080p-AAA");
 
@@ -185,7 +185,7 @@ async fn test_a_release_reported_bad_stays_sunk_until_the_report_is_withdrawn() 
         .anon_client()
         .post_json(
             "/api/v1/stream/bad",
-            &json!({ "info_hash": hash('a'), "bad": true }),
+            &json!({ "release_key": hash('a'), "bad": true }),
         )
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -202,7 +202,7 @@ async fn test_release_failure_expires_and_the_option_returns_to_rank() {
     ];
     report(
         &server,
-        json!({ "debrid_provider_id": provider.id, "info_hash": hash('a'), "ok": false,
+        json!({ "debrid_provider_id": provider.id, "release_key": hash('a'), "ok": false,
                 "reason": "upstream_failed" }),
     )
     .await;
@@ -241,7 +241,7 @@ async fn test_transient_failures_are_never_recorded() {
     ] {
         report(
             &server,
-            json!({ "debrid_provider_id": provider.id, "info_hash": hash('a'), "ok": false,
+            json!({ "debrid_provider_id": provider.id, "release_key": hash('a'), "ok": false,
                     "reason": reason, "release_title": "Show.S01E01.WEB-DL-GRP" }),
         )
         .await;
@@ -424,7 +424,7 @@ async fn test_continuity_prefers_same_pack_then_binge_group_then_release_group()
     let cases = [
         (
             StreamPreference {
-                info_hash: hash('p'),
+                release_key: hash('p'),
                 file_id: Some(1),
                 release_title: Some("Show.S01.1080p.WEB-PACK".to_string()),
             },
@@ -432,7 +432,7 @@ async fn test_continuity_prefers_same_pack_then_binge_group_then_release_group()
         ),
         (
             StreamPreference {
-                info_hash: hash('e'),
+                release_key: hash('e'),
                 file_id: None,
                 release_title: Some("Show.S01E01.720p.HDTV-UNRELATED".to_string()),
             },
@@ -440,7 +440,7 @@ async fn test_continuity_prefers_same_pack_then_binge_group_then_release_group()
         ),
         (
             StreamPreference {
-                info_hash: hash('q'),
+                release_key: hash('q'),
                 file_id: None,
                 release_title: Some("Show.S01E01.480p.HDTV-LOL".to_string()),
             },
@@ -448,7 +448,7 @@ async fn test_continuity_prefers_same_pack_then_binge_group_then_release_group()
         ),
         (
             StreamPreference {
-                info_hash: hash('q'),
+                release_key: hash('q'),
                 file_id: None,
                 release_title: None,
             },
@@ -463,7 +463,7 @@ async fn test_continuity_prefers_same_pack_then_binge_group_then_release_group()
     let mut tiered = unknown(&episode_two);
     tiered[0].availability = KnownAvailability::Available;
     let prefer = StreamPreference {
-        info_hash: hash('e'),
+        release_key: hash('e'),
         file_id: None,
         release_title: None,
     };
@@ -482,7 +482,7 @@ async fn test_cleanup_job_prunes_expired_outcomes() {
     for (c, ok) in [('a', false), ('b', true), ('c', false), ('d', true)] {
         report(
             &server,
-            json!({ "debrid_provider_id": provider.id, "info_hash": hash(c), "ok": ok,
+            json!({ "debrid_provider_id": provider.id, "release_key": hash(c), "ok": ok,
                     "reason": "decoder_error", "release_title": format!("Movie.{c}.BluRay-G{c}") }),
         )
         .await;
@@ -491,7 +491,7 @@ async fn test_cleanup_job_prunes_expired_outcomes() {
         "UPDATE stream_release_outcomes SET
             last_failure_at = last_failure_at - INTERVAL '4 days',
             last_success_at = last_success_at - INTERVAL '31 days'
-         WHERE info_hash = ANY($1)",
+         WHERE release_key = ANY($1)",
     )
     .bind(vec![hash('a'), hash('b')])
     .execute(&server.pool)
@@ -515,7 +515,7 @@ async fn test_cleanup_job_prunes_expired_outcomes() {
         .unwrap();
 
     let hashes: Vec<String> =
-        sqlx::query_scalar("SELECT info_hash FROM stream_release_outcomes ORDER BY info_hash")
+        sqlx::query_scalar("SELECT release_key FROM stream_release_outcomes ORDER BY release_key")
             .fetch_all(&server.pool)
             .await
             .unwrap();

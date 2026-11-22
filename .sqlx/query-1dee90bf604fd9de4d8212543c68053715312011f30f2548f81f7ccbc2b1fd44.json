@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE usenet_releases SET release_key = $3, updated_at = NOW()\n           WHERE indexer_id = $1 AND guid = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1dee90bf604fd9de4d8212543c68053715312011f30f2548f81f7ccbc2b1fd44"
+}

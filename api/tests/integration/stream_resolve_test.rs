@@ -267,7 +267,7 @@ async fn test_a_reported_failure_drops_the_warmed_link() {
             "/api/v1/stream/outcome",
             &serde_json::json!({
                 "debrid_provider_id": f.provider_id,
-                "info_hash": hash('a').to_uppercase(),
+                "release_key": hash('a').to_uppercase(),
                 "file_id": 16,
                 "ok": false,
                 "reason": "probe_failed",

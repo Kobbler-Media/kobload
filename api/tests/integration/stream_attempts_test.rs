@@ -213,13 +213,13 @@ async fn test_cleanup_purges_after_a_day_and_abandons_stalled_attempts() {
     f.http_resolve(&hash('n')).await;
     let pool = &f.server.pool;
     sqlx::query(
-        "UPDATE stream_attempts SET created_at = NOW() - INTERVAL '25 hours' WHERE info_hash = $1",
+        "UPDATE stream_attempts SET created_at = NOW() - INTERVAL '25 hours' WHERE release_key = $1",
     )
     .bind(hash('o'))
     .execute(pool)
     .await
     .unwrap();
-    sqlx::query("UPDATE stream_attempts SET updated_at = NOW() - INTERVAL '11 minutes' WHERE info_hash = $1")
+    sqlx::query("UPDATE stream_attempts SET updated_at = NOW() - INTERVAL '11 minutes' WHERE release_key = $1")
         .bind(hash('s'))
         .execute(pool)
         .await
@@ -235,7 +235,7 @@ async fn test_cleanup_purges_after_a_day_and_abandons_stalled_attempts() {
         .unwrap();
 
     let attempts = f.attempts().await;
-    assert!(attempts.iter().all(|a| a["info_hash"] != hash('o')));
+    assert!(attempts.iter().all(|a| a["release_key"] != hash('o')));
     let stalled = f.attempt(&hash('s'), "play").await;
     assert_eq!(stalled["status"], "abandoned");
     assert_eq!(f.event_types(&stalled).await.last().unwrap(), "abandoned");

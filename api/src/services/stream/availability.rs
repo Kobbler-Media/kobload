@@ -14,23 +14,23 @@ const DEAD_TTL: &str = "24 hours";
 /// The RD filter-gate verdict only demotes, and a copy on the account overrides it.
 const BLOCKED_TTL: &str = "24 hours";
 
-/// Look up what we already know about these hashes on the given provider.
+/// Look up what we already know about these releases on the given provider.
 ///
 /// Applies a different freshness window per outcome.
 pub async fn known_availability(
     pool: &PgPool,
     provider_id: Uuid,
-    hashes: &[String],
+    release_keys: &[String],
 ) -> HashMap<String, KnownAvailability> {
-    if hashes.is_empty() {
+    if release_keys.is_empty() {
         return HashMap::new();
     }
     // TTLs are interpolated from the consts above — they are compile-time
     // literals, never user input, so this cannot carry untrusted SQL.
     let rows = sqlx::query_as::<_, (String, bool, Option<String>)>(sqlx::AssertSqlSafe(format!(
-        r#"SELECT info_hash, available, reason FROM debrid_availability_cache
+        r#"SELECT release_key, available, reason FROM debrid_availability_cache
            WHERE provider_id = $1
-             AND info_hash = ANY($2)
+             AND release_key = ANY($2)
              AND checked_at > NOW() - CASE
                  WHEN available THEN INTERVAL '{AVAILABLE_TTL}'
                  WHEN reason = 'blocked' THEN INTERVAL '{BLOCKED_TTL}'
@@ -38,13 +38,13 @@ pub async fn known_availability(
              END"#
     )))
     .bind(provider_id)
-    .bind(hashes)
+    .bind(release_keys)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
 
     rows.into_iter()
-        .map(|(hash, available, reason)| {
+        .map(|(key, available, reason)| {
             let state = if available {
                 KnownAvailability::Available
             } else if reason.as_deref() == Some("blocked") {
@@ -52,7 +52,7 @@ pub async fn known_availability(
             } else {
                 KnownAvailability::Dead
             };
-            (hash, state)
+            (key, state)
         })
         .collect()
 }

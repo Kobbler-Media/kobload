@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO stream_release_outcomes (provider_id, release_key, file_id, reported_bad_at)\n        VALUES ($1, $2, $3, CASE WHEN $4 THEN NOW() END)\n        ON CONFLICT (provider_id, release_key, file_id) DO UPDATE SET\n            reported_bad_at = EXCLUDED.reported_bad_at,\n            updated_at = NOW()\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "50b83f5a0112f3ab7ce8886548b5656b0e53138db69edd8ae8ca5faae233a56d"
+}

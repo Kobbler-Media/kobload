@@ -10,9 +10,9 @@ static BINGE_GROUPS: LazyLock<DashMap<String, (String, Instant)>> = LazyLock::ne
 const TTL: Duration = Duration::from_secs(7 * 86_400);
 const MAX_ENTRIES: usize = 20_000;
 
-pub fn remember(info_hash: &str, binge_group: &str) {
+pub fn remember(release_key: &str, binge_group: &str) {
     BINGE_GROUPS.insert(
-        info_hash.to_lowercase(),
+        release_key.to_lowercase(),
         (binge_group.to_string(), Instant::now()),
     );
     if BINGE_GROUPS.len() > MAX_ENTRIES {
@@ -20,7 +20,7 @@ pub fn remember(info_hash: &str, binge_group: &str) {
     }
 }
 
-pub fn lookup(info_hash: &str) -> Option<String> {
-    let entry = BINGE_GROUPS.get(&info_hash.to_lowercase())?;
+pub fn lookup(release_key: &str) -> Option<String> {
+    let entry = BINGE_GROUPS.get(&release_key.to_lowercase())?;
     (entry.1.elapsed() < TTL).then(|| entry.0.clone())
 }

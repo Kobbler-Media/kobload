@@ -17,14 +17,14 @@ pub fn hash(c: char) -> String {
     std::iter::repeat_n(c, 40).collect()
 }
 
-pub fn option(provider: &RankProvider, info_hash: &str, title: &str, score: f64) -> StreamOption {
+pub fn option(provider: &RankProvider, release_key: &str, title: &str, score: f64) -> StreamOption {
     StreamOption {
-        id: format!("torrent_{info_hash}_{}", provider.id),
+        id: format!("torrent_{release_key}_{}", provider.id),
         release_title: title.to_string(),
         size: 2_000_000_000,
         indexer: "torrentio".to_string(),
-        info_hash: Some(info_hash.to_string()),
-        nzb_url: None,
+        release_key: Some(release_key.to_string()),
+        nzb_ref: None,
         magnet_url: None,
         quality: None,
         total_score: score,

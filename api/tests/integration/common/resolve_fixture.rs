@@ -92,9 +92,9 @@ impl Fixture {
             &ctx,
             &StreamResolveRequest {
                 debrid_provider_id: self.provider_id,
-                info_hash: Some(hash.to_string()),
+                release_key: Some(hash.to_string()),
                 magnet_url: None,
-                nzb_url: None,
+                nzb_ref: None,
                 file_id,
                 priority,
                 release_title,
@@ -125,8 +125,8 @@ impl Fixture {
             release_title: format!("Show.S01E01.1080p.BluRay.x264-{}", &hash[..4]),
             size: 2_000_000_000,
             indexer: "torrentio".to_string(),
-            info_hash: Some(hash.to_string()),
-            nzb_url: None,
+            release_key: Some(hash.to_string()),
+            nzb_ref: None,
             magnet_url: None,
             quality: None,
             total_score: 1.0,
@@ -174,7 +174,7 @@ impl Fixture {
 
     /// `extra` fields are merged into the resolve body.
     pub async fn http_resolve_with(&self, hash: &str, extra: Value) -> Value {
-        let mut body = json!({"debrid_provider_id": self.provider_id, "info_hash": hash});
+        let mut body = json!({"debrid_provider_id": self.provider_id, "release_key": hash});
         if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
             body.extend(extra.clone());
         }
@@ -231,7 +231,7 @@ impl Fixture {
             .admin_client()
             .post_json(
                 "/api/v1/stream/outcome",
-                &json!({"debrid_provider_id": self.provider_id, "info_hash": hash, "file_id": file_id, "ok": ok, "reason": reason}),
+                &json!({"debrid_provider_id": self.provider_id, "release_key": hash, "file_id": file_id, "ok": ok, "reason": reason}),
             )
             .await
             .assert_success();
@@ -251,7 +251,7 @@ impl Fixture {
         self.attempts()
             .await
             .into_iter()
-            .find(|a| a["info_hash"] == hash && a["origin"] == origin)
+            .find(|a| a["release_key"] == hash && a["origin"] == origin)
             .unwrap_or_else(|| panic!("no {origin} attempt for {hash}"))
     }
 

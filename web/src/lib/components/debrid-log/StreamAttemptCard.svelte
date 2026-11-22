@@ -15,7 +15,7 @@
   let { attempt, isExpanded, events, loadingEvents, onToggleExpand }: Props = $props();
 
   const status = $derived(getStreamAttemptStatusStyle(attempt.status));
-  const title = $derived(attempt.release_title ?? attempt.file_name ?? attempt.info_hash);
+  const title = $derived(attempt.release_title ?? attempt.file_name ?? attempt.release_key);
   const showProgress = $derived(attempt.status === 'caching' && attempt.progress !== null);
 
   const cachedLabel = (cached: boolean | null) =>
@@ -84,8 +84,8 @@
     <div class="details-panel">
       <div class="details-grid">
         <div>
-          <span class="label">Info hash</span>
-          <span class="mono break-word">{attempt.info_hash}</span>
+          <span class="label">Release key</span>
+          <span class="mono break-word">{attempt.release_key}</span>
         </div>
         {#if attempt.file_name}
           <div>

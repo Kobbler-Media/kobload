@@ -232,7 +232,7 @@ async fn test_past_probes_are_ingested_once() {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO debrid_availability_cache (info_hash, provider_id, available, reason, checked_at)
+            "INSERT INTO debrid_availability_cache (release_key, provider_id, available, reason, checked_at)
              VALUES ($1, $2, false, 'blocked', NOW() - INTERVAL '1 day')",
         )
         .bind(&h)
@@ -250,7 +250,7 @@ async fn test_past_probes_are_ingested_once() {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO debrid_availability_cache (info_hash, provider_id, available, checked_at)
+            "INSERT INTO debrid_availability_cache (release_key, provider_id, available, checked_at)
              VALUES ($1, $2, true, NOW() - INTERVAL '1 day')",
         )
         .bind(&h)

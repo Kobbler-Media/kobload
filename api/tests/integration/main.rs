@@ -58,6 +58,7 @@ mod stream_language_test;
 mod stream_outcomes_test;
 mod stream_pack_test;
 mod stream_ranking_test;
+mod stream_release_key_test;
 mod stream_resolve_test;
 mod stream_trait_learning_test;
 mod submit_dedup_test;

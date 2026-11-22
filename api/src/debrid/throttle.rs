@@ -570,9 +570,9 @@ impl DebridProvider for Throttled {
         &self,
         http_client: &reqwest::Client,
         api_key: &str,
-        nzb_url: &str,
+        download_url: &str,
     ) -> Result<String, DebridError> {
-        self.run(|| self.inner.add_nzb(http_client, api_key, nzb_url))
+        self.run(|| self.inner.add_nzb(http_client, api_key, download_url))
             .await
     }
 

@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT download_url, release_title, release_key FROM usenet_releases\n           WHERE indexer_id = $1 AND guid = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "download_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "usenet_releases",
+            "name": "download_url"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "release_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "usenet_releases",
+            "name": "release_title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "release_key",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "usenet_releases",
+            "name": "release_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "0d40473cdc4ad60544e054fb64c09d597a5c6d105ae3b71acb0330c06f23e384"
+}

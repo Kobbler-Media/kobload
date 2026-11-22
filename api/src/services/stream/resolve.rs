@@ -16,6 +16,9 @@ use super::flight::{self, Acquired, FlightContext, Job, REFUSED_MESSAGE};
 use super::service::StreamSearchError;
 use super::warm_cache::{self, WarmCacheEntry, WarmCacheKey};
 use crate::repositories::stream_attempts::Change;
+use crate::repositories::usenet_releases::{self, UsenetRelease};
+
+const USENET_KEY_PREFIX: &str = "nzb-";
 
 /// Maximum time to wait for a torrent to become ready (120 seconds).
 /// Uncached content may take time to download on the debrid provider.
@@ -57,7 +60,27 @@ pub async fn stream_resolve(
 
     let provider = ctx.debrid_providers.get(&provider_type);
 
-    if let Some(ref info_hash) = request.info_hash {
+    if let Some(nzb_ref) = &request.nzb_ref {
+        let release = usenet_releases::get(ctx.pool, nzb_ref)
+            .await
+            .map_err(|e| StreamSearchError::Database(e.to_string()))?
+            .ok_or_else(|| {
+                StreamSearchError::DebridError(format!(
+                    "No NZB listed as {}/{}; search again",
+                    nzb_ref.indexer_id, nzb_ref.guid
+                ))
+            })?;
+        let handler = Throttled::new(provider, &provider_config.api_key, lane(request));
+        let _session = handler
+            .lane()
+            .is_user()
+            .then(|| handler.gate().user_session());
+        resolve_usenet(ctx, &handler, &provider_config.api_key, release).await
+    } else if let Some(release_key) = request
+        .release_key
+        .as_deref()
+        .filter(|k| !k.starts_with(USENET_KEY_PREFIX))
+    {
         let flight = FlightContext {
             pool: ctx.pool.clone(),
             http_client: ctx.http_client.clone(),
@@ -65,17 +88,10 @@ pub async fn stream_resolve(
             provider_type,
             api_key: provider_config.api_key,
         };
-        resolve_torrent(&flight, &info_hash.to_lowercase(), request).await
-    } else if let Some(ref nzb_url) = request.nzb_url {
-        let handler = Throttled::new(provider, &provider_config.api_key, lane(request));
-        let _session = handler
-            .lane()
-            .is_user()
-            .then(|| handler.gate().user_session());
-        resolve_usenet(ctx, &handler, &provider_config.api_key, nzb_url).await
+        resolve_torrent(&flight, &release_key.to_lowercase(), request).await
     } else {
         Err(StreamSearchError::DebridError(
-            "Either info_hash or nzb_url must be provided".to_string(),
+            "A torrent release_key or an nzb_ref must be provided".to_string(),
         ))
     }
 }
@@ -97,7 +113,7 @@ async fn resolve_torrent(
         Started {
             provider_id: request.debrid_provider_id,
             origin: Origin::Play,
-            info_hash,
+            release_key: info_hash,
             file_id: request.file_id,
             release_title: request.release_title.as_deref(),
             file_name: request.file_name.as_deref(),
@@ -106,7 +122,7 @@ async fn resolve_torrent(
     .await;
     let warm_key = WarmCacheKey {
         debrid_provider_id: request.debrid_provider_id,
-        info_hash: info_hash.to_string(),
+        release_key: info_hash.to_string(),
         file_id: request.file_id,
     };
     if let Some(WarmCacheEntry::Ready {
@@ -140,6 +156,8 @@ async fn resolve_torrent(
             expires_at,
             cached: true,
             torrent_id: Some(torrent_id),
+            release_key: Some(info_hash.to_string()),
+            cache_url: None,
         });
     }
 
@@ -173,6 +191,8 @@ async fn resolve_torrent(
                 expires_at: link.expires_at,
                 cached: true,
                 torrent_id: Some(torrent_id),
+                release_key: Some(info_hash.to_string()),
+                cache_url: None,
             })
         }
         Acquired::Pending { torrent_id, .. } => {
@@ -185,6 +205,8 @@ async fn resolve_torrent(
                 expires_at: None,
                 cached: false,
                 torrent_id: Some(ctx.provider_type.prefixed_id(&torrent_id)),
+                release_key: Some(info_hash.to_string()),
+                cache_url: None,
             })
         }
         Acquired::Refused => Err(StreamSearchError::DebridError(REFUSED_MESSAGE.to_string())),
@@ -197,12 +219,12 @@ async fn resolve_usenet(
     ctx: &StreamResolveContext<'_>,
     handler: &dyn DebridProvider,
     api_key: &str,
-    nzb_url: &str,
+    release: UsenetRelease,
 ) -> Result<StreamResolveResponse, StreamSearchError> {
     info!("Adding NZB to debrid provider");
 
     let download_id = handler
-        .add_nzb(ctx.http_client, api_key, nzb_url)
+        .add_nzb(ctx.http_client, api_key, &release.download_url)
         .await
         .map_err(|e| StreamSearchError::DebridError(format!("Failed to add NZB: {e}")))?;
 
@@ -249,6 +271,8 @@ async fn resolve_usenet(
                     expires_at,
                     cached: false,
                     torrent_id: Some(download_id.clone()),
+                    release_key: release.release_key,
+                    cache_url: None,
                 });
             }
             DebridTorrentStatus::Error { ref message } => {

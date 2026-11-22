@@ -33,7 +33,7 @@ use crate::debrid::{
 use crate::repositories::stream_attempts::Change;
 use crate::services::stream::load_provider_config;
 use crate::types::DownloadStreamEvent;
-use nats_jobs::types::{StreamGroup, StreamOption};
+use nats_jobs::types::{StreamGroup, StreamOption, StreamSourceType};
 use sqlx::PgPool;
 
 const WARM_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -76,7 +76,7 @@ const MAX_CACHE_SIZE: usize = 200;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct WarmCacheKey {
     pub debrid_provider_id: Uuid,
-    pub info_hash: String,
+    pub release_key: String,
     pub file_id: Option<i32>,
 }
 
@@ -172,26 +172,26 @@ impl UnavailableReason {
 /// fresh evidence each time.
 pub async fn record_availability(
     pool: &PgPool,
-    info_hash: &str,
+    release_key: &str,
     provider_id: Uuid,
     unavailable: Option<UnavailableReason>,
 ) -> bool {
     let available = unavailable.is_none();
     let reason = unavailable.map(|r| r.as_str());
     // Every reader lowercases before it looks up, and the primary key is
-    // (info_hash, provider_id) — an unnormalised write is a row nothing ever
+    // (release_key, provider_id) — an unnormalised write is a row nothing ever
     // matches, plus a duplicate of the one that would have.
-    let info_hash = info_hash.to_lowercase();
+    let release_key = release_key.to_lowercase();
     match sqlx::query!(
-        r#"INSERT INTO debrid_availability_cache (info_hash, provider_id, available, reason, checked_at)
+        r#"INSERT INTO debrid_availability_cache (release_key, provider_id, available, reason, checked_at)
            VALUES ($1, $2, $3, $4, NOW())
-           ON CONFLICT (info_hash, provider_id) DO UPDATE
+           ON CONFLICT (release_key, provider_id) DO UPDATE
            SET available = $3, reason = $4, checked_at = NOW()
            RETURNING (old.checked_at IS NULL
                       OR old.available IS DISTINCT FROM $3
                       OR old.reason IS DISTINCT FROM $4
                       OR old.checked_at < NOW() - make_interval(secs => $5)) AS "fresh!""#,
-        info_hash,
+        release_key,
         provider_id,
         available,
         reason,
@@ -285,9 +285,11 @@ pub async fn warm_top_results(
         })
         .map(|(_, opt)| opt)
         .filter(|opt| {
-            opt.info_hash
-                .as_ref()
-                .is_some_and(|h| seen_hashes.insert(h.to_lowercase()))
+            opt.source_type == StreamSourceType::Torrent
+                && opt
+                    .release_key
+                    .as_ref()
+                    .is_some_and(|h| seen_hashes.insert(h.to_lowercase()))
         })
         .take(WARM_TOP_N)
         .filter(|opt| warm_key(opt).is_some_and(|k| lookup(&k).is_none()))
@@ -358,7 +360,7 @@ pub async fn warm_top_results(
 fn warm_key(option: &StreamOption) -> Option<WarmCacheKey> {
     Some(WarmCacheKey {
         debrid_provider_id: option.debrid_provider_id,
-        info_hash: option.info_hash.as_deref()?.to_lowercase(),
+        release_key: option.release_key.as_deref()?.to_lowercase(),
         file_id: option.files.first().map(|f| f.id),
     })
 }
@@ -372,7 +374,7 @@ async fn warm_one(
     let Some(key) = warm_key(&option) else {
         return;
     };
-    let info_hash = key.info_hash.clone();
+    let info_hash = key.release_key.clone();
     let file = option.files.first();
     if lookup(&key).is_some() {
         debug!(info_hash = %info_hash, "Warm cache: already has entry, skipping");
@@ -385,7 +387,7 @@ async fn warm_one(
         Started {
             provider_id: option.debrid_provider_id,
             origin: Origin::Warm,
-            info_hash: &info_hash,
+            release_key: &info_hash,
             file_id: key.file_id,
             release_title: Some(&option.release_title),
             file_name: file_name.as_deref(),
@@ -486,7 +488,7 @@ async fn poll_warm_entry(
         super::outcomes::record_probe(
             &ctx.pool,
             key.debrid_provider_id,
-            &key.info_hash,
+            &key.release_key,
             job.release_title.as_deref(),
             reason,
         )
@@ -498,10 +500,10 @@ async fn poll_warm_entry(
         let timed_out = Instant::now() > deadline;
         if timed_out || lookup(&key).is_none() {
             if timed_out {
-                info!(info_hash = %key.info_hash, "Warm poll: timed out");
+                info!(info_hash = %key.release_key, "Warm poll: timed out");
                 record(Some(UnavailableReason::Dead)).await;
             } else {
-                debug!(info_hash = %key.info_hash, "Warm poll: entry expired, stopping");
+                debug!(info_hash = %key.release_key, "Warm poll: entry expired, stopping");
             }
             job.log
                 .record(
@@ -522,7 +524,7 @@ async fn poll_warm_entry(
         {
             Ok(t) => t,
             Err(e) => {
-                warn!(info_hash = %key.info_hash, error = %e, "Warm poll: get_torrent failed");
+                warn!(info_hash = %key.release_key, error = %e, "Warm poll: get_torrent failed");
                 continue;
             }
         };
@@ -542,7 +544,7 @@ async fn poll_warm_entry(
                     .await
                 {
                     Ok(u) => {
-                        info!(info_hash = %key.info_hash, "Warm poll: ready, unrestricted");
+                        info!(info_hash = %key.release_key, "Warm poll: ready, unrestricted");
                         let link = ReadyLink {
                             stream_url: u.url,
                             filename: u.filename,
@@ -592,7 +594,7 @@ async fn poll_warm_entry(
                         "Provider refused this file".to_string(),
                     ),
                 };
-                warn!(info_hash = %key.info_hash, error = %error, "Warm poll: provider gave up on torrent");
+                warn!(info_hash = %key.release_key, error = %error, "Warm poll: provider gave up on torrent");
                 let (step, status) = match reason {
                     UnavailableReason::Blocked => (Step::Refused, "refused"),
                     UnavailableReason::Dead => (Step::Failed, "failed"),
@@ -620,7 +622,7 @@ async fn poll_warm_entry(
                     .select_files(&ctx.http_client, &ctx.api_key, &torrent_id, &select_ids)
                     .await
                 {
-                    warn!(info_hash = %key.info_hash, error = %e, "Warm poll: select_files failed");
+                    warn!(info_hash = %key.release_key, error = %e, "Warm poll: select_files failed");
                 }
             }
             DebridTorrentStatus::Downloading { progress } => job.log.progress(progress).await,
@@ -636,7 +638,7 @@ fn emit_warm_ready(
     debrid_provider: &str,
 ) {
     let _ = download_events.send(DownloadStreamEvent::StreamWarmReady {
-        info_hash: key.info_hash.clone(),
+        release_key: key.release_key.clone(),
         file_id: key.file_id,
         debrid_provider_id: key.debrid_provider_id,
         debrid_provider: debrid_provider.to_string(),
@@ -652,7 +654,7 @@ mod tests {
         let aged = Instant::now() - Duration::from_secs(45 * 60);
         let key = |file_id| WarmCacheKey {
             debrid_provider_id: Uuid::new_v4(),
-            info_hash: "ttlhash".to_string(),
+            release_key: "ttlhash".to_string(),
             file_id: Some(file_id),
         };
         let ready = key(1);

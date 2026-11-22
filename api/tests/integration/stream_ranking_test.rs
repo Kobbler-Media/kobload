@@ -44,7 +44,7 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
         .admin_client()
         .post_json(
             "/api/v1/stream/outcome",
-            &json!({ "debrid_provider_id": p.id, "info_hash": hash('g'), "ok": true,
+            &json!({ "debrid_provider_id": p.id, "release_key": hash('g'), "ok": true,
                      "release_title": played }),
         )
         .await

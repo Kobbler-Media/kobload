@@ -9,6 +9,7 @@ use kobload_api::debrid::types::{ActiveSlots, AddPauses};
 use kobload_api::debrid::{
     CachedAvailability, DebridAccountStatus, DebridError, DebridFile, DebridProviderResolver,
     DebridProviderType, DebridTorrent, DebridTorrentStatus, ExistingTorrent, UnrestrictedLink,
+    UsenetDownload,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,6 +501,15 @@ impl DebridProvider for MockDebrid {
         let torrent_id = parts.next().unwrap_or_default().to_string();
         let hash = self.hash_of(&torrent_id);
         self.call("unrestrict_link", hash.clone()).await;
+        if link.contains("/usenet/") {
+            return Ok(UnrestrictedLink {
+                url: link.to_string(),
+                filename: "usenet.mkv".to_string(),
+                filesize: 1_500_000_000,
+                mime_type: None,
+                expires_at: None,
+            });
+        }
         if self
             .state
             .lock()
@@ -545,6 +555,29 @@ impl DebridProvider for MockDebrid {
             filesize: 2_000_000_000,
             mime_type,
             expires_at: None,
+        })
+    }
+
+    async fn add_nzb(
+        &self,
+        _: &reqwest::Client,
+        _: &str,
+        download_url: &str,
+    ) -> Result<String, DebridError> {
+        self.call("add_nzb", download_url.to_string()).await;
+        Ok("U1".to_string())
+    }
+
+    async fn get_usenet_download(
+        &self,
+        _: &reqwest::Client,
+        _: &str,
+        id: &str,
+    ) -> Result<UsenetDownload, DebridError> {
+        Ok(UsenetDownload {
+            id: id.to_string(),
+            status: DebridTorrentStatus::Ready,
+            links: vec![format!("https://mock.invalid/usenet/{id}/1")],
         })
     }
 

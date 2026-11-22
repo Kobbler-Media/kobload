@@ -146,9 +146,9 @@ async fn test_download_grab_reuses_a_torrent_a_stream_already_added() {
     };
     let request = StreamResolveRequest {
         debrid_provider_id: Uuid::parse_str(f.config.api_key.as_deref().unwrap()).unwrap(),
-        info_hash: Some(hash('a')),
+        release_key: Some(hash('a')),
         magnet_url: None,
-        nzb_url: None,
+        nzb_ref: None,
         file_id: None,
         priority: None,
         release_title: None,

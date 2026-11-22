@@ -8,7 +8,7 @@ const KEPT: usize = 8;
 /// another.
 pub async fn sets(pool: &PgPool, provider_id: Uuid, info_hash: &str) -> Vec<Vec<i32>> {
     sqlx::query_scalar!(
-        "SELECT file_data FROM debrid_availability_cache WHERE provider_id = $1 AND info_hash = $2",
+        "SELECT file_data FROM debrid_availability_cache WHERE provider_id = $1 AND release_key = $2",
         provider_id,
         info_hash.to_lowercase(),
     )
@@ -32,9 +32,9 @@ pub async fn remember(pool: &PgPool, provider_id: Uuid, info_hash: &str, ids: &[
     all.insert(0, set);
     all.truncate(KEPT);
     if let Err(e) = sqlx::query!(
-        r#"INSERT INTO debrid_availability_cache (info_hash, provider_id, available, file_data)
+        r#"INSERT INTO debrid_availability_cache (release_key, provider_id, available, file_data)
            VALUES ($1, $2, true, $3)
-           ON CONFLICT (info_hash, provider_id) DO UPDATE SET file_data = $3"#,
+           ON CONFLICT (release_key, provider_id) DO UPDATE SET file_data = $3"#,
         info_hash.to_lowercase(),
         provider_id,
         serde_json::json!(all),

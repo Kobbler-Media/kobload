@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.provider_id, p.name AS provider_name, a.origin, a.info_hash, a.file_id,\n                  a.release_title, a.file_name, a.status, a.cached, a.progress, a.torrent_id,\n                  a.error, a.created_at, a.updated_at, a.ready_at\n           FROM stream_attempts a\n           JOIN debrid_providers p ON p.id = a.provider_id\n           WHERE ($1::uuid IS NULL OR a.id = $1)\n             AND ($2::text IS NULL OR a.status = $2)\n             AND ($3::text IS NULL OR a.release_title ILIKE $3 OR a.file_name ILIKE $3\n                  OR a.info_hash ILIKE $3)\n             AND ($4::timestamptz IS NULL OR a.created_at < $4)\n           ORDER BY a.created_at DESC\n           LIMIT $5",
+  "query": "SELECT a.id, a.provider_id, p.name AS provider_name, a.origin, a.release_key, a.file_id,\n                  a.release_title, a.file_name, a.status, a.cached, a.progress, a.torrent_id,\n                  a.error, a.created_at, a.updated_at, a.ready_at\n           FROM stream_attempts a\n           JOIN debrid_providers p ON p.id = a.provider_id\n           WHERE ($1::uuid IS NULL OR a.id = $1)\n             AND ($2::text IS NULL OR a.status = $2)\n             AND ($3::text IS NULL OR a.release_title ILIKE $3 OR a.file_name ILIKE $3\n                  OR a.release_key ILIKE $3)\n             AND ($4::timestamptz IS NULL OR a.created_at < $4)\n           ORDER BY a.created_at DESC\n           LIMIT $5",
   "describe": {
     "columns": [
       {
@@ -49,12 +49,12 @@
       },
       {
         "ordinal": 4,
-        "name": "info_hash",
+        "name": "release_key",
         "type_info": "Text",
         "origin": {
           "Table": {
             "table": "stream_attempts",
-            "name": "info_hash"
+            "name": "release_key"
           }
         }
       },
@@ -208,5 +208,5 @@
       true
     ]
   },
-  "hash": "6b85dd2fc5f6e200e54b090c38589a6fc247f854621e328484ffa736c72b9ecd"
+  "hash": "c7d0b5cb385182ebb9c5c8268f3853fd6e8156a583bd8cc35e8bde0f7276b671"
 }

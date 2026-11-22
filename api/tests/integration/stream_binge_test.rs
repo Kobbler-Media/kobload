@@ -36,7 +36,7 @@ async fn report(server: &TestServer, provider: &RankProvider, h: &str, file_id: 
         .admin_client()
         .post_json(
             "/api/v1/stream/outcome",
-            &json!({ "debrid_provider_id": provider.id, "info_hash": h, "file_id": file_id,
+            &json!({ "debrid_provider_id": provider.id, "release_key": h, "file_id": file_id,
                      "ok": ok, "reason": "decoder_error" }),
         )
         .await
@@ -45,7 +45,7 @@ async fn report(server: &TestServer, provider: &RankProvider, h: &str, file_id: 
 
 fn previous_from_pack() -> StreamPreference {
     StreamPreference {
-        info_hash: hash('p'),
+        release_key: hash('p'),
         file_id: Some(0),
         release_title: Some(PACK.to_string()),
     }
@@ -106,7 +106,7 @@ async fn test_close_scores_keep_the_previous_episodes_look() {
     let server = TestServer::start().await;
     let p = create_provider(&server.pool, "real_debrid").await;
     let prefer = StreamPreference {
-        info_hash: hash('q'),
+        release_key: hash('q'),
         file_id: None,
         release_title: Some("Show.S01E01.2160p.WEB-DL.DV.HDR10.DDP5.1.Atmos-AAA".to_string()),
     };
@@ -150,14 +150,14 @@ async fn test_of_two_played_releases_the_preferred_one_leads() {
             .admin_client()
             .post_json(
                 "/api/v1/stream/outcome",
-                &json!({ "debrid_provider_id": p.id, "info_hash": hash(c), "ok": true,
+                &json!({ "debrid_provider_id": p.id, "release_key": hash(c), "ok": true,
                          "release_title": title }),
             )
             .await
             .assert_status(StatusCode::NO_CONTENT);
     }
     let prefer = StreamPreference {
-        info_hash: hash('l'),
+        release_key: hash('l'),
         file_id: None,
         release_title: Some(latest.to_string()),
     };

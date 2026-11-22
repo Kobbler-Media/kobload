@@ -12,6 +12,7 @@ use super::availability::known_availability;
 use super::ranking::{
     KnownAvailability, RankCandidate, RankPreferences, RankProvider, rank_options,
 };
+use super::usenet_listing;
 use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::decision_log::types::{LogProviderCall, LogRelease};
 use crate::decision_log::{self, DecisionCollector};
@@ -807,6 +808,7 @@ pub async fn stream_search(
 
     let options_build_start = Instant::now();
     let mut ranked: Vec<RankCandidate> = Vec::new();
+    let mut usenet_listings = Vec::new();
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Build options from candidates only; rejects are only kept in `scored`
@@ -886,8 +888,8 @@ pub async fn stream_search(
                     release_title: result.release.title.clone(),
                     size: result.release.size,
                     indexer: result.release.indexer.clone(),
-                    info_hash: Some(normalized),
-                    nzb_url: None,
+                    release_key: Some(normalized),
+                    nzb_ref: None,
                     magnet_url: Some(magnet_url),
                     quality,
                     total_score,
@@ -913,7 +915,7 @@ pub async fn stream_search(
             }
         } else if has_usenet_provider
             && result.release.protocol == "usenet"
-            && let Some(ref nzb_url) = result.release.download_url
+            && let Some(ref download_url) = result.release.download_url
             && let Some(provider) = providers.iter().find(|p| p.provider_type == "torbox")
         {
             let match_score = result.match_score.unwrap_or(0.0);
@@ -925,13 +927,14 @@ pub async fn stream_search(
                 .as_ref()
                 .and_then(|pq| serde_json::to_value(pq).ok());
 
+            let listing = usenet_listing::listing(&result.release, download_url);
             let option = StreamOption {
                 id: format!("usenet_{}_{}", result.release.guid, provider.id),
                 release_title: result.release.title.clone(),
                 size: result.release.size,
                 indexer: result.release.indexer.clone(),
-                info_hash: None,
-                nzb_url: Some(nzb_url.clone()),
+                release_key: None,
+                nzb_ref: Some(listing.nzb_ref.clone()),
                 magnet_url: None,
                 quality,
                 total_score,
@@ -950,11 +953,15 @@ pub async fn stream_search(
                 group: None,
                 audio_languages: Vec::new(),
             };
+            usenet_listings.push(listing);
             ranked.push(RankCandidate {
                 option,
                 availability: KnownAvailability::Unknown,
             });
         }
+    }
+    if !usenet_listings.is_empty() {
+        usenet_listing::remember(ctx.pool, &mut ranked, &usenet_listings).await;
     }
 
     let rank_provider = RankProvider {

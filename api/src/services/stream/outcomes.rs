@@ -104,7 +104,7 @@ pub async fn record_report(
             None => return Ok(()),
         },
     };
-    let info_hash = report.info_hash.trim().to_lowercase();
+    let release_key = report.release_key.trim().to_lowercase();
     let title = report
         .release_title
         .as_deref()
@@ -112,11 +112,11 @@ pub async fn record_report(
         .filter(|t| !t.trim().is_empty());
 
     if report.ok {
-        let binge_group = binge::lookup(&info_hash);
+        let binge_group = binge::lookup(&release_key);
         repo::record_success(
             pool,
             provider_id,
-            &info_hash,
+            &release_key,
             report.file_id,
             binge_group.as_deref(),
         )
@@ -140,11 +140,11 @@ pub async fn record_report(
     // client could not play would otherwise be the answer to every resolve until it ages out.
     warm_cache::forget(&WarmCacheKey {
         debrid_provider_id: provider_id,
-        info_hash: info_hash.clone(),
+        release_key: release_key.clone(),
         file_id: report.file_id,
     });
     let reason: String = reason.chars().take(200).collect();
-    repo::record_failure(pool, provider_id, &info_hash, report.file_id, &reason).await?;
+    repo::record_failure(pool, provider_id, &release_key, report.file_id, &reason).await?;
     Ok(())
 }
 
@@ -153,7 +153,7 @@ pub async fn record_report(
 pub async fn record_bad_report(
     pool: &PgPool,
     provider_id: Option<Uuid>,
-    info_hash: &str,
+    release_key: &str,
     file_id: Option<i32>,
     bad: bool,
 ) -> Result<(), RepositoryError> {
@@ -164,15 +164,15 @@ pub async fn record_bad_report(
             None => return Ok(()),
         },
     };
-    let info_hash = info_hash.trim().to_lowercase();
+    let release_key = release_key.trim().to_lowercase();
     if bad {
         warm_cache::forget(&WarmCacheKey {
             debrid_provider_id: provider_id,
-            info_hash: info_hash.clone(),
+            release_key: release_key.clone(),
             file_id,
         });
     }
-    repo::set_reported_bad(pool, provider_id, &info_hash, file_id, bad).await
+    repo::set_reported_bad(pool, provider_id, &release_key, file_id, bad).await
 }
 
 /// Persists the availability verdict and, when it is news, learns from the release name.
@@ -180,11 +180,11 @@ pub async fn record_bad_report(
 pub async fn record_probe(
     pool: &PgPool,
     provider_id: Uuid,
-    info_hash: &str,
+    release_key: &str,
     release_title: Option<&str>,
     unavailable: Option<UnavailableReason>,
 ) {
-    let fresh = record_availability(pool, info_hash, provider_id, unavailable).await;
+    let fresh = record_availability(pool, release_key, provider_id, unavailable).await;
     let evidence = match unavailable {
         None => Evidence::Accepted,
         Some(UnavailableReason::Blocked) => Evidence::Refused,

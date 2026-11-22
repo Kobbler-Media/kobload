@@ -47,7 +47,7 @@
     if (statusFilter && a.status !== statusFilter) return false;
     const q = searchQuery.trim().toLowerCase();
     if (!q) return true;
-    return [a.release_title, a.file_name, a.info_hash].some((v) => v?.toLowerCase().includes(q));
+    return [a.release_title, a.file_name, a.release_key].some((v) => v?.toLowerCase().includes(q));
   };
 
   const load = async (reset = false) => {

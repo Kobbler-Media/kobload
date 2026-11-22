@@ -76,7 +76,7 @@ async fn stream_resolve_handler(
 
     info!(
         debrid_provider_id = %request.debrid_provider_id,
-        info_hash = ?request.info_hash,
+        release_key = ?request.release_key,
         "Stream resolve request"
     );
 
@@ -112,7 +112,7 @@ async fn log_playback(state: &AppState, report: &StreamOutcomeReport) {
     let log = AttemptLog::for_release(
         &state.pool,
         report.debrid_provider_id,
-        &report.info_hash.to_lowercase(),
+        &report.release_key.to_lowercase(),
         report.file_id,
     )
     .await;
@@ -135,7 +135,7 @@ async fn log_playback(state: &AppState, report: &StreamOutcomeReport) {
 struct BadReport {
     #[serde(default)]
     debrid_provider_id: Option<Uuid>,
-    info_hash: String,
+    release_key: String,
     #[serde(default)]
     file_id: Option<i32>,
     bad: bool,
@@ -153,7 +153,7 @@ async fn stream_bad_handler(
     crate::services::stream::outcomes::record_bad_report(
         &state.pool,
         report.debrid_provider_id,
-        &report.info_hash,
+        &report.release_key,
         report.file_id,
         report.bad,
     )
@@ -162,7 +162,7 @@ async fn stream_bad_handler(
     let log = AttemptLog::for_release(
         &state.pool,
         report.debrid_provider_id,
-        &report.info_hash.to_lowercase(),
+        &report.release_key.to_lowercase(),
         report.file_id,
     )
     .await;
@@ -429,7 +429,7 @@ async fn resolve_status(
             message: None,
         }),
         // Not recorded to debrid_availability_cache: this endpoint is keyed by
-        // torrent_id and has no info_hash to record against. In practice
+        // torrent_id and has no release_key to record against. In practice
         // resolve_torrent catches a block before the client starts polling, so
         // this arm is the rare case where a torrent is refused mid-download.
         DebridTorrentStatus::Blocked => Ok(ResolveStatusResponse {

@@ -91,7 +91,7 @@ impl Step {
 pub struct Started<'a> {
     pub provider_id: Uuid,
     pub origin: Origin,
-    pub info_hash: &'a str,
+    pub release_key: &'a str,
     pub file_id: Option<i32>,
     pub release_title: Option<&'a str>,
     pub file_name: Option<&'a str>,
@@ -120,7 +120,7 @@ impl AttemptLog {
         }
         let file_name = match (started.file_name, started.file_id) {
             (Some(name), _) => Some(name.to_string()),
-            (None, Some(idx)) => hash_index::get_file_name(pool, started.info_hash, idx)
+            (None, Some(idx)) => hash_index::get_file_name(pool, started.release_key, idx)
                 .await
                 .ok()
                 .flatten(),
@@ -130,7 +130,7 @@ impl AttemptLog {
         let title = match (started.release_title, &file_name) {
             (Some(t), _) => Some(t.to_string()),
             (None, Some(name)) => Some(super::service::strip_file_extension(name)),
-            (None, None) => hash_index::get_original_title(pool, started.info_hash)
+            (None, None) => hash_index::get_original_title(pool, started.release_key)
                 .await
                 .ok()
                 .flatten(),
@@ -138,7 +138,7 @@ impl AttemptLog {
         let new = NewAttempt {
             provider_id: started.provider_id,
             origin: started.origin.as_str(),
-            info_hash: started.info_hash,
+            release_key: started.release_key,
             file_id: started.file_id,
             release_title: title.as_deref(),
             file_name: file_name.as_deref(),
@@ -179,10 +179,10 @@ impl AttemptLog {
     pub async fn for_release(
         pool: &PgPool,
         provider_id: Option<Uuid>,
-        info_hash: &str,
+        release_key: &str,
         file_id: Option<i32>,
     ) -> Self {
-        match repo::latest_for_release(pool, provider_id, info_hash, file_id).await {
+        match repo::latest_for_release(pool, provider_id, release_key, file_id).await {
             Ok(Some(id)) => Self::attach(pool, id),
             _ => Self::off(),
         }

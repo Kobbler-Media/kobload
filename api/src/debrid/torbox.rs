@@ -436,13 +436,13 @@ impl DebridProvider for TorBoxProvider {
         &self,
         http_client: &Client,
         api_key: &str,
-        nzb_url: &str,
+        download_url: &str,
     ) -> Result<String, DebridError> {
         let url = format!("{BASE_URL}/usenet/createusenetdownload");
         let resp = http_client
             .post(&url)
             .header("Authorization", auth_header(api_key))
-            .form(&[("link", nzb_url)])
+            .form(&[("link", download_url)])
             .send()
             .await?;
 

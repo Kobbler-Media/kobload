@@ -1,4 +1,4 @@
-//! Availability-cache recording is keyed by info_hash, and every reader
+//! Availability-cache recording is keyed by release_key, and every reader
 //! lowercases before it looks up. These cover the write side agreeing.
 
 use crate::common;
@@ -21,7 +21,7 @@ async fn create_provider(pool: &sqlx::PgPool) -> uuid::Uuid {
 
 async fn stored_hashes(pool: &sqlx::PgPool, provider_id: uuid::Uuid) -> Vec<String> {
     sqlx::query_scalar!(
-        "SELECT info_hash FROM debrid_availability_cache WHERE provider_id = $1 ORDER BY info_hash",
+        "SELECT release_key FROM debrid_availability_cache WHERE provider_id = $1 ORDER BY release_key",
         provider_id
     )
     .fetch_all(pool)
@@ -72,7 +72,7 @@ async fn test_record_availability_case_variants_share_a_row() {
     );
 
     let available = sqlx::query_scalar!(
-        "SELECT available FROM debrid_availability_cache WHERE provider_id = $1 AND info_hash = $2",
+        "SELECT available FROM debrid_availability_cache WHERE provider_id = $1 AND release_key = $2",
         provider_id,
         LOWER
     )
@@ -101,7 +101,7 @@ async fn test_verdicts_stay_trusted_for_their_window() {
     for (c, reason, days, _) in &cases {
         let hash = c.to_string().repeat(40);
         record_availability(&server.pool, &hash, provider_id, *reason).await;
-        sqlx::query("UPDATE debrid_availability_cache SET checked_at = NOW() - make_interval(days => $1) WHERE info_hash = $2")
+        sqlx::query("UPDATE debrid_availability_cache SET checked_at = NOW() - make_interval(days => $1) WHERE release_key = $2")
             .bind(*days)
             .bind(&hash)
             .execute(&server.pool)

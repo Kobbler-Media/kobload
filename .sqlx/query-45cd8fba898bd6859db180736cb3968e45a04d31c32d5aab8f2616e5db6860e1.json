@@ -1,28 +1,29 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT info_hash FROM debrid_availability_cache WHERE provider_id = $1 ORDER BY info_hash",
+  "query": "SELECT available FROM debrid_availability_cache WHERE provider_id = $1 AND release_key = $2",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "info_hash",
-        "type_info": "Text",
+        "name": "available",
+        "type_info": "Bool",
         "origin": {
           "Table": {
             "table": "debrid_availability_cache",
-            "name": "info_hash"
+            "name": "available"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "ef14834ec421083917cc166868b6bcb87d0ca5a106e35a9551bda13697a32386"
+  "hash": "45cd8fba898bd6859db180736cb3968e45a04d31c32d5aab8f2616e5db6860e1"
 }

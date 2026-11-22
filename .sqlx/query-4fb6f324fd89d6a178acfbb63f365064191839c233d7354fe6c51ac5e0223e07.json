@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.available, t.original_title AS title,\n               EXTRACT(EPOCH FROM NOW() - c.checked_at)::float8 AS \"age_secs!\"\n        FROM debrid_availability_cache c\n        JOIN torrent_hash_index t USING (info_hash)\n        WHERE c.provider_id = $1\n          AND (c.available OR c.reason = 'blocked')\n          AND c.checked_at > NOW() - make_interval(days => $2)\n        ",
+  "query": "\n        SELECT c.available, t.original_title AS title,\n               EXTRACT(EPOCH FROM NOW() - c.checked_at)::float8 AS \"age_secs!\"\n        FROM debrid_availability_cache c\n        JOIN torrent_hash_index t ON t.info_hash = c.release_key\n        WHERE c.provider_id = $1\n          AND (c.available OR c.reason = 'blocked')\n          AND c.checked_at > NOW() - make_interval(days => $2)\n        ",
   "describe": {
     "columns": [
       {
@@ -44,5 +44,5 @@
       null
     ]
   },
-  "hash": "752948554be1d867eab0b1d48b84f1f85cede7484fa2a1dde3bfd2de992790c7"
+  "hash": "4fb6f324fd89d6a178acfbb63f365064191839c233d7354fe6c51ac5e0223e07"
 }

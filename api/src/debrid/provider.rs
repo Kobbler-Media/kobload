@@ -140,7 +140,7 @@ pub trait DebridProvider: Send + Sync {
         &self,
         _http_client: &reqwest::Client,
         _api_key: &str,
-        _nzb_url: &str,
+        _download_url: &str,
     ) -> Result<String, DebridError> {
         Err(DebridError::UnsupportedOperation)
     }
