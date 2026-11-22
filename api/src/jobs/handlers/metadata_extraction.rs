@@ -15,7 +15,7 @@ use tokio::sync::{Semaphore, broadcast};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::download_clients::ScannedFile;
+use crate::download_clients::{DownloadClientResolver, ScannedFile};
 use crate::file_scoring::{self, ScoringContext};
 use crate::helpers::{broadcast_download_updated, log_event};
 use crate::jobs::JobError;
@@ -35,6 +35,7 @@ pub struct MetadataExtractionHandler {
     nats: NatsState,
     http_client: reqwest::Client,
     download_events: broadcast::Sender<crate::types::DownloadStreamEvent>,
+    download_clients: Arc<dyn DownloadClientResolver>,
 }
 
 impl MetadataExtractionHandler {
@@ -43,12 +44,14 @@ impl MetadataExtractionHandler {
         nats: NatsState,
         http_client: reqwest::Client,
         download_events: broadcast::Sender<crate::types::DownloadStreamEvent>,
+        download_clients: Arc<dyn DownloadClientResolver>,
     ) -> Self {
         Self {
             pool,
             nats,
             http_client,
             download_events,
+            download_clients,
         }
     }
 }
@@ -240,6 +243,13 @@ impl JobHandler for MetadataExtractionHandler {
                 )
                 .await;
             }
+            crate::services::import_outcome::release_from_client(
+                &self.pool,
+                &self.http_client,
+                self.download_clients.as_ref(),
+                download_id,
+            )
+            .await;
             crate::polling::trigger_research_for_download_from_pool(
                 &self.pool,
                 &self.nats,

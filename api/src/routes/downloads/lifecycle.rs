@@ -16,9 +16,8 @@ use crate::helpers::{broadcast_download_updated, log_event};
 use crate::jobs;
 use crate::jobs::handlers::build_callback_from_enriched;
 use crate::parsing::ParsedRelease;
-use crate::polling::trigger_research_for_download;
 use crate::repositories::downloads as downloads_repo;
-use crate::repositories::watch as watch_repo;
+use crate::services::import_outcome;
 use crate::state::AppState;
 use crate::types::CompleteDownloadRequest;
 
@@ -98,128 +97,14 @@ pub async fn confirm_import(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    // Get download info including the download client
-    let import_info = match downloads_repo::confirm_import(&state.pool, id).await {
-        Ok(Some(info)) => info,
-        Ok(None) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+    match import_outcome::confirm_import(&state, id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "not found").into_response(),
         Err(err) => {
             warn!(error = %err, "Failed to confirm import");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response();
-        }
-    };
-
-    let (client_id, external_id, protocol, client_data) = (
-        import_info.download_client_id,
-        import_info.external_id,
-        import_info.protocol,
-        import_info.client_data,
-    );
-
-    // Mark the watch match as import-confirmed (survives download deletion)
-    if let Err(e) = watch_repo::mark_match_import_confirmed(&state.pool, id).await {
-        warn!(error = %e, download_id = %id, "Failed to mark watch match import confirmed");
-    }
-
-    // Log import confirmed event
-    log_event(
-        &state.pool,
-        id,
-        "import_confirmed",
-        "Kobbler confirmed import",
-        None,
-    )
-    .await;
-
-    // If we have client info, delete from download client
-    if let (Some(client_id), Some(external_id)) = (client_id, external_id)
-        && let Ok(client) = select_download_client(&state.pool, Some(client_id), &protocol).await
-        && client.delete_after_import
-    {
-        let remove_result = match state.download_clients.get(client.client_type.as_str()) {
-            Some(handler) => {
-                handler
-                    .remove(&state.http_client, &client, &external_id, true)
-                    .await
-            }
-            None => Ok(()),
-        };
-        if let Err(err) = remove_result {
-            log_event(
-                &state.pool,
-                id,
-                "remove_failed",
-                "Failed to remove from download client after import",
-                Some(serde_json::json!({ "error": err.to_string() })),
-            )
-            .await;
-        } else {
-            log_event(
-                &state.pool,
-                id,
-                "removed",
-                "Removed from download client after import confirmation",
-                Some(serde_json::json!({ "external_id": external_id })),
-            )
-            .await;
+            (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
         }
     }
-
-    // Filesystem cleanup: delete the storage directory if it still exists.
-    // SABnzbd's del_files flag is unreliable — this is the fallback.
-    if let Some(ref cd) = client_data
-        && let Some(storage) = cd.get("storage").and_then(|v| v.as_str())
-        && !storage.is_empty()
-    {
-        let storage_path = std::path::Path::new(storage);
-        // SABnzbd's storage field can be a file path for single-file downloads;
-        // resolve to the parent directory so we clean up the whole download folder.
-        let cleanup_dir = if storage_path.is_file() {
-            match storage_path.parent() {
-                Some(parent) => parent.to_path_buf(),
-                None => {
-                    tracing::warn!(
-                        download_id = %id,
-                        path = storage,
-                        "Cannot determine parent directory of storage file"
-                    );
-                    return StatusCode::NO_CONTENT.into_response();
-                }
-            }
-        } else {
-            storage_path.to_path_buf()
-        };
-        // Safety: refuse to delete anything that looks like a system/root path.
-        // Must be at least 3 components deep (e.g. /downloads/complete/SomeRelease)
-        let depth = cleanup_dir.components().count();
-        if depth < 3 {
-            tracing::warn!(
-                download_id = %id,
-                path = %cleanup_dir.display(),
-                depth,
-                "Refusing to delete storage path: too shallow (need at least 3 components)"
-            );
-        } else if cleanup_dir.exists() {
-            if let Err(err) = tokio::fs::remove_dir_all(&cleanup_dir).await {
-                tracing::warn!(
-                    download_id = %id,
-                    path = %cleanup_dir.display(),
-                    error = %err,
-                    "Failed to clean up storage directory after import"
-                );
-            } else {
-                tracing::info!(
-                    download_id = %id,
-                    path = %cleanup_dir.display(),
-                    "Cleaned up storage directory after import"
-                );
-            }
-        }
-    }
-
-    // Broadcast download updated event
-    broadcast_download_updated(&state.pool, &state.download_events, id).await;
-
-    StatusCode::NO_CONTENT.into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,67 +122,21 @@ pub async fn import_failed(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    // Guard: don't overwrite a successful import with a late-arriving failure
-    match downloads_repo::is_import_confirmed(&state.pool, id).await {
-        Ok(true) => {
-            tracing::warn!(
-                download_id = %id,
-                error = ?payload.error,
-                "Ignoring import_failed for already-confirmed download (likely redelivery race)"
-            );
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        Err(e) => {
-            tracing::warn!(
-                download_id = %id,
-                error = %e,
-                "Failed to check import confirmation, proceeding with failure handling"
-            );
-        }
-        _ => {}
+    import_outcome::fail_import(&state, id, payload.error.as_deref()).await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+pub async fn import_retry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<ImportFailedRequest>,
+) -> impl IntoResponse {
+    if require_auth(&state, &headers).await.is_err() {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let reason = payload
-        .error
-        .as_deref()
-        .unwrap_or("Import rejected by Kobbler");
-
-    // Claim the failure transition so a retried/duplicated request logs one
-    // failure and fires one re-search. See `claim_failure`.
-    match downloads_repo::claim_failure(&state.pool, id, reason).await {
-        Ok(false) => {
-            tracing::warn!(
-                download_id = %id,
-                error = ?payload.error,
-                "Ignoring duplicate import_failed for already-failed download"
-            );
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        Err(e) => {
-            tracing::error!(download_id = %id, error = %e, "Failed to mark download as failed after import rejection");
-            return StatusCode::NO_CONTENT.into_response();
-        }
-        Ok(true) => {}
-    }
-
-    log_event(
-        &state.pool,
-        id,
-        "import_failed",
-        "Kobbler reported import failure",
-        payload
-            .error
-            .as_ref()
-            .map(|e| serde_json::json!({ "error": e })),
-    )
-    .await;
-
-    // Trigger re-search for the watch pattern
-    trigger_research_for_download(&state, id).await;
-
-    // Broadcast download updated event
-    broadcast_download_updated(&state.pool, &state.download_events, id).await;
-
+    import_outcome::retry_import(&state, id, payload.error.as_deref()).await;
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -311,21 +150,7 @@ pub async fn import_deferred(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    log_event(
-        &state.pool,
-        id,
-        "import_deferred",
-        "Media root temporarily unavailable — will import automatically when available",
-        payload
-            .error
-            .as_ref()
-            .map(|e| serde_json::json!({ "reason": e })),
-    )
-    .await;
-
-    // Do NOT trigger re-search — this is temporary, not a failure
-    broadcast_download_updated(&state.pool, &state.download_events, id).await;
-
+    import_outcome::defer_import(&state, id, payload.error.as_deref()).await;
     StatusCode::NO_CONTENT.into_response()
 }
 

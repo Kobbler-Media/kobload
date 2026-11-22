@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE downloads\n        SET import_confirmed_at = NOW(), updated_at = NOW()\n        WHERE id = $1 AND import_confirmed_at IS NULL\n          AND status NOT IN ('failed', 'cancelled')\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0a9347eec72360525391da611ddd60bc3f2d7f5fce99f5165c0344e54a4781b6"
+}

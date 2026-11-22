@@ -143,6 +143,7 @@ pub async fn start_nats_worker(
         state.nats.clone(),
         state.http_client.clone(),
         state.download_events.clone(),
+        state.download_clients.clone(),
     )));
 
     // Scheduled job handlers
@@ -408,6 +409,12 @@ pub async fn publish_ingest_ready(
     {
         Some(_) => {
             info!(download_id = %download.id, "Published ingest.ready event via NATS");
+            let _ = crate::repositories::downloads::update_callback_attempt(
+                pool,
+                download.id,
+                download.callback_attempts + 1,
+            )
+            .await;
             // Mark callback as sent since NATS delivery succeeded
             let _ = crate::repositories::downloads::mark_callback_sent(pool, download.id).await;
             true
@@ -425,6 +432,7 @@ pub async fn publish_ingest_ready(
 /// `events.ingest.result` with an `IngestResultEvent`. This subscriber
 /// handles cleanup: confirming imports or triggering re-search on failure.
 pub async fn subscribe_ingest_result_events(nats: NatsClient, state: crate::state::AppState) {
+    use crate::services::import_outcome;
     use futures::StreamExt;
     use nats_jobs::{Event, IngestResultEvent, IngestResultStatus};
 
@@ -519,13 +527,20 @@ pub async fn subscribe_ingest_result_events(nats: NatsClient, state: crate::stat
 
                             match result.status {
                                 IngestResultStatus::Imported => {
-                                    handle_ingest_imported(&state, result.download_id).await;
+                                    match import_outcome::confirm_import(&state, result.download_id).await {
+                                        Ok(true) => {}
+                                        Ok(false) => debug!(download_id = %result.download_id, "Import already confirmed or download not found, skipping"),
+                                        Err(e) => error!(download_id = %result.download_id, error = %e, "Failed to confirm import via NATS"),
+                                    }
                                 }
                                 IngestResultStatus::Failed => {
-                                    handle_ingest_failed(&state, result.download_id, result.error).await;
+                                    import_outcome::fail_import(&state, result.download_id, result.error.as_deref()).await;
+                                }
+                                IngestResultStatus::Retry => {
+                                    import_outcome::retry_import(&state, result.download_id, result.error.as_deref()).await;
                                 }
                                 IngestResultStatus::Deferred => {
-                                    handle_ingest_deferred(&state, result.download_id, result.error).await;
+                                    import_outcome::defer_import(&state, result.download_id, result.error.as_deref()).await;
                                 }
                             }
 
@@ -699,224 +714,4 @@ pub async fn subscribe_review_result_events(nats: NatsClient, state: crate::stat
             }
         }
     }
-}
-
-/// Handle a successful import result from kobbler.
-/// Confirms import in DB and deletes from download client.
-async fn handle_ingest_imported(state: &crate::state::AppState, download_id: Uuid) {
-    use crate::download_clients::select_download_client;
-    use crate::helpers::{broadcast_download_updated, log_event};
-    use crate::repositories::downloads as downloads_repo;
-    use crate::repositories::watch as watch_repo;
-
-    // Confirm import in DB (idempotent — returns None if already confirmed)
-    let import_info = match downloads_repo::confirm_import(&state.pool, download_id).await {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            debug!(download_id = %download_id, "Import already confirmed or download not found, skipping");
-            return;
-        }
-        Err(e) => {
-            error!(download_id = %download_id, error = %e, "Failed to confirm import via NATS");
-            return;
-        }
-    };
-
-    // Mark the watch match as import-confirmed (survives download deletion)
-    if let Err(e) = watch_repo::mark_match_import_confirmed(&state.pool, download_id).await {
-        warn!(error = %e, download_id = %download_id, "Failed to mark watch match import confirmed");
-    }
-
-    log_event(
-        &state.pool,
-        download_id,
-        "import_confirmed",
-        "Kobbler confirmed import (via NATS)",
-        None,
-    )
-    .await;
-
-    // Delete from download client if configured
-    if let (Some(client_id), Some(external_id)) =
-        (import_info.download_client_id, import_info.external_id)
-        && let Ok(client) =
-            select_download_client(&state.pool, Some(client_id), &import_info.protocol).await
-        && client.delete_after_import
-    {
-        let remove_result = match state.download_clients.get(client.client_type.as_str()) {
-            Some(handler) => {
-                handler
-                    .remove(&state.http_client, &client, &external_id, true)
-                    .await
-            }
-            None => Ok(()),
-        };
-        if let Err(err) = remove_result {
-            log_event(
-                &state.pool,
-                download_id,
-                "remove_failed",
-                "Failed to remove from download client after NATS import confirmation",
-                Some(serde_json::json!({ "error": err.to_string() })),
-            )
-            .await;
-        } else {
-            log_event(
-                &state.pool,
-                download_id,
-                "removed",
-                "Removed from download client after NATS import confirmation",
-                Some(serde_json::json!({ "external_id": external_id })),
-            )
-            .await;
-        }
-    }
-
-    // Filesystem cleanup: delete the storage directory if it still exists.
-    // SABnzbd's del_files flag is unreliable — this is the fallback.
-    if let Some(ref cd) = import_info.client_data
-        && let Some(storage) = cd.get("storage").and_then(|v| v.as_str())
-        && !storage.is_empty()
-    {
-        let storage_path = std::path::Path::new(storage);
-        let cleanup_dir = if storage_path.is_file() {
-            match storage_path.parent() {
-                Some(parent) => parent.to_path_buf(),
-                None => {
-                    tracing::warn!(
-                        download_id = %download_id,
-                        path = storage,
-                        "Cannot determine parent directory of storage file"
-                    );
-                    return;
-                }
-            }
-        } else {
-            storage_path.to_path_buf()
-        };
-        let depth = cleanup_dir.components().count();
-        if depth < 3 {
-            tracing::warn!(
-                download_id = %download_id,
-                path = %cleanup_dir.display(),
-                depth,
-                "Refusing to delete storage path: too shallow (need at least 3 components)"
-            );
-        } else if cleanup_dir.exists() {
-            if let Err(err) = tokio::fs::remove_dir_all(&cleanup_dir).await {
-                tracing::warn!(
-                    download_id = %download_id,
-                    path = %cleanup_dir.display(),
-                    error = %err,
-                    "Failed to clean up storage directory after NATS import"
-                );
-            } else {
-                tracing::info!(
-                    download_id = %download_id,
-                    path = %cleanup_dir.display(),
-                    "Cleaned up storage directory after NATS import"
-                );
-            }
-        }
-    }
-
-    broadcast_download_updated(&state.pool, &state.download_events, download_id).await;
-}
-
-/// Handle a failed import result from kobbler.
-/// Marks download as failed, logs the failure, and triggers re-search.
-///
-/// If the download has already been confirmed as imported, the failure is
-/// ignored — this happens when NATS redelivers a message and the second
-/// execution fails because files were already cleaned up.
-async fn handle_ingest_failed(
-    state: &crate::state::AppState,
-    download_id: Uuid,
-    error_msg: Option<String>,
-) {
-    use crate::helpers::log_event;
-    use crate::repositories::downloads as downloads_repo;
-
-    // Guard: don't overwrite a successful import with a late-arriving failure
-    match downloads_repo::is_import_confirmed(&state.pool, download_id).await {
-        Ok(true) => {
-            warn!(
-                download_id = %download_id,
-                error = ?error_msg,
-                "Ignoring import_failed for already-confirmed download (likely NATS redelivery race)"
-            );
-            return;
-        }
-        Err(e) => {
-            warn!(
-                download_id = %download_id,
-                error = %e,
-                "Failed to check import confirmation, proceeding with failure handling"
-            );
-        }
-        _ => {}
-    }
-
-    let reason = error_msg.as_deref().unwrap_or("Import rejected by Kobbler");
-
-    // Claim the failure transition. A repeat import_failed for a download we
-    // already failed must not log a second failure or fire a second re-search —
-    // each extra re-search starts an independent replacement chain, and they
-    // grab concurrently because none can see the others' in-flight download.
-    match downloads_repo::claim_failure(&state.pool, download_id, reason).await {
-        Ok(false) => {
-            warn!(
-                download_id = %download_id,
-                error = ?error_msg,
-                "Ignoring duplicate import_failed for already-failed download"
-            );
-            return;
-        }
-        Err(e) => {
-            error!(download_id = %download_id, error = %e, "Failed to mark download as failed after import rejection");
-            return;
-        }
-        Ok(true) => {}
-    }
-
-    log_event(
-        &state.pool,
-        download_id,
-        "import_failed",
-        "Kobbler reported import failure (via NATS)",
-        error_msg
-            .as_ref()
-            .map(|e| serde_json::json!({ "error": e })),
-    )
-    .await;
-
-    // Trigger re-search for the watch pattern
-    crate::polling::trigger_research_for_download(state, download_id).await;
-
-    crate::helpers::broadcast_download_updated(&state.pool, &state.download_events, download_id)
-        .await;
-}
-
-/// Handle a deferred import result from kobbler.
-/// Logs the deferral but does NOT trigger re-search — the ingest will be
-/// retried automatically when the target storage becomes available.
-async fn handle_ingest_deferred(
-    state: &crate::state::AppState,
-    download_id: Uuid,
-    reason: Option<String>,
-) {
-    use crate::helpers::log_event;
-
-    log_event(
-        &state.pool,
-        download_id,
-        "import_deferred",
-        "Media root temporarily unavailable — will import automatically when available",
-        reason.as_ref().map(|r| serde_json::json!({ "reason": r })),
-    )
-    .await;
-
-    // Do NOT trigger re-search — this is a temporary condition, not a failure
-    crate::helpers::broadcast_download_updated(&state.pool, &state.download_events, download_id)
-        .await;
 }

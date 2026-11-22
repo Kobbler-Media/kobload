@@ -91,16 +91,16 @@ pub use crud::{
 
 // Re-export polling operations
 pub use polling::{
-    claim_failure, clear_files_scan_error, finalize_submission, get_or_create_idempotency_key,
-    mark_callback_sent, mark_failed, mark_submission_failed, mark_submission_success,
-    touch_callback_attempt, update_callback_attempt, update_callback_error,
-    update_enriched_metadata, update_files_json, update_files_scan_error, update_poll_status,
-    update_status, update_submission_attempt,
+    MAX_CALLBACK_ATTEMPTS, claim_failure, clear_files_scan_error, exhaust_import_retries,
+    finalize_submission, get_or_create_idempotency_key, mark_callback_sent, mark_failed,
+    mark_submission_failed, mark_submission_success, schedule_import_retry, touch_callback_attempt,
+    update_callback_attempt, update_callback_error, update_enriched_metadata, update_files_json,
+    update_files_scan_error, update_poll_status, update_status, update_submission_attempt,
 };
 
 // Re-export lifecycle operations
 pub use lifecycle::{
-    CompletionCallbackInfo, FileByIdInfo, ImportConfirmationInfo, ReingestInfo, RescanInfo,
-    complete_download_status, confirm_import, get_file_by_id, get_file_path, get_reingest_info,
-    get_rescan_info, is_import_confirmed, list_download_events, log_event, reset_callback_tracking,
+    CompletionCallbackInfo, FileByIdInfo, ReingestInfo, RescanInfo, complete_download_status,
+    confirm_import, get_file_by_id, get_file_path, get_reingest_info, get_rescan_info,
+    is_import_confirmed, list_download_events, log_event, reset_callback_tracking,
 };

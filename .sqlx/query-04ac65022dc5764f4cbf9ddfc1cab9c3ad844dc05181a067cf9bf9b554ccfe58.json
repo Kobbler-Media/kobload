@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads\n           SET status = 'failed', error = $2, callback_error = $2,\n               callback_sent_at = COALESCE(callback_sent_at, NOW()), updated_at = NOW()\n           WHERE id = $1 AND import_confirmed_at IS NULL AND status = 'completed'\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "04ac65022dc5764f4cbf9ddfc1cab9c3ad844dc05181a067cf9bf9b554ccfe58"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE downloads\n           SET callback_sent_at = NULL, callback_idempotency_key = NULL,\n               callback_last_attempt_at = NOW(), callback_error = $2, updated_at = NOW()\n           WHERE id = $1 AND import_confirmed_at IS NULL AND status = 'completed'\n             AND callback_attempts < $3\n           RETURNING callback_attempts",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "callback_attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "callback_attempts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "613b6dd5fcb8f346f9beaaefee5adcfa68678e030757aaab526666b649835a9d"
+}

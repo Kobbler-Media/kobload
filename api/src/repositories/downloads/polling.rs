@@ -5,6 +5,53 @@ use super::DownloadStatusUpdate;
 use sqlx::{Executor, Postgres};
 use uuid::Uuid;
 
+/// `fetch_pending_downloads` stops resending at this many attempts; its backoff
+/// schedule is written out to the same length.
+pub const MAX_CALLBACK_ATTEMPTS: i32 = 10;
+
+/// Queues the ingest for a resend after the usual backoff, under a fresh
+/// idempotency key (Kobbler records the old one on the attempt that failed).
+/// `None` once the attempts are used up, or when the download is no longer
+/// waiting on an import.
+pub async fn schedule_import_retry<'e, E>(exec: E, id: Uuid, error: &str) -> Result<Option<i32>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let attempts = sqlx::query_scalar!(
+        r#"UPDATE downloads
+           SET callback_sent_at = NULL, callback_idempotency_key = NULL,
+               callback_last_attempt_at = NOW(), callback_error = $2, updated_at = NOW()
+           WHERE id = $1 AND import_confirmed_at IS NULL AND status = 'completed'
+             AND callback_attempts < $3
+           RETURNING callback_attempts"#,
+        id,
+        error,
+        MAX_CALLBACK_ATTEMPTS,
+    )
+    .fetch_optional(exec)
+    .await?;
+    Ok(attempts)
+}
+
+pub async fn exhaust_import_retries<'e, E>(exec: E, id: Uuid, error: &str) -> Result<bool>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let exhausted = sqlx::query_scalar!(
+        r#"UPDATE downloads
+           SET status = 'failed', error = $2, callback_error = $2,
+               callback_sent_at = COALESCE(callback_sent_at, NOW()), updated_at = NOW()
+           WHERE id = $1 AND import_confirmed_at IS NULL AND status = 'completed'
+           RETURNING id"#,
+        id,
+        error,
+    )
+    .fetch_optional(exec)
+    .await?
+    .is_some();
+    Ok(exhausted)
+}
+
 /// Update poll timestamp and error.
 pub async fn update_poll_status<'e, E>(
     exec: E,

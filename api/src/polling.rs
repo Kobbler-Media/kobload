@@ -355,123 +355,161 @@ async fn send_failed_callback(state: &AppState, download: &PendingDownload) {
 
 pub async fn poll_downloads(state: AppState) {
     loop {
-        let pending = downloads_repo::fetch_pending_downloads(&state.pool)
-            .await
-            .unwrap_or_else(|e| {
-                error!(error = %e, "failed to fetch pending downloads");
-                Vec::new()
-            });
+        poll_once(&state).await;
+        sleep(Duration::from_secs(15)).await;
+    }
+}
 
-        for download in pending {
-            if download.status == "completed" || download.status == "failed" {
-                // Handle files_scan_error retry - re-poll to check if files are now accessible
-                if download.files_scan_error.is_some() && download.status == "completed" {
-                    // Try to re-poll download client to scan files
-                    let retry_result = retry_files_scan(&state, &download).await;
-                    match retry_result {
-                        FilesScanRetryResult::Recovered(expanded_result) => {
-                            // Files are now accessible - clear error and enqueue metadata extraction
-                            let files_json = if !expanded_result.files.is_empty() {
-                                serde_json::to_value(&expanded_result.files).ok()
-                            } else {
-                                None
-                            };
-                            let _ = downloads_repo::clear_files_scan_error(
-                                &state.pool,
-                                download.id,
-                                expanded_result.file_path.as_deref(),
-                                files_json.as_ref(),
-                            )
-                            .await;
+pub async fn poll_once(state: &AppState) {
+    let pending = downloads_repo::fetch_pending_downloads(&state.pool)
+        .await
+        .unwrap_or_else(|e| {
+            error!(error = %e, "failed to fetch pending downloads");
+            Vec::new()
+        });
 
-                            log_event(
-                                &state.pool,
-                                download.id,
-                                "files_scan_recovered",
-                                "Files are now accessible after retry",
-                                None,
-                            )
-                            .await;
-
-                            trigger_metadata_extraction(&state, &download).await;
-                            broadcast_download_updated(
-                                &state.pool,
-                                &state.download_events,
-                                download.id,
-                            )
-                            .await;
-                        }
-                        FilesScanRetryResult::StillFailing(error_msg) => {
-                            // Still can't scan files - update last attempt time for backoff
-                            let _ = downloads_repo::update_files_scan_error(
-                                &state.pool,
-                                download.id,
-                                &error_msg,
-                            )
-                            .await;
-                            broadcast_download_updated(
-                                &state.pool,
-                                &state.download_events,
-                                download.id,
-                            )
-                            .await;
-                        }
-                        FilesScanRetryResult::CouldNotPoll => {
-                            // If we couldn't re-poll, update last attempt time for backoff
-                            let _ =
-                                downloads_repo::touch_callback_attempt(&state.pool, download.id)
-                                    .await;
-                        }
-                    }
-                    continue;
-                }
-
-                if download.callback_sent_at.is_none() {
-                    if download.status == "completed" {
-                        // Restore files from stored JSON
-                        let files: Vec<ScannedFile> = download
-                            .files_json
-                            .as_ref()
-                            .and_then(|json| serde_json::from_value(json.clone()).ok())
-                            .unwrap_or_default();
-
-                        if files.first().is_some_and(|f| f.is_enriched()) {
-                            // Files are already enriched - send callback from stored data
-                            let _ = send_callback_from_enriched(&state, &download).await;
+    for download in pending {
+        if download.status == "completed" || download.status == "failed" {
+            // Handle files_scan_error retry - re-poll to check if files are now accessible
+            if download.files_scan_error.is_some() && download.status == "completed" {
+                // Try to re-poll download client to scan files
+                let retry_result = retry_files_scan(state, &download).await;
+                match retry_result {
+                    FilesScanRetryResult::Recovered(expanded_result) => {
+                        // Files are now accessible - clear error and enqueue metadata extraction
+                        let files_json = if !expanded_result.files.is_empty() {
+                            serde_json::to_value(&expanded_result.files).ok()
                         } else {
-                            // Not enriched yet - trigger metadata extraction
-                            trigger_metadata_extraction(&state, &download).await;
-                        }
-                    } else {
-                        // Failed downloads don't need enrichment
-                        send_failed_callback(&state, &download).await;
+                            None
+                        };
+                        let _ = downloads_repo::clear_files_scan_error(
+                            &state.pool,
+                            download.id,
+                            expanded_result.file_path.as_deref(),
+                            files_json.as_ref(),
+                        )
+                        .await;
+
+                        log_event(
+                            &state.pool,
+                            download.id,
+                            "files_scan_recovered",
+                            "Files are now accessible after retry",
+                            None,
+                        )
+                        .await;
+
+                        trigger_metadata_extraction(state, &download).await;
+                        broadcast_download_updated(
+                            &state.pool,
+                            &state.download_events,
+                            download.id,
+                        )
+                        .await;
+                    }
+                    FilesScanRetryResult::StillFailing(error_msg) => {
+                        // Still can't scan files - update last attempt time for backoff
+                        let _ = downloads_repo::update_files_scan_error(
+                            &state.pool,
+                            download.id,
+                            &error_msg,
+                        )
+                        .await;
+                        broadcast_download_updated(
+                            &state.pool,
+                            &state.download_events,
+                            download.id,
+                        )
+                        .await;
+                    }
+                    FilesScanRetryResult::CouldNotPoll => {
+                        // If we couldn't re-poll, update last attempt time for backoff
+                        let _ =
+                            downloads_repo::touch_callback_attempt(&state.pool, download.id).await;
                     }
                 }
                 continue;
             }
 
-            let Some(client_id) = download.download_client_id else {
-                continue;
-            };
-            let Some(external_id) = download.external_id.as_deref() else {
-                continue;
-            };
+            if download.callback_sent_at.is_none() {
+                if download.status == "completed" {
+                    // Restore files from stored JSON
+                    let files: Vec<ScannedFile> = download
+                        .files_json
+                        .as_ref()
+                        .and_then(|json| serde_json::from_value(json.clone()).ok())
+                        .unwrap_or_default();
 
-            let client = match select_download_client(
-                &state.pool,
-                Some(client_id),
-                &download.protocol,
-            )
-            .await
-            {
+                    if files.first().is_some_and(|f| f.is_enriched()) {
+                        // Files are already enriched - send callback from stored data
+                        let _ = send_callback_from_enriched(state, &download).await;
+                    } else {
+                        // Not enriched yet - trigger metadata extraction
+                        trigger_metadata_extraction(state, &download).await;
+                    }
+                } else {
+                    // Failed downloads don't need enrichment
+                    send_failed_callback(state, &download).await;
+                }
+            }
+            continue;
+        }
+
+        let Some(client_id) = download.download_client_id else {
+            continue;
+        };
+        let Some(external_id) = download.external_id.as_deref() else {
+            continue;
+        };
+
+        let client =
+            match select_download_client(&state.pool, Some(client_id), &download.protocol).await {
                 Ok(client) => client,
                 Err(_) => continue,
             };
 
-            let handler = match state.download_clients.get(client.client_type.as_str()) {
-                Some(handler) => handler,
-                None => {
-                    let err = DownloadClientError::UnsupportedClient;
+        let handler = match state.download_clients.get(client.client_type.as_str()) {
+            Some(handler) => handler,
+            None => {
+                let err = DownloadClientError::UnsupportedClient;
+                let _ =
+                    downloads_repo::mark_failed(&state.pool, download.id, &err.to_string()).await;
+                log_event(
+                    &state.pool,
+                    download.id,
+                    "poll_error",
+                    "Polling download client failed",
+                    Some(serde_json::json!({ "error": err.to_string() })),
+                )
+                .await;
+                broadcast_download_updated(&state.pool, &state.download_events, download.id).await;
+                continue;
+            }
+        };
+
+        let poll_result = handler.poll(&state.http_client, &client, external_id).await;
+
+        let poll_result = match poll_result {
+            Ok(result) => result,
+            Err(err) => {
+                let is_connection_error = matches!(&err, DownloadClientError::Request(_));
+                if is_connection_error {
+                    let _ = downloads_repo::update_poll_status(
+                        &state.pool,
+                        download.id,
+                        Some(&err.to_string()),
+                        None,
+                    )
+                    .await;
+                    log_event(
+                        &state.pool,
+                        download.id,
+                        "poll_error",
+                        "Polling download client failed (will retry)",
+                        Some(serde_json::json!({ "error": err.to_string(), "recoverable": true })),
+                    )
+                    .await;
+                } else {
                     let _ = downloads_repo::mark_failed(&state.pool, download.id, &err.to_string())
                         .await;
                     log_event(
@@ -482,156 +520,113 @@ pub async fn poll_downloads(state: AppState) {
                         Some(serde_json::json!({ "error": err.to_string() })),
                     )
                     .await;
-                    broadcast_download_updated(&state.pool, &state.download_events, download.id)
-                        .await;
-                    continue;
                 }
-            };
-
-            let poll_result = handler.poll(&state.http_client, &client, external_id).await;
-
-            let poll_result = match poll_result {
-                Ok(result) => result,
-                Err(err) => {
-                    let is_connection_error = matches!(&err, DownloadClientError::Request(_));
-                    if is_connection_error {
-                        let _ = downloads_repo::update_poll_status(
-                            &state.pool,
-                            download.id,
-                            Some(&err.to_string()),
-                            None,
-                        )
-                        .await;
-                        log_event(
-                            &state.pool,
-                            download.id,
-                            "poll_error",
-                            "Polling download client failed (will retry)",
-                            Some(serde_json::json!({ "error": err.to_string(), "recoverable": true })),
-                        )
-                        .await;
-                    } else {
-                        let _ =
-                            downloads_repo::mark_failed(&state.pool, download.id, &err.to_string())
-                                .await;
-                        log_event(
-                            &state.pool,
-                            download.id,
-                            "poll_error",
-                            "Polling download client failed",
-                            Some(serde_json::json!({ "error": err.to_string() })),
-                        )
-                        .await;
-                    }
-                    broadcast_download_updated(&state.pool, &state.download_events, download.id)
-                        .await;
-                    continue;
-                }
-            };
-
-            let _ = downloads_repo::update_poll_status(
-                &state.pool,
-                download.id,
-                poll_result.error.as_deref(),
-                poll_result.progress,
-            )
-            .await;
-
-            // Broadcast progress update
-            broadcast_download_updated(&state.pool, &state.download_events, download.id).await;
-
-            if poll_result.status == download.status {
+                broadcast_download_updated(&state.pool, &state.download_events, download.id).await;
                 continue;
             }
+        };
 
-            let status_update = downloads_repo::DownloadStatusUpdate {
-                status: &poll_result.status,
-                file_path: poll_result.file_path.as_deref(),
-                error: poll_result.error.as_deref(),
-                progress: poll_result.progress,
-                files_scan_error: poll_result.files_scan_error.as_deref(),
-                client_data: poll_result.client_data.as_ref(),
-            };
-            let _ = downloads_repo::update_status(&state.pool, download.id, &status_update).await;
+        let _ = downloads_repo::update_poll_status(
+            &state.pool,
+            download.id,
+            poll_result.error.as_deref(),
+            poll_result.progress,
+        )
+        .await;
 
-            // Log status change
-            log_event(
-                &state.pool,
-                download.id,
-                "status_changed",
-                &format!(
-                    "Status changed from {} to {}",
-                    download.status, poll_result.status
-                ),
-                Some(serde_json::json!({
-                    "old_status": download.status,
-                    "new_status": poll_result.status,
-                })),
-            )
-            .await;
+        // Broadcast progress update
+        broadcast_download_updated(&state.pool, &state.download_events, download.id).await;
 
-            // Broadcast status change
-            broadcast_download_updated(&state.pool, &state.download_events, download.id).await;
-
-            // Dispatch to registered webhooks
-            let event_name = format!("download.{}", poll_result.status);
-            crate::webhook_dispatch::dispatch_download_event(
-                &state.pool,
-                &state.http_client,
-                &event_name,
-                download.id,
-                &poll_result.status,
-                Some(&download.name),
-            )
-            .await;
-
-            if (poll_result.status == "completed" || poll_result.status == "failed")
-                && download.callback_sent_at.is_none()
-            {
-                if poll_result.status == "completed" {
-                    // For completed downloads, expand archives to list their contents
-                    let expanded_files = if !poll_result.files.is_empty() {
-                        expand_archives(
-                            poll_result.files.clone(),
-                            state.unrar_path.as_deref(),
-                            state.sevenz_path.as_deref(),
-                        )
-                        .await
-                    } else {
-                        poll_result.files.clone()
-                    };
-
-                    // Persist scanned files for callback retries
-                    if !expanded_files.is_empty()
-                        && let Ok(files_json) = serde_json::to_value(&expanded_files)
-                    {
-                        let _ = downloads_repo::update_files_json(
-                            &state.pool,
-                            download.id,
-                            &files_json,
-                        )
-                        .await;
-                    }
-
-                    // Enqueue metadata extraction job (async, non-blocking)
-                    trigger_metadata_extraction(&state, &download).await;
-                } else {
-                    // Failed downloads: send callback immediately (no files to enrich)
-                    send_failed_callback(&state, &download).await;
-                    // Trigger re-search for the watch pattern so we find another release
-                    trigger_research_for_download(&state, download.id).await;
-                }
-            }
+        if poll_result.status == download.status {
+            continue;
         }
 
-        // Retry pending submissions
-        retry_pending_submissions(&state).await;
+        let status_update = downloads_repo::DownloadStatusUpdate {
+            status: &poll_result.status,
+            file_path: poll_result.file_path.as_deref(),
+            error: poll_result.error.as_deref(),
+            progress: poll_result.progress,
+            files_scan_error: poll_result.files_scan_error.as_deref(),
+            client_data: poll_result.client_data.as_ref(),
+        };
+        let _ = downloads_repo::update_status(&state.pool, download.id, &status_update).await;
 
-        // Retry pending watch callbacks
-        crate::watch::service::retry_pending_watch_callbacks(&state).await;
+        // Log status change
+        log_event(
+            &state.pool,
+            download.id,
+            "status_changed",
+            &format!(
+                "Status changed from {} to {}",
+                download.status, poll_result.status
+            ),
+            Some(serde_json::json!({
+                "old_status": download.status,
+                "new_status": poll_result.status,
+            })),
+        )
+        .await;
 
-        sleep(Duration::from_secs(15)).await;
+        // Broadcast status change
+        broadcast_download_updated(&state.pool, &state.download_events, download.id).await;
+
+        // Dispatch to registered webhooks
+        let event_name = format!("download.{}", poll_result.status);
+        crate::webhook_dispatch::dispatch_download_event(
+            &state.pool,
+            &state.http_client,
+            &event_name,
+            download.id,
+            &poll_result.status,
+            Some(&download.name),
+        )
+        .await;
+
+        if (poll_result.status == "completed" || poll_result.status == "failed")
+            && download.callback_sent_at.is_none()
+        {
+            if poll_result.status == "completed" {
+                // For completed downloads, expand archives to list their contents
+                let expanded_files = if !poll_result.files.is_empty() {
+                    expand_archives(
+                        poll_result.files.clone(),
+                        state.unrar_path.as_deref(),
+                        state.sevenz_path.as_deref(),
+                    )
+                    .await
+                } else {
+                    poll_result.files.clone()
+                };
+
+                // Persist scanned files for callback retries
+                if !expanded_files.is_empty()
+                    && let Ok(files_json) = serde_json::to_value(&expanded_files)
+                {
+                    let _ =
+                        downloads_repo::update_files_json(&state.pool, download.id, &files_json)
+                            .await;
+                }
+
+                // Enqueue metadata extraction job (async, non-blocking)
+                trigger_metadata_extraction(state, &download).await;
+            } else {
+                // Failed downloads: send callback immediately (no files to enrich)
+                send_failed_callback(state, &download).await;
+                crate::services::import_outcome::release_from_client(
+                    &state.pool,
+                    &state.http_client,
+                    state.download_clients.as_ref(),
+                    download.id,
+                )
+                .await;
+                // Trigger re-search for the watch pattern so we find another release
+                trigger_research_for_download(state, download.id).await;
+            }
+        }
     }
+
+    retry_pending_submissions(state).await;
+    crate::watch::service::retry_pending_watch_callbacks(state).await;
 }
 
 /// Exclude the failed release and immediately re-search for a replacement.

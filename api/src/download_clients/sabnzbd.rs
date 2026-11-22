@@ -425,6 +425,12 @@ pub async fn remove_sabnzbd(
         .as_deref()
         .ok_or(DownloadClientError::MissingApiKey)?;
 
+    let job_dirs = if delete_data {
+        history_job_dirs(http_client, client, api_key, nzo_id).await?
+    } else {
+        Vec::new()
+    };
+
     let delete_flag = if delete_data { "1" } else { "0" };
     // A job lives in either the queue (still downloading/queued/paused) or the
     // history (post-processing done or failed). `history/delete` never touches
@@ -471,7 +477,93 @@ pub async fn remove_sabnzbd(
         }
     }
 
+    // SABnzbd's del_files only removes a failed job's incomplete folder; a
+    // completed job's folder survives the history delete.
+    for dir in job_dirs {
+        match fs::remove_dir_all(&dir).await {
+            Ok(()) => tracing::info!(path = %dir.display(), "Deleted SABnzbd job folder"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(DownloadClientError::Message(format!(
+                    "failed to delete SABnzbd job folder {}: {e}",
+                    dir.display()
+                )));
+            }
+        }
+    }
+
     Ok(())
+}
+
+async fn history_job_dirs(
+    http_client: &reqwest::Client,
+    client: &DownloadClientConfig,
+    api_key: &str,
+    nzo_ids: &str,
+) -> Result<Vec<PathBuf>, DownloadClientError> {
+    let history = fetch_history(http_client, client, api_key).await?;
+    let Some(slots) = history
+        .get("history")
+        .and_then(|v| v.get("slots"))
+        .and_then(|v| v.as_array())
+    else {
+        return Ok(Vec::new());
+    };
+    let mut dirs = Vec::new();
+    for id in nzo_ids.split(',') {
+        let Some(slot) = slots
+            .iter()
+            .find(|s| s.get("nzo_id").and_then(|v| v.as_str()) == Some(id))
+        else {
+            continue;
+        };
+        let storage = slot.get("storage").and_then(|v| v.as_str()).unwrap_or("");
+        let name = slot.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        match job_dir(storage, name).await {
+            Some(dir) => dirs.push(dir),
+            None if !storage.is_empty() => tracing::warn!(
+                nzo_id = id,
+                storage,
+                "No SABnzbd job folder found for storage path, leaving files in place"
+            ),
+            None => {}
+        }
+    }
+    Ok(dirs)
+}
+
+/// The job's own folder: the outermost ancestor of `storage` named after the
+/// job, else `storage` itself when it is a folder. A file with no job-named
+/// ancestor sits in a shared directory, so nothing is safe to delete.
+async fn job_dir(storage: &str, name: &str) -> Option<PathBuf> {
+    if storage.is_empty() {
+        return None;
+    }
+    let storage = std::path::Path::new(storage);
+    let dir = match storage
+        .ancestors()
+        .filter(|d| is_job_folder(d, name))
+        .last()
+    {
+        Some(dir) => dir.to_path_buf(),
+        None if fs::metadata(storage).await.is_ok_and(|m| m.is_dir()) => storage.to_path_buf(),
+        None => return None,
+    };
+    (dir.components().count() >= 3).then_some(dir)
+}
+
+fn is_job_folder(dir: &std::path::Path, name: &str) -> bool {
+    let Some(folder) = dir.file_name().and_then(|f| f.to_str()) else {
+        return false;
+    };
+    let folder = folder.strip_prefix("_FAILED_").unwrap_or(folder);
+    !name.is_empty()
+        && folder.strip_prefix(name).is_some_and(|rest| {
+            rest.is_empty()
+                || rest
+                    .strip_prefix('.')
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
 }
 
 /// Result of scanning a storage path

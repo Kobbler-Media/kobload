@@ -53,6 +53,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/downloads/{id}/complete", post(complete_download))
         .route("/api/v1/downloads/{id}/imported", post(confirm_import))
         .route("/api/v1/downloads/{id}/import-failed", post(import_failed))
+        .route("/api/v1/downloads/{id}/import-retry", post(import_retry))
         .route(
             "/api/v1/downloads/{id}/import-deferred",
             post(import_deferred),

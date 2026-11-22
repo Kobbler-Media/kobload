@@ -46,15 +46,6 @@ where
     Ok(row)
 }
 
-/// Import confirmation result with client info for deletion.
-#[derive(Debug)]
-pub struct ImportConfirmationInfo {
-    pub download_client_id: Option<Uuid>,
-    pub external_id: Option<String>,
-    pub protocol: String,
-    pub client_data: Option<serde_json::Value>,
-}
-
 /// Check whether a download has already been confirmed as imported.
 ///
 /// Used by failure handlers to avoid overwriting a successful import with a
@@ -74,10 +65,8 @@ where
     Ok(confirmed)
 }
 
-/// Confirm import and return client info for potential deletion.
-///
 /// Only updates if the download hasn't already been confirmed
-/// (`import_confirmed_at IS NULL`), making this idempotent. Returns `None`
+/// (`import_confirmed_at IS NULL`), making this idempotent. Returns `false`
 /// if already confirmed or not found — the caller skips cleanup in both cases.
 ///
 /// A `failed`/`cancelled` download is never confirmed. Content validation can
@@ -86,25 +75,25 @@ where
 /// `episode_has_imported_download` reads as "this episode is satisfied", silently
 /// suppressing the re-search that the validation failure had just triggered. The
 /// status test lives in this `WHERE` so the check and the write stay atomic.
-pub async fn confirm_import<'e, E>(exec: E, id: Uuid) -> Result<Option<ImportConfirmationInfo>>
+pub async fn confirm_import<'e, E>(exec: E, id: Uuid) -> Result<bool>
 where
     E: Executor<'e, Database = Postgres>,
 {
-    let row = sqlx::query_as!(
-        ImportConfirmationInfo,
+    let confirmed = sqlx::query_scalar!(
         r#"
         UPDATE downloads
         SET import_confirmed_at = NOW(), updated_at = NOW()
         WHERE id = $1 AND import_confirmed_at IS NULL
           AND status NOT IN ('failed', 'cancelled')
-        RETURNING download_client_id, external_id, protocol, client_data
+        RETURNING id
         "#,
         id,
     )
     .fetch_optional(exec)
-    .await?;
+    .await?
+    .is_some();
 
-    Ok(row)
+    Ok(confirmed)
 }
 
 /// Reingest info for triggering callback.
@@ -192,6 +181,7 @@ where
         r#"
         UPDATE downloads
         SET callback_url = $1, auth_token = $2, callback_sent_at = NULL, import_confirmed_at = NULL,
+            callback_attempts = 0, callback_idempotency_key = NULL,
             status = CASE WHEN status = 'failed' THEN 'completed' ELSE status END,
             error = CASE WHEN status = 'failed' THEN NULL ELSE error END,
             updated_at = NOW()
