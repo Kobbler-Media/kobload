@@ -34,6 +34,7 @@ pub async fn confirm_import(state: &AppState, download_id: Uuid) -> Result<bool>
         &state.http_client,
         state.download_clients.as_ref(),
         download_id,
+        Ended::Imported,
     )
     .await;
 
@@ -84,6 +85,7 @@ pub async fn fail_import(state: &AppState, download_id: Uuid, error: Option<&str
         &state.http_client,
         state.download_clients.as_ref(),
         download_id,
+        Ended::Failed,
     )
     .await;
 
@@ -153,11 +155,18 @@ pub async fn defer_import(state: &AppState, download_id: Uuid, reason: Option<&s
     broadcast_download_updated(&state.pool, &state.download_events, download_id).await;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    Imported,
+    Failed,
+}
+
 pub async fn release_from_client(
     pool: &PgPool,
     http_client: &reqwest::Client,
     download_clients: &dyn DownloadClientResolver,
     download_id: Uuid,
+    ended: Ended,
 ) {
     let info = match downloads_repo::get_deletion_info(pool, download_id).await {
         Ok(Some(info)) => info,
@@ -173,16 +182,20 @@ pub async fn release_from_client(
     let Ok(client) = client_of_download(pool, client_id).await else {
         return;
     };
-    if !client.delete_after_import {
+    // The usenet engine keeps a job, and its folder, until it is released; left alone they
+    // pile up the way SABnzbd's history did.
+    let engine_job = client.client_type == "usenet";
+    if !client.delete_after_import && !engine_job {
         return;
     }
+    let delete_data = client.delete_after_import || ended == Ended::Failed;
     let Some(handler) = download_clients.get(client.client_type.as_str()) else {
         debug!(download_id = %download_id, client_type = %client.client_type, "No handler to release download");
         return;
     };
 
     match handler
-        .remove(http_client, &client, &external_id, true)
+        .remove(http_client, &client, &external_id, delete_data)
         .await
     {
         Ok(()) => {

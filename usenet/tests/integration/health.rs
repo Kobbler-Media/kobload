@@ -42,6 +42,14 @@ async fn a_health_sample_counts_missing_articles_of_an_imported_release() {
         "5% unless asked otherwise"
     );
 
+    let one_file: HealthSample = json(health("?percent=100&output=1").await).await;
+    assert!(one_file.checked > 0, "{one_file:?}");
+    assert_eq!(
+        health("?output=2").await.status(),
+        StatusCode::NOT_FOUND,
+        "the season has two outputs"
+    );
+
     let unknown = harness
         .control(
             "POST",

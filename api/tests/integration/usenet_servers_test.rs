@@ -348,6 +348,7 @@ async fn test_moving_a_server_to_another_endpoint_needs_its_password_again() {
         ("host", json!("news.elsewhere.test")),
         ("port", json!(443)),
         ("tls", json!(false)),
+        ("verify_cert", json!(false)),
     ] {
         let (status, body) = update(&rig, &id, &without_password(field, value.clone())).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {body}");
@@ -433,6 +434,15 @@ async fn test_an_edited_server_is_tested_where_the_form_points() {
             .to_lowercase()
             .contains("password"),
         "the stored password does not follow a new endpoint: {result}"
+    );
+
+    let mut unverified = local(stored, Value::Null);
+    unverified["id"] = json!(id);
+    unverified["verify_cert"] = json!(false);
+    let (_, result) = test_body(&rig, &unverified).await;
+    assert_eq!(
+        result["success"], false,
+        "the stored password is not sent without certificate checks: {result}"
     );
 
     moved["password"] = json!("elsewhere-password");

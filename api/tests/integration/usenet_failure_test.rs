@@ -204,16 +204,7 @@ async fn test_a_search_asks_the_engine_for_every_imported_pack_at_once() {
     rig.tv.server.cleanup().await;
 }
 
-#[tokio::test]
-async fn test_reported_missing_articles_mark_the_release_dead() {
-    let rig = UsenetRig::start().await;
-    rig.tv.indexer.set_search_results(vec![
-        rig.nzb("g-holes", "Engine.Holes.Show.S01E05.1080p.WEB-DL.x264-NZB"),
-    ]);
-    let options = rig.options("Engine Holes Show", "5").await;
-    let resolved = rig.resolve_option(&options[0]).await;
-    let key = resolved["release_key"].as_str().unwrap();
-
+async fn report(rig: &UsenetRig, key: &str, file_id: Option<i32>) {
     let resp = rig
         .tv
         .server
@@ -221,17 +212,127 @@ async fn test_reported_missing_articles_mark_the_release_dead() {
         .post_json(
             "/api/v1/stream/outcome",
             &json!({ "debrid_provider_id": rig.provider, "release_key": key, "ok": false,
-                     "reason": "missing_articles" }),
+                     "file_id": file_id, "reason": "missing_articles" }),
         )
         .await;
     assert_eq!(resp.status, StatusCode::NO_CONTENT, "{}", resp.text());
+}
 
+#[tokio::test]
+async fn test_reported_missing_articles_mark_the_release_dead_and_a_re_resolve_keeps_it_so() {
+    let rig = UsenetRig::start().await;
+    rig.tv.indexer.set_search_results(vec![
+        rig.nzb("g-holes", "Engine.Holes.Show.S01E05.1080p.WEB-DL.x264-NZB"),
+    ]);
     let options = rig.options("Engine Holes Show", "5").await;
-    assert_eq!(
-        options[0].availability,
-        Some(StreamAvailability::Uncached),
-        "{options:?}"
+    let resolved = rig.resolve_option(&options[0]).await;
+    let key = resolved["release_key"].as_str().unwrap().to_string();
+
+    report(&rig, &key, None).await;
+    let dead = |options: &[nats_jobs::types::StreamOption], when: &str| {
+        assert_eq!(
+            options[0].availability,
+            Some(StreamAvailability::Uncached),
+            "{when}: {options:?}"
+        );
+    };
+    dead(&rig.options("Engine Holes Show", "5").await, "reported");
+
+    let (status, body) = rig.resolve(json!({ "release_key": key })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    dead(
+        &rig.options("Engine Holes Show", "5").await,
+        "served from the engine's cache",
     );
+
+    rig.engine.evict(&key);
+    let (status, body) = rig.resolve(json!({ "release_key": key })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        rig.nzbs.fetches("g-holes"),
+        2,
+        "the evicted NZB was grabbed again"
+    );
+    dead(
+        &rig.options("Engine Holes Show", "5").await,
+        "imported again",
+    );
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_missing_articles_in_one_file_of_a_pack_demote_only_that_file() {
+    let rig = UsenetRig::start().await;
+    rig.engine.layout(
+        "g-pack-holes",
+        &[
+            ("Engine.Pack.Holes.S01E01.1080p.mkv", 1_000_000_000),
+            ("Engine.Pack.Holes.S01E02.1080p.mkv", 1_000_000_000),
+        ],
+    );
+    let nzb_ref = rig
+        .list("g-pack-holes", "Engine.Pack.Holes.S01.1080p.WEB-DL-GRP")
+        .await;
+    let (status, e01) = rig
+        .resolve(json!({ "nzb_ref": nzb_ref, "episode": { "season": 1, "episode": 1 } }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{e01}");
+    let key = e01["release_key"].as_str().unwrap().to_string();
+
+    report(&rig, &key, Some(0)).await;
+
+    let (available, reason): (bool, Option<String>) = sqlx::query_as(
+        "SELECT available, reason FROM debrid_availability_cache
+         WHERE release_key = $1 AND provider_id = $2",
+    )
+    .bind(&key)
+    .bind(rig.provider)
+    .fetch_one(&rig.tv.server.pool)
+    .await
+    .unwrap();
+    assert_eq!((available, reason), (true, None), "the pack is not dead");
+    let failed: Vec<Option<i32>> = sqlx::query_scalar(
+        "SELECT file_id FROM stream_release_outcomes WHERE release_key = $1 AND failures > 0",
+    )
+    .bind(&key)
+    .fetch_all(&rig.tv.server.pool)
+    .await
+    .unwrap();
+    assert_eq!(failed, vec![Some(0)]);
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_an_engine_restart_that_dropped_a_release_re_imports_it_on_re_resolve() {
+    let rig = UsenetRig::start().await;
+    let nzb_ref = rig
+        .list(
+            "g-evicted",
+            "Engine.Evicted.Show.S01E05.1080p.WEB-DL.x264-NZB",
+        )
+        .await;
+    let (status, first) = rig.resolve(json!({ "nzb_ref": nzb_ref })).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let key = first["release_key"].as_str().unwrap().to_string();
+
+    rig.engine.evict(&key);
+    let before = rig.engine.imports().len();
+    let (status, again) = rig
+        .resolve(json!({ "release_key": key, "file_id": first["file_id"] }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["release_key"], key.as_str());
+    let imports = rig.engine.imports();
+    let sent_nzb: Vec<bool> = imports[before..]
+        .iter()
+        .map(|i| i.nzb_base64.is_some())
+        .collect();
+    assert_eq!(
+        sent_nzb,
+        [false, true],
+        "the engine is asked by cache key first, then sent the NZB"
+    );
+    assert_eq!(rig.nzbs.fetches("g-evicted"), 2);
     rig.tv.server.cleanup().await;
 }
 
@@ -316,4 +417,29 @@ fn test_weak_or_partial_engine_settings_refuse_to_start() {
     assert!(full(CONTROL_KEY, "short").is_err());
     assert!(full(CONTROL_KEY, CONTROL_KEY).is_err());
     assert!(settings(&[("USENET_CONTROL_KEY", CONTROL_KEY)]).is_err());
+}
+
+#[test]
+fn test_the_shipped_env_templates_start() {
+    for template in ["env.dev.template", ".env.example"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(template);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let vars: Vec<(String, String)> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .collect();
+        let settings = EngineSettings::from_lookup(|name| {
+            vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+        });
+        assert!(
+            matches!(settings, Ok(None)),
+            "{template}: {:?}",
+            settings.err()
+        );
+    }
 }

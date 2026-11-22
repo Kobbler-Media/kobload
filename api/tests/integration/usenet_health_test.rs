@@ -1,6 +1,6 @@
-//! After a usenet stream resolves, kobload asks the engine for a 5% STAT sample of the
-//! release in the background. Missing articles the release cannot repair demote it the way
-//! a failed playback does; a healthy sample keeps it available.
+//! After a usenet stream resolves, kobload asks the engine for a 5% STAT sample of the file
+//! it chose, in the background. A stream cannot repair, so any missing article demotes that
+//! file the way a failed playback does; the release's other files keep their standing.
 
 use std::time::{Duration, Instant};
 
@@ -8,20 +8,14 @@ use reqwest::StatusCode;
 use serde_json::json;
 use usenet_proto::HealthSample;
 
-use crate::common::usenet::{Served, UsenetRig};
+use crate::common::usenet::{HealthCall, UsenetRig};
 
 const HEALTH_DELAY: Duration = Duration::from_millis(800);
+const GB: u64 = 1_000_000_000;
 
-#[derive(Debug, PartialEq)]
-struct Verdict {
-    available: bool,
-    reason: Option<String>,
-    failure: Option<String>,
-}
-
-async fn availability(rig: &UsenetRig, key: &str) -> (bool, Option<String>, time::OffsetDateTime) {
+async fn availability(rig: &UsenetRig, key: &str) -> (bool, Option<String>) {
     sqlx::query_as(
-        "SELECT available, reason, checked_at FROM debrid_availability_cache
+        "SELECT available, reason FROM debrid_availability_cache
          WHERE release_key = $1 AND provider_id = $2",
     )
     .bind(key)
@@ -31,40 +25,39 @@ async fn availability(rig: &UsenetRig, key: &str) -> (bool, Option<String>, time
     .unwrap()
 }
 
-async fn failure(rig: &UsenetRig, key: &str) -> Option<String> {
-    sqlx::query_scalar(
-        "SELECT last_failure_reason FROM stream_release_outcomes
-         WHERE release_key = $1 AND provider_id = $2 AND failures > 0",
+async fn failures(rig: &UsenetRig, key: &str) -> Vec<(Option<i32>, String)> {
+    sqlx::query_as(
+        "SELECT file_id, last_failure_reason FROM stream_release_outcomes
+         WHERE release_key = $1 AND provider_id = $2 AND failures > 0 ORDER BY file_id",
     )
     .bind(key)
     .bind(rig.provider)
-    .fetch_optional(&rig.tv.server.pool)
+    .fetch_all(&rig.tv.server.pool)
     .await
     .unwrap()
 }
 
-async fn verdict_after_health(rig: &UsenetRig, key: &str) -> Verdict {
-    let (_, _, before) = availability(rig, key).await;
+async fn sampled(rig: &UsenetRig, calls: usize) {
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let (available, reason, checked_at) = availability(rig, key).await;
-        if checked_at > before {
-            return Verdict {
-                available,
-                reason,
-                failure: failure(rig, key).await,
-            };
-        }
-        assert!(Instant::now() < deadline, "the health sample never landed");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    while rig.engine.health_calls().len() < calls {
+        assert!(Instant::now() < deadline, "the health sample never ran");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(HEALTH_DELAY + Duration::from_millis(300)).await;
+}
+
+fn call(guid: &str, output: usize) -> HealthCall {
+    HealthCall {
+        guid: guid.to_string(),
+        percent: Some(5),
+        output: Some(output),
     }
 }
 
 #[tokio::test]
-async fn a_stream_import_is_demoted_only_when_its_sample_misses_articles_it_cannot_repair() {
+async fn any_missing_article_demotes_the_sampled_file_and_nothing_else() {
     struct Case {
         guid: &'static str,
-        par2: bool,
         checked: usize,
         missing: usize,
         demoted: bool,
@@ -72,41 +65,23 @@ async fn a_stream_import_is_demoted_only_when_its_sample_misses_articles_it_cann
     let cases = [
         Case {
             guid: "g-healthy",
-            par2: false,
             checked: 40,
             missing: 0,
             demoted: false,
         },
         Case {
-            guid: "g-holes",
-            par2: false,
-            checked: 40,
-            missing: 1,
-            demoted: true,
-        },
-        Case {
-            guid: "g-repairable",
-            par2: true,
+            guid: "g-one-hole",
             checked: 100,
             missing: 1,
-            demoted: false,
-        },
-        Case {
-            guid: "g-gutted",
-            par2: true,
-            checked: 100,
-            missing: 10,
             demoted: true,
         },
     ];
     let rig = UsenetRig::start().await;
     rig.engine.health_delay(HEALTH_DELAY);
-    for case in &cases {
-        if case.par2 {
-            rig.nzbs.serve(case.guid, Served::WithPar2);
-        }
+    for (n, case) in cases.iter().enumerate() {
         rig.engine.health(
             case.guid,
+            None,
             HealthSample {
                 checked: case.checked,
                 missing: case.missing,
@@ -128,31 +103,20 @@ async fn a_stream_import_is_demoted_only_when_its_sample_misses_articles_it_cann
             case.guid
         );
         let key = resolved["release_key"].as_str().unwrap();
+        sampled(&rig, n + 1).await;
 
-        let verdict = verdict_after_health(&rig, key).await;
+        assert_eq!(availability(&rig, key).await, (true, None), "{}", case.guid);
         let expected = if case.demoted {
-            Verdict {
-                available: false,
-                reason: Some("dead".to_string()),
-                failure: Some("missing_articles".to_string()),
-            }
+            vec![(Some(0), "missing_articles".to_string())]
         } else {
-            Verdict {
-                available: true,
-                reason: None,
-                failure: None,
-            }
+            Vec::new()
         };
-        assert_eq!(verdict, expected, "{}", case.guid);
+        assert_eq!(failures(&rig, key).await, expected, "{}", case.guid);
     }
 
     let calls = rig.engine.health_calls();
-    let guids: Vec<&str> = calls.iter().map(|(g, _)| g.as_str()).collect();
-    assert_eq!(guids, cases.iter().map(|c| c.guid).collect::<Vec<_>>());
-    assert!(
-        calls.iter().all(|(_, percent)| *percent == Some(5)),
-        "{calls:?}"
-    );
+    let expected: Vec<HealthCall> = cases.iter().map(|c| call(c.guid, 0)).collect();
+    assert_eq!(calls, expected);
 
     let again = rig
         .list("g-healthy", "Health.Show.S01E05.1080p.WEB-DL-g-healthy")
@@ -163,7 +127,54 @@ async fn a_stream_import_is_demoted_only_when_its_sample_misses_articles_it_cann
     assert_eq!(
         rig.engine.health_calls().len(),
         cases.len(),
-        "a release sampled recently is not sampled again"
+        "a file sampled recently is not sampled again"
+    );
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_damaged_episode_leaves_the_rest_of_its_pack_playable() {
+    let rig = UsenetRig::start().await;
+    rig.engine.layout(
+        "g-pack",
+        &[
+            ("Health.Pack.S01E01.1080p.mkv", GB),
+            ("Health.Pack.S01E02.1080p.mkv", GB),
+        ],
+    );
+    rig.engine.health(
+        "g-pack",
+        Some(0),
+        HealthSample {
+            checked: 50,
+            missing: 3,
+        },
+    );
+    let nzb_ref = rig.list("g-pack", "Health.Pack.S01.1080p.WEB-DL-GRP").await;
+
+    let episode = |n: u32| json!({ "nzb_ref": nzb_ref, "episode": { "season": 1, "episode": n } });
+    let (status, e01) = rig.resolve(episode(1)).await;
+    assert_eq!(status, StatusCode::OK, "{e01}");
+    let key = e01["release_key"].as_str().unwrap().to_string();
+    sampled(&rig, 1).await;
+    let (status, e02) = rig.resolve(episode(2)).await;
+    assert_eq!(status, StatusCode::OK, "{e02}");
+    sampled(&rig, 2).await;
+
+    assert_eq!(
+        rig.engine.health_calls(),
+        vec![call("g-pack", 0), call("g-pack", 1)],
+        "each played file is sampled on its own"
+    );
+    assert_eq!(
+        failures(&rig, &key).await,
+        vec![(Some(0), "missing_articles".to_string())],
+        "only E01 is demoted"
+    );
+    assert_eq!(
+        availability(&rig, &key).await,
+        (true, None),
+        "the pack stays available for E02"
     );
     rig.tv.server.cleanup().await;
 }

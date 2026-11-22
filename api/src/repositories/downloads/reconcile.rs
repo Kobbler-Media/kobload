@@ -7,6 +7,8 @@ use super::super::Result;
 /// backoff schedule is written out to the same length.
 pub const MAX_SUBMISSION_ATTEMPTS: i32 = 10;
 
+pub const FREE_LOST_REQUEUES: i32 = 3;
+
 #[derive(Debug)]
 pub struct InFlightDownload {
     pub id: Uuid,
@@ -46,7 +48,8 @@ pub async fn known_external_ids(pool: &PgPool, external_ids: &[String]) -> Resul
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requeue {
-    /// The client lost the job: resubmit straight away, without spending an attempt.
+    /// The client lost the job: resubmit straight away, without spending an attempt, for
+    /// the first [`FREE_LOST_REQUEUES`] times.
     Lost,
     /// The client failed the job for reasons outside the release: back off, spend an
     /// attempt, and fail (without excluding the release) once attempts run out.
@@ -65,13 +68,14 @@ pub async fn requeue_submission(
     let status = sqlx::query_scalar!(
         r#"
         UPDATE downloads SET
-            status = CASE WHEN $3 AND submission_attempts + 1 >= $5 THEN 'failed' ELSE 'pending_retry' END,
-            error = CASE WHEN $3 AND submission_attempts + 1 >= $5 THEN $4 ELSE error END,
+            status = CASE WHEN ($3 OR lost_requeues >= $6) AND submission_attempts + 1 >= $5 THEN 'failed' ELSE 'pending_retry' END,
+            error = CASE WHEN ($3 OR lost_requeues >= $6) AND submission_attempts + 1 >= $5 THEN $4 ELSE error END,
             external_id = NULL,
             progress = NULL,
             submission_error = $4,
-            submission_attempts = submission_attempts + CASE WHEN $3 THEN 1 ELSE 0 END,
-            submission_last_attempt_at = CASE WHEN $3 THEN NOW() ELSE NULL END,
+            submission_attempts = submission_attempts + CASE WHEN $3 OR lost_requeues >= $6 THEN 1 ELSE 0 END,
+            submission_last_attempt_at = CASE WHEN $3 OR lost_requeues >= $6 THEN NOW() ELSE NULL END,
+            lost_requeues = lost_requeues + CASE WHEN $3 THEN 0 ELSE 1 END,
             updated_at = NOW()
         WHERE id = $1 AND external_id = $2 AND status IN ('queued', 'downloading')
         RETURNING status
@@ -81,6 +85,7 @@ pub async fn requeue_submission(
         retry,
         reason,
         MAX_SUBMISSION_ATTEMPTS,
+        FREE_LOST_REQUEUES,
     )
     .fetch_optional(pool)
     .await?;

@@ -43,11 +43,46 @@ The engine reports healthy (`GET /healthz`) once it has a server list. It pulls 
 
 ### 3. Exposure and firewall
 
-The stream port (7090) serves anyone who holds a valid signed URL. URLs expire after six hours and name one file of one release, but treat the port as internal anyway:
+The engine's one port (7090) carries three things:
+
+- **Streams** (`/stream/...`): served to anyone who holds a valid signed URL. URLs expire after six hours and name one file of one release.
+- **Control** (`/v1/...`: imports, releases, health samples, download jobs): needs `USENET_CONTROL_KEY` as a bearer token.
+- **Metrics** (`/metrics`): needs `USENET_METRICS_KEY` as a bearer token. `/healthz` is open and says only whether the engine has its server list.
+
+Treat the port as internal anyway:
 
 - Publish it on a LAN address only (`USENET_BIND`). It defaults to `127.0.0.1`. Never publish it on `0.0.0.0` on a host that faces the internet.
-- If Kobbler runs on another host, allow that one host through your firewall to the port, for example `ufw allow from 192.168.1.30 to any port 7090 proto tcp`.
 - There is no reason to route the port through a reverse proxy or expose it publicly. Kobbler fetches the bytes and serves them to players itself.
+- If Kobbler runs on another host, allow only that host to the port. **ufw and plain `INPUT` rules do not do this.** Docker publishes ports through its own NAT rules, and that traffic is forwarded to the container without ever passing `INPUT`, so `ufw allow from ... to any port 7090` and `ufw deny 7090` both have no effect on it. Filter it in Docker's `DOCKER-USER` chain instead, which Docker evaluates before its own rules and leaves alone:
+
+  ```bash
+  # Drop anything to the engine's published address (USENET_BIND:USENET_PORT, 192.168.1.20:7090
+  # here) that is not from the media server (192.168.1.30). --ctorigdst/--ctorigdstport match
+  # the address before Docker's DNAT rewrites it to the container's.
+  iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdst 192.168.1.20 --ctorigdstport 7090 ! -s 192.168.1.30 -j DROP
+  ```
+
+  The API reaches the engine over the compose network at the container's own address, so the rule doesn't match it. Leave `--ctorigdst` in: without it the rule also drops the API's calls, which arrive on container port 7090 too. Use the same rule with `ip6tables` if the port is published on an IPv6 address.
+
+  `DOCKER-USER` rules don't survive a reboot, and Docker creates the chain only when it starts. Install the rule with a oneshot unit that runs after Docker and checks before it inserts, so a restart of the unit never adds a duplicate. `/etc/systemd/system/usenet-engine-firewall.service`:
+
+  ```ini
+  [Unit]
+  Description=Allow only the media server to the usenet engine port
+  After=docker.service
+  Requires=docker.service
+  PartOf=docker.service
+
+  [Service]
+  Type=oneshot
+  RemainAfterExit=yes
+  ExecStart=/bin/sh -c 'R="DOCKER-USER -p tcp -m conntrack --ctorigdst 192.168.1.20 --ctorigdstport 7090 ! -s 192.168.1.30 -j DROP"; iptables -C $R 2>/dev/null || iptables -I $R'
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  Then `systemctl daemon-reload && systemctl enable --now usenet-engine-firewall`. Check it from a third host: `curl -m 5 http://<engine-host>:7090/healthz` must time out, while the same command from the media server answers.
 
 ### 4. Downloads mount and user
 
@@ -114,9 +149,9 @@ The engine shares its pool between streaming and downloads, so you don't split c
 | Archives | loose files and stored (uncompressed) RAR/7z sets stream directly | compressed, solid or encrypted archives are unpacked with `unrar` / `7z` |
 | Passwords | from the NZB's `password` meta; a protected archive without one is refused | from the NZB's `password` meta or the indexer; a protected archive without one fails the job |
 
-**Streaming.** On a tap, Kobload fetches the NZB from the indexer, but only when the engine doesn't already have it. The engine reads just the first article of each file to learn the layout, and the API returns signed URLs for the chosen file: one for the player, one for Kobbler's background cache-ahead. In the background Kobload then STATs a 5% sample of the release's articles. If the sample finds articles missing and the post has no PAR2 files, or more are missing than PAR2 would usually repair, the release is ranked down the same way as a failed playback. Prewarming fetches an NZB ahead of a tap only for the result a search would auto-play, so ranking walks don't spend your indexer's grab limit.
+**Streaming.** On a tap, Kobload fetches the NZB from the indexer, but only when the engine doesn't already have it. The engine reads just the first article of each file to learn the layout, and the API returns signed URLs for the chosen file: one for the player, one for Kobbler's background cache-ahead. In the background Kobload then STATs a 5% sample of the chosen file's articles. A stream can't repair, so if the sample finds any article missing, that file is ranked down the same way as a failed playback. The release's other files (the other episodes of a pack) keep their standing. Prewarming fetches an NZB ahead of a tap only for the result a search would auto-play, so ranking walks don't spend your indexer's grab limit.
 
-**Downloads.** Before fetching the bulk of a job, the engine STATs a sample of its articles and fails the job early when the damage is beyond what the post's PAR2 blocks can repair. A failure caused by the release itself (missing articles, a bad archive, a wrong password) fails the download, and Kobload searches for another release. A failure caused by infrastructure (providers unreachable, a full disk) is retried with backoff and never counts against the release.
+**Downloads.** Before fetching the bulk of a job, the engine STATs a sample of its articles and fails the job early when the damage is beyond what the post's PAR2 blocks can repair. A failure caused by the release itself (missing articles, a bad archive, a wrong password) fails the download, and Kobload searches for another release. A failure caused by infrastructure (providers unreachable, a full disk) is retried with backoff and never counts against the release. Once the media server confirms the import, or the download fails, Kobload releases the engine's job. A failed job's folder always goes with it; an imported one's goes when the client's **Delete after import** is on, which it is by default for usenet clients.
 
 ## Making the engine the default usenet client
 

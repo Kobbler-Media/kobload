@@ -123,3 +123,26 @@ async fn a_pull_with_the_wrong_key_applies_nothing() {
     assert!(error.to_string().contains("401"), "{error}");
     assert!(names(&engine).is_empty());
 }
+
+#[tokio::test]
+async fn a_leftover_partial_file_cannot_leave_the_stored_config_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let nntp = LoopbackServer::start([]).await.unwrap();
+    let served: Served = Arc::new(Mutex::new(EngineConfigResponse {
+        servers: vec![usenet_server("a", &nntp, 0)],
+    }));
+    let url = kobload(served).await;
+    let dir = tempfile::tempdir().unwrap();
+    let partial = dir.path().join("config.json.partial");
+    std::fs::write(&partial, b"{}").unwrap();
+    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let engine = engine(dir.path(), Vec::new()).await;
+    let mut pull = ConfigPull::new(engine, &url, CONTROL, dir.path(), Configured::default());
+
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(1));
+    let mode = std::fs::metadata(dir.path().join("config.json"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+}

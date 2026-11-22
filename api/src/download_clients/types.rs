@@ -186,6 +186,7 @@ pub enum DownloadClientError {
     Request(reqwest::Error),
     Status(StatusCode),
     Message(String),
+    Transient(String),
     UnsupportedClient,
     MissingApiKey,
 }
@@ -195,7 +196,9 @@ impl std::fmt::Display for DownloadClientError {
         match self {
             DownloadClientError::Request(err) => write!(f, "request error: {err}"),
             DownloadClientError::Status(status) => write!(f, "unexpected status: {status}"),
-            DownloadClientError::Message(msg) => write!(f, "{msg}"),
+            DownloadClientError::Message(msg) | DownloadClientError::Transient(msg) => {
+                write!(f, "{msg}")
+            }
             DownloadClientError::UnsupportedClient => write!(f, "unsupported download client"),
             DownloadClientError::MissingApiKey => write!(f, "download client api key missing"),
         }
@@ -216,6 +219,7 @@ impl DownloadClientError {
             DownloadClientError::Status(status) => status.is_server_error(),
             // Message errors are considered permanent (e.g., "missing hash")
             DownloadClientError::Message(_) => false,
+            DownloadClientError::Transient(_) => true,
             // Client misconfiguration is permanent
             DownloadClientError::UnsupportedClient => false,
             DownloadClientError::MissingApiKey => false,

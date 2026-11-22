@@ -23,6 +23,7 @@ pub async fn import(
         })?;
     let mode = match request.mode {
         ImportMode::Stream => kob_usenet::ImportMode::Stream,
+        ImportMode::Prewarm => kob_usenet::ImportMode::Prewarm,
         ImportMode::Download => kob_usenet::ImportMode::Download,
     };
     let release = state

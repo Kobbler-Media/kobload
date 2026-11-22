@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::outcomes::record_probe;
+use super::outcomes::{record_import, record_probe};
 use super::usenet_failure::import_failed;
 use super::usenet_files;
 use super::usenet_nzb::{self, FetchError};
@@ -44,6 +44,7 @@ pub struct ImportJob {
     pub fetch_failure: Option<String>,
     /// Whether the indexer may be asked for the NZB when the engine has no copy.
     pub may_grab: bool,
+    pub mode: ImportMode,
 }
 
 struct Flight {
@@ -115,10 +116,11 @@ async fn run(job: ImportJob) -> Imported {
     let mut request = ImportRequest {
         cache_key: job.nzb_ref.guid.clone(),
         name: job.name.clone(),
-        mode: ImportMode::Stream,
+        mode: job.mode,
         password: None,
         nzb_base64: None,
     };
+    let mut fetched = false;
     let result = match job.handler.usenet_import(&request).await {
         Err(DebridError::NotFound) => {
             if !job.may_grab {
@@ -129,7 +131,7 @@ async fn run(job: ImportJob) -> Imported {
             }
             match usenet_nzb::fetch(&job.http_client, &job.download_url).await {
                 Ok(nzb) => {
-                    remember_par2(&job, usenet_nzb::has_par2(&nzb)).await;
+                    fetched = true;
                     request.nzb_base64 = Some(STANDARD.encode(nzb));
                     job.handler.usenet_import(&request).await
                 }
@@ -140,7 +142,7 @@ async fn run(job: ImportJob) -> Imported {
     };
     match result {
         Ok(imported) => {
-            remember_import(&job, &imported).await;
+            remember_import(&job, &imported, fetched).await;
             Ok(Arc::new(imported))
         }
         Err(e) => {
@@ -186,20 +188,18 @@ async fn remember_fetch_failure(job: &ImportJob, message: &str) {
     }
 }
 
-async fn remember_import(job: &ImportJob, imported: &ImportResponse) {
+// An import the engine served from its own copy read no articles, so it is no news about
+// the release's availability.
+async fn remember_import(job: &ImportJob, imported: &ImportResponse, fetched: bool) {
     let key = &imported.release_key;
     if let Err(e) = usenet_releases::set_usenet_release_key(&job.pool, &job.nzb_ref, key).await {
         warn!(error = %e, release_key = %key, "Failed to remember an imported NZB's key");
     }
     usenet_files::store(key, imported.outputs.clone());
-    record_probe(&job.pool, job.provider_id, key, Some(&job.name), None).await;
-    info!(release_key = %key, outputs = imported.outputs.len(), "Usenet release imported");
-}
-
-async fn remember_par2(job: &ImportJob, has_par2: bool) {
-    if let Err(e) = usenet_releases::set_has_par2(&job.pool, &job.nzb_ref, has_par2).await {
-        warn!(error = %e, "Failed to remember whether an NZB has PAR2 files");
+    if fetched {
+        record_import(&job.pool, job.provider_id, key, Some(&job.name)).await;
     }
+    info!(release_key = %key, outputs = imported.outputs.len(), "Usenet release imported");
 }
 
 async fn remember_refusal(job: &ImportJob, message: &str) {

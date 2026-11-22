@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod api_contract;
 mod auth;
 mod damaged;
 mod deadline;

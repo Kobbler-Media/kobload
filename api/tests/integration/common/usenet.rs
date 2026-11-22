@@ -37,6 +37,13 @@ async fn serve(app: Router) -> String {
     url
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HealthCall {
+    pub guid: String,
+    pub percent: Option<u8>,
+    pub output: Option<usize>,
+}
+
 #[derive(Default)]
 struct EngineState {
     imports: Vec<ImportRequest>,
@@ -47,8 +54,8 @@ struct EngineState {
     delay: Duration,
     release_delay: Duration,
     guid_of: HashMap<String, String>,
-    health: HashMap<String, HealthSample>,
-    health_calls: Vec<(String, Option<u8>)>,
+    health: HashMap<(String, Option<usize>), HealthSample>,
+    health_calls: Vec<HealthCall>,
     health_delay: Duration,
 }
 
@@ -138,10 +145,15 @@ async fn health(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let percent = query.get("percent").and_then(|p| p.parse().ok());
+    let output = query.get("output").and_then(|p| p.parse().ok());
     let delay = {
         let mut s = state.lock().unwrap();
         let guid = s.guid_of.get(&key).cloned().unwrap_or_default();
-        s.health_calls.push((guid, percent));
+        s.health_calls.push(HealthCall {
+            guid,
+            percent,
+            output,
+        });
         s.health_delay
     };
     tokio::time::sleep(delay).await;
@@ -153,10 +165,11 @@ async fn health(
         )
             .into_response();
     }
+    let guid = s.guid_of.get(&key).cloned().unwrap_or_default();
     let sample = s
-        .guid_of
-        .get(&key)
-        .and_then(|guid| s.health.get(guid))
+        .health
+        .get(&(guid.clone(), output))
+        .or_else(|| s.health.get(&(guid, None)))
         .copied()
         .unwrap_or(HEALTHY);
     Json(sample).into_response()
@@ -250,19 +263,26 @@ impl MockEngine {
         );
     }
 
-    pub fn health(&self, guid: &str, sample: HealthSample) {
+    pub fn health(&self, guid: &str, output: Option<usize>, sample: HealthSample) {
         self.state
             .lock()
             .unwrap()
             .health
-            .insert(guid.to_string(), sample);
+            .insert((guid.to_string(), output), sample);
+    }
+
+    /// An engine restart after the release cache dropped the layout and the NZB.
+    pub fn evict(&self, release_key: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.by_release_key.remove(release_key);
+        s.by_cache_key.retain(|_, r| r.release_key != release_key);
     }
 
     pub fn health_delay(&self, delay: Duration) {
         self.state.lock().unwrap().health_delay = delay;
     }
 
-    pub fn health_calls(&self) -> Vec<(String, Option<u8>)> {
+    pub fn health_calls(&self) -> Vec<HealthCall> {
         self.state.lock().unwrap().health_calls.clone()
     }
 
@@ -295,7 +315,6 @@ impl MockEngine {
 pub enum Served {
     Status(StatusCode),
     Huge,
-    WithPar2,
 }
 
 #[derive(Default)]
@@ -331,10 +350,6 @@ async fn nzb(
                 (0..130).map(move |_| Ok::<_, std::io::Error>(chunk.clone())),
             );
             axum::body::Body::from_stream(body).into_response()
-        }
-        Some(Served::WithPar2) => {
-            format!("<nzb><file subject=\"{guid}\"/><file subject=\"{guid}.vol00+01.PAR2\"/></nzb>")
-                .into_response()
         }
         None => format!("<nzb><file subject=\"{guid}\"/></nzb>").into_response(),
     }

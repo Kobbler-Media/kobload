@@ -208,7 +208,7 @@ pub async fn record_availability(
     }
 }
 
-const VERDICT_FRESHNESS: Duration = Duration::from_secs(6 * 3600);
+pub(super) const VERDICT_FRESHNESS: Duration = Duration::from_secs(6 * 3600);
 
 /// Map a [`DebridError`] to the availability outcome that should be recorded.
 ///

@@ -11,7 +11,7 @@ pub const STREAM_TTL: Duration = Duration::from_secs(6 * 3600);
 /// A pack import reads the first segment of every file before it answers.
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// A 5% STAT sample of a season pack runs to thousands of STATs on the health lane, which
+/// A 5% STAT sample of a long file runs to hundreds of STATs on the health lane, which
 /// yields to every other workload.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -140,6 +140,7 @@ impl UsenetEngine {
         &self,
         release_key: &str,
         percent: u8,
+        output: usize,
     ) -> Result<HealthSample, EngineError> {
         let resp = self
             .http
@@ -148,6 +149,7 @@ impl UsenetEngine {
                 self.settings.engine_url
             ))
             .query(&[("percent", percent)])
+            .query(&[("output", output)])
             .bearer_auth(&self.settings.control_key)
             .timeout(HEALTH_TIMEOUT)
             .send()

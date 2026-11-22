@@ -124,8 +124,7 @@ fn blank(value: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-const PASSWORD_AGAIN: &str =
-    "Enter the password again: it is only sent to the host, port and TLS setting it was saved for";
+const PASSWORD_AGAIN: &str = "Enter the password again: it is only sent to the host, port, TLS and certificate check it was saved for";
 
 impl UsenetServerBody {
     // NNTP is line-based, so a line break in a credential would smuggle a command.
@@ -216,8 +215,10 @@ fn candidate(id: Uuid, input: &UsenetServerInput) -> UsenetServerRow {
     }
 }
 
-fn same_endpoint(row: &UsenetServerRow, host: &str, port: i32, tls: bool) -> bool {
-    same_host(&row.host, host) && row.port == port && row.tls == tls
+// Turning certificate checks off would let an impostor of the same host collect the
+// password, so that counts as a new endpoint too.
+fn same_endpoint(row: &UsenetServerRow, host: &str, port: i32, tls: bool, verify: bool) -> bool {
+    same_host(&row.host, host) && row.port == port && row.tls == tls && (verify || !row.verify_cert)
 }
 
 fn database_error(e: impl std::fmt::Display) -> Response {
@@ -239,7 +240,7 @@ async fn checked(
     if input.password.is_none()
         && let Some(row) = stored.iter().find(|r| r.id == id)
         && !row.password.is_empty()
-        && !same_endpoint(row, &input.host, input.port, input.tls)
+        && !same_endpoint(row, &input.host, input.port, input.tls, input.verify_cert)
     {
         return Err((StatusCode::BAD_REQUEST, PASSWORD_AGAIN).into_response());
     }
@@ -385,7 +386,13 @@ pub async fn test_unsaved(
         (None, Some(id)) => match repo::get(&state.pool, id).await {
             Ok(Some(row))
                 if row.password.is_empty()
-                    || same_endpoint(&row, &server.host, server.port, server.tls) =>
+                    || same_endpoint(
+                        &row,
+                        &server.host,
+                        server.port,
+                        server.tls,
+                        server.verify_cert,
+                    ) =>
             {
                 row.password
             }

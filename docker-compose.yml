@@ -157,8 +157,6 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
-    depends_on:
-      - api
 
 # Optional: bitmagnet provides a local DHT torrent index that Kobload can sync
 # from (see api/src/jobs/handlers/bitmagnet_sync.rs). Not required to run

@@ -13,6 +13,7 @@ const DEFAULT_PERCENT: u8 = 5;
 #[derive(Deserialize)]
 pub struct Sample {
     percent: Option<u8>,
+    output: Option<usize>,
 }
 
 pub async fn health(
@@ -24,8 +25,11 @@ pub async fn health(
         .parse()
         .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "unknown_release"))?;
     let percent = sample.percent.unwrap_or(DEFAULT_PERCENT).clamp(1, 100);
-    let sampled = state.engine.sample_health(&key, percent).await?;
-    tracing::info!(%key, percent, checked = sampled.checked, missing = sampled.missing, "health sampled");
+    let sampled = state
+        .engine
+        .sample_health(&key, percent, sample.output)
+        .await?;
+    tracing::info!(%key, percent, output = ?sample.output, checked = sampled.checked, missing = sampled.missing, "health sampled");
     Ok(Json(HealthSample {
         checked: sampled.checked,
         missing: sampled.missing,

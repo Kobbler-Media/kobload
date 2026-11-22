@@ -1,8 +1,8 @@
 use std::io::Write as _;
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kob_usenet::Engine;
 use reqwest::header::AUTHORIZATION;
@@ -13,7 +13,8 @@ use crate::state::Configured;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_RETRY: Duration = Duration::from_secs(1);
-const MAX_RETRY: Duration = Duration::from_secs(2);
+const MAX_RETRY: Duration = Duration::from_secs(30);
+const WARN_EVERY: Duration = Duration::from_secs(60);
 const STORED: &str = "config.json";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -42,6 +43,26 @@ pub struct ConfigPull {
     stored: PathBuf,
     configured: Configured,
     applied: Option<Vec<UsenetServer>>,
+    warned: WarnGate,
+}
+
+#[derive(Default)]
+struct WarnGate(Option<Instant>);
+
+impl WarnGate {
+    fn due(&mut self, now: Instant) -> bool {
+        let due = self
+            .0
+            .is_none_or(|last| now.duration_since(last) >= WARN_EVERY);
+        if due {
+            self.0 = Some(now);
+        }
+        due
+    }
+}
+
+fn backoff(wait: Duration) -> Duration {
+    (wait * 2).min(MAX_RETRY)
 }
 
 impl ConfigPull {
@@ -67,6 +88,7 @@ impl ConfigPull {
             stored: data_dir.join(STORED),
             configured,
             applied: None,
+            warned: WarnGate::default(),
         }
     }
 
@@ -107,9 +129,9 @@ impl ConfigPull {
             match self.tick().await {
                 Ok(pulled) => return pulled,
                 Err(error) => {
-                    tracing::warn!(%error, retry_in = ?wait, "first engine config pull failed");
+                    self.failed(&error, "first engine config pull failed");
                     tokio::time::sleep(wait).await;
-                    wait = (wait * 2).min(MAX_RETRY);
+                    wait = backoff(wait);
                 }
             }
         }
@@ -129,8 +151,16 @@ impl ConfigPull {
                     tracing::info!(servers = count, "engine config applied");
                 }
                 Ok(Pulled::Unchanged) => {}
-                Err(error) => tracing::warn!(%error, "engine config pull failed"),
+                Err(error) => self.failed(&error, "engine config pull failed"),
             }
+        }
+    }
+
+    fn failed(&mut self, error: &PullError, message: &str) {
+        if self.warned.due(Instant::now()) {
+            tracing::warn!(%error, "{message}");
+        } else {
+            tracing::debug!(%error, "{message}");
         }
     }
 
@@ -169,9 +199,38 @@ impl ConfigPull {
             .truncate(true)
             .mode(0o600)
             .open(&partial)?;
+        // `mode` applies only to a new file; a partial left by a crash keeps its own.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         file.write_all(&body)?;
         file.sync_all()?;
         std::fs::rename(&partial, &self.stored)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_back_off_to_half_a_minute() {
+        let mut wait = FIRST_RETRY;
+        let mut waits = Vec::new();
+        for _ in 0..7 {
+            waits.push(wait.as_secs());
+            wait = backoff(wait);
+        }
+        assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
+    }
+
+    #[test]
+    fn failures_warn_at_most_once_a_minute() {
+        let start = Instant::now();
+        let mut gate = WarnGate::default();
+        let due: Vec<bool> = [0, 1, 30, 59, 60, 61, 120]
+            .into_iter()
+            .map(|s| gate.due(start + Duration::from_secs(s)))
+            .collect();
+        assert_eq!(due, [true, false, false, false, true, false, true]);
     }
 }

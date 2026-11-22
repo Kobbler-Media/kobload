@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO debrid_availability_cache AS c (release_key, provider_id, available, reason, checked_at)\n           VALUES ($1, $2, true, NULL, NOW())\n           ON CONFLICT (release_key, provider_id) DO UPDATE\n           SET available = true, reason = NULL, checked_at = NOW()\n           WHERE c.available OR c.reason IS DISTINCT FROM 'dead'\n              OR c.checked_at < NOW() - make_interval(secs => $3)\n           RETURNING (old.checked_at IS NULL\n                      OR NOT old.available\n                      OR old.checked_at < NOW() - make_interval(secs => $4)) AS \"fresh!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "fresh!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b44a116d40b9497238e84b96a26647195193bb337b63a320f06f76ec788815b5"
+}

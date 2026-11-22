@@ -616,6 +616,7 @@ pub async fn poll_once(state: &AppState) {
                     &state.http_client,
                     state.download_clients.as_ref(),
                     download.id,
+                    crate::services::import_outcome::Ended::Failed,
                 )
                 .await;
                 // Trigger re-search for the watch pattern so we find another release

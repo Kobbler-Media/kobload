@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -26,12 +26,16 @@ pub struct EngineJobs {
     pub deleted: Mutex<Vec<(String, bool)>>,
     pub unauthorized: Mutex<usize>,
     pub poll_status: Mutex<Option<StatusCode>>,
+    pub rotated_key: Mutex<bool>,
+    pub add_times_out: Mutex<bool>,
+    pub restarted: Mutex<HashSet<String>>,
 }
 
 impl EngineJobs {
     fn authorized(&self, headers: &HeaderMap) -> bool {
-        let ok = headers.get("authorization").and_then(|v| v.to_str().ok())
-            == Some(format!("Bearer {CONTROL_KEY}").as_str());
+        let ok = !*self.rotated_key.lock().unwrap()
+            && headers.get("authorization").and_then(|v| v.to_str().ok())
+                == Some(format!("Bearer {CONTROL_KEY}").as_str());
         if !ok {
             *self.unauthorized.lock().unwrap() += 1;
         }
@@ -46,6 +50,13 @@ async fn add(
 ) -> axum::response::Response {
     if !engine.authorized(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if engine.jobs.lock().unwrap().contains_key(&req.id) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "duplicate_job", "message": "job exists" })),
+        )
+            .into_response();
     }
     let status = JobStatus {
         id: req.id.clone(),
@@ -64,6 +75,9 @@ async fn add(
         .unwrap()
         .insert(req.id.clone(), status.clone());
     engine.added.lock().unwrap().push(req);
+    if std::mem::take(&mut *engine.add_times_out.lock().unwrap()) {
+        return StatusCode::GATEWAY_TIMEOUT.into_response();
+    }
     Json(status).into_response()
 }
 
@@ -89,10 +103,21 @@ async fn status(
     if let Some(status) = *engine.poll_status.lock().unwrap() {
         return (status, Json(json!({ "error": "providers_unavailable" }))).into_response();
     }
+    if engine.restarted.lock().unwrap().contains(&id) {
+        return unknown_job();
+    }
     match engine.jobs.lock().unwrap().get(&id) {
         Some(job) => Json(job.clone()).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response(),
+        None => unknown_job(),
     }
+}
+
+fn unknown_job() -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "unknown_job" })),
+    )
+        .into_response()
 }
 
 async fn delete(
@@ -176,6 +201,43 @@ impl EngineFixture {
             nzbs: NzbHost::start().await,
             root: tempfile::tempdir().unwrap(),
         }
+    }
+
+    pub async fn without_engine() -> Self {
+        Self {
+            server: TestServer::start().await,
+            engine: Arc::new(EngineJobs::default()),
+            nzbs: NzbHost::start().await,
+            root: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    pub fn rotate_key(&self) {
+        *self.engine.rotated_key.lock().unwrap() = true;
+    }
+
+    pub fn time_out_next_add(&self) {
+        *self.engine.add_times_out.lock().unwrap() = true;
+    }
+
+    /// The engine restarted after reconcile listed the job and before the poll asked for it.
+    pub fn forget_on_get(&self, id: &str) {
+        self.engine.restarted.lock().unwrap().insert(id.to_string());
+    }
+
+    pub fn lose(&self, id: &str) {
+        self.engine.restarted.lock().unwrap().remove(id);
+        self.engine.jobs.lock().unwrap().remove(id);
+    }
+
+    pub async fn due_for_retry(&self, id: Uuid) {
+        sqlx::query(
+            "UPDATE downloads SET submission_last_attempt_at = NOW() - INTERVAL '1 day' WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.server.pool)
+        .await
+        .unwrap();
     }
 
     pub async fn add_client(&self, body: Value) -> Uuid {

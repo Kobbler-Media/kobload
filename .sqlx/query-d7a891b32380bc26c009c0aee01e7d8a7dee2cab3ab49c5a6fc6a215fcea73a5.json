@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE downloads SET\n            status = CASE WHEN ($3 OR lost_requeues >= $6) AND submission_attempts + 1 >= $5 THEN 'failed' ELSE 'pending_retry' END,\n            error = CASE WHEN ($3 OR lost_requeues >= $6) AND submission_attempts + 1 >= $5 THEN $4 ELSE error END,\n            external_id = NULL,\n            progress = NULL,\n            submission_error = $4,\n            submission_attempts = submission_attempts + CASE WHEN $3 OR lost_requeues >= $6 THEN 1 ELSE 0 END,\n            submission_last_attempt_at = CASE WHEN $3 OR lost_requeues >= $6 THEN NOW() ELSE NULL END,\n            lost_requeues = lost_requeues + CASE WHEN $3 THEN 0 ELSE 1 END,\n            updated_at = NOW()\n        WHERE id = $1 AND external_id = $2 AND status IN ('queued', 'downloading')\n        RETURNING status\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7a891b32380bc26c009c0aee01e7d8a7dee2cab3ab49c5a6fc6a215fcea73a5"
+}

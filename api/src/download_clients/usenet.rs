@@ -22,7 +22,7 @@ impl UsenetHandler {
 
     fn engine(&self) -> Result<&UsenetEngine, DownloadClientError> {
         self.engine.as_deref().ok_or_else(|| {
-            DownloadClientError::Message(
+            DownloadClientError::Transient(
                 "the usenet engine is not configured (USENET_ENGINE_URL)".to_string(),
             )
         })
@@ -39,6 +39,11 @@ impl From<EngineError> for DownloadClientError {
             EngineError::Status(code, _) if code >= 500 => DownloadClientError::Status(
                 StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_GATEWAY),
             ),
+            EngineError::Status(401 | 403, _) => DownloadClientError::Transient(format!(
+                "{err}: USENET_CONTROL_KEY differs between kobload and the engine"
+            )),
+            // The next reconcile finds the job missing from the engine's list and requeues it.
+            EngineError::UnknownJob(_) => DownloadClientError::Transient(err.to_string()),
             e => DownloadClientError::Message(e.to_string()),
         }
     }
@@ -140,7 +145,15 @@ impl DownloadClientHandler for UsenetHandler {
             nzb_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
             password: download.password.map(str::to_string),
         };
-        Ok(self.engine()?.add_job(&job).await?.id)
+        let engine = self.engine()?;
+        match engine.add_job(&job).await {
+            Ok(added) => Ok(added.id),
+            // An earlier add that timed out on our side may still have reached the engine.
+            Err(EngineError::Status(409, code)) if code == "duplicate_job" => {
+                Ok(engine.job(&job.id).await?.id)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn poll(

@@ -248,6 +248,7 @@ impl JobHandler for MetadataExtractionHandler {
                 &self.http_client,
                 self.download_clients.as_ref(),
                 download_id,
+                crate::services::import_outcome::Ended::Failed,
             )
             .await;
             crate::polling::trigger_research_for_download_from_pool(

@@ -35,7 +35,8 @@
     if (!info) return null;
     return {
       name: info.name,
-      is_default: !existingClients.some((c) => c.protocol === info.protocol && c.is_default)
+      is_default: !existingClients.some((c) => c.protocol === info.protocol && c.is_default),
+      delete_after_import: info.protocol === 'usenet'
     };
   };
 
@@ -52,7 +53,7 @@
         category: client?.category ?? '',
         download_dir: client?.download_dir ?? '',
         is_default: client?.is_default ?? seed?.is_default ?? false,
-        delete_after_import: client?.delete_after_import ?? false,
+        delete_after_import: client?.delete_after_import ?? seed?.delete_after_import ?? false,
         seed_ratio: client?.seed_ratio?.toString() ?? '',
         seed_time_minutes: client?.seed_time_minutes?.toString() ?? '',
         enabled: client?.enabled ?? true
@@ -94,6 +95,15 @@
     if (seed.is_default) {
       form.is_default = true;
     }
+  });
+
+  // Only a change of type resets it, so an untick survives edits to other fields.
+  $effect(() => {
+    const seed = client ? null : typeDefaults(form.client_type);
+    if (!seed) return;
+    untrack(() => {
+      form.delete_after_import = seed.delete_after_import;
+    });
   });
 
   const save = async () => {

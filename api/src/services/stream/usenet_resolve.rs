@@ -16,7 +16,7 @@ use crate::usenet::outputs::{self, Target};
 use crate::usenet::{STREAM_TTL, UsenetEngine};
 use nats_jobs::NzbRef;
 use nats_jobs::types::{StreamResolveRequest, StreamResolveResponse};
-use usenet_proto::{ImportResponse, OutputInfo, Purpose};
+use usenet_proto::{ImportMode, ImportResponse, OutputInfo, Purpose};
 
 fn failed(message: impl Into<String>) -> StreamSearchError {
     StreamSearchError::DebridError(message.into())
@@ -80,6 +80,11 @@ pub async fn resolve(
         known_key: release.release_key.clone(),
         fetch_failure: release.fetch_failure.clone(),
         may_grab,
+        mode: if lane.is_user() {
+            ImportMode::Stream
+        } else {
+            ImportMode::Prewarm
+        },
     };
     let flight = usenet_flight::import(job, lane.clone()).await;
     if flight.joined {
@@ -112,18 +117,13 @@ pub async fn resolve(
             return Err(failed(message));
         }
     };
-    let purpose = if lane.is_user() {
-        Purpose::Cache
-    } else {
-        Purpose::Warm
-    };
-    let response = response(&engine, &imported, output, purpose);
+    let response = response(&engine, &imported, output);
     usenet_health::spawn(Sampled {
         pool: ctx.pool.clone(),
         engine,
         provider_id: request.debrid_provider_id,
         release_key: imported.release_key.clone(),
-        file_id: response.file_id,
+        output: output.index,
         release_title: request.release_title.clone().or(release.release_title),
     });
     log.record(
@@ -180,14 +180,13 @@ fn response(
     engine: &UsenetEngine,
     imported: &ImportResponse,
     output: &OutputInfo,
-    cache_purpose: Purpose,
 ) -> StreamResolveResponse {
     let expires_at = OffsetDateTime::now_utc() + STREAM_TTL;
     let expiry = expires_at.unix_timestamp();
     let key = &imported.release_key;
     StreamResolveResponse {
         stream_url: engine.stream_url(key, output.index, Purpose::Play, expiry),
-        cache_url: Some(engine.stream_url(key, output.index, cache_purpose, expiry)),
+        cache_url: Some(engine.stream_url(key, output.index, Purpose::Cache, expiry)),
         filename: outputs::filename(output),
         filesize: i64::try_from(output.size).unwrap_or(i64::MAX),
         mime_type: None,

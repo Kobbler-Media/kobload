@@ -144,8 +144,9 @@ pub async fn record_report(
         file_id: report.file_id,
     });
     // Missing or corrupt articles are the copy's own fault, so the release is dead for
-    // every later search, not only failed for this viewer.
-    if super::usenet_failure::is_damage(reason) {
+    // every later search, not only failed for this viewer. Damage reported for one file
+    // of a pack says nothing about its other files, so it stays on that file's outcome.
+    if super::usenet_failure::is_damage(reason) && report.file_id.is_none() {
         record_availability(
             pool,
             &release_key,
@@ -203,6 +204,19 @@ pub async fn record_probe(
     };
     if fresh && let Some(title) = release_title {
         add_evidence(pool, provider_id, title, evidence, 1.0).await;
+    }
+}
+
+pub async fn record_import(
+    pool: &PgPool,
+    provider_id: Uuid,
+    release_key: &str,
+    release_title: Option<&str>,
+) {
+    let fresh =
+        super::availability::record_available_unless_dead(pool, release_key, provider_id).await;
+    if fresh && let Some(title) = release_title {
+        add_evidence(pool, provider_id, title, Evidence::Accepted, 1.0).await;
     }
 }
 

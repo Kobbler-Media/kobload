@@ -61,9 +61,3 @@ pub async fn fetch(
     }
     Ok(body)
 }
-
-/// Only an NZB's file subjects name `.par2` files, so a plain byte scan is enough; a
-/// compressed NZB reads as having none.
-pub fn has_par2(nzb: &[u8]) -> bool {
-    nzb.windows(5).any(|w| w.eq_ignore_ascii_case(b".par2"))
-}

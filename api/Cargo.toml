@@ -116,6 +116,10 @@ nats-jobs = { path = "../../koblibs/nats-jobs" }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 dhat = "0.3.3"
 proptest = "1.12.0"
+# The contract test drives this crate's engine client against the real engine router and a
+# loopback NNTP server. kob-usenet is only built for tests, so release builds stay free of it.
+kobload-usenet = { path = "../usenet" }
+kob-usenet = { path = "../../koblibs/kob-usenet", features = ["testkit"] }
 
 [[bench]]
 name = "scoring"
