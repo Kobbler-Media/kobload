@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE usenet_servers SET\n               name = $2, host = $3, port = $4, tls = $5, verify_cert = $6, ip_preference = $7,\n               connections = $8, priority = $9, backbone = $10, retention_days = $11,\n               expires_on = $12, quota_bytes = $13, username = $14,\n               password = COALESCE($15, password), account_connection_cap = $16, enabled = $17,\n               updated_at = NOW()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Bool",
+        "Bool",
+        "Text",
+        "Int4",
+        "Int4",
+        "Text",
+        "Int4",
+        "Date",
+        "Int8",
+        "Text",
+        "Text",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8d5e0e41c43de9037cbae070913c6dd5b4154d726d8b4a235e25212978995176"
+}

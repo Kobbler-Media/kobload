@@ -226,7 +226,7 @@ impl TestServerOptions {
             download_clients: Arc::new(DefaultDownloadClientResolver::new(
                 pool.clone(),
                 local_only_http_client(),
-                std::sync::Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
+                std::sync::Arc::new(kobload_api::debrid::DefaultDebridProviderResolver::default()),
             )),
             indexers: Arc::new(DefaultIndexerResolver::new(Default::default())),
         }
@@ -241,7 +241,7 @@ impl Default for TestServerOptions {
             download_clients: Arc::new(DefaultDownloadClientResolver::new(
                 sqlx::PgPool::connect_lazy("postgres://dummy").unwrap(),
                 local_only_http_client(),
-                std::sync::Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
+                std::sync::Arc::new(kobload_api::debrid::DefaultDebridProviderResolver::default()),
             )),
             indexers: Arc::new(DefaultIndexerResolver::new(Default::default())),
         }
@@ -258,7 +258,7 @@ impl TestServer {
     pub async fn start_with_options(options: TestServerOptions) -> Self {
         Self::start_inner(
             options,
-            Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
+            Arc::new(kobload_api::debrid::DefaultDebridProviderResolver::default()),
         )
         .await
     }
@@ -370,6 +370,7 @@ impl TestServer {
             .merge(routes::admin::routes())
             .merge(routes::auth::routes())
             .merge(routes::config::routes())
+            .merge(routes::debrid::routes())
             .merge(routes::download_clients::routes())
             .merge(routes::downloads::routes())
             .merge(routes::media_types::routes())
@@ -383,6 +384,7 @@ impl TestServer {
             .merge(routes::search_download::routes())
             .merge(routes::stream::routes())
             .merge(routes::stream_attempts::routes())
+            .merge(routes::usenet::routes())
             .merge(routes::want::routes())
             .merge(routes::watch::routes())
             .merge(routes::watch_directories::routes())

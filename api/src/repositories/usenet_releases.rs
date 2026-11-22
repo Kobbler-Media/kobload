@@ -12,6 +12,12 @@ pub struct Listing {
     pub release_title: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Listed {
+    pub release_key: Option<String>,
+    pub failed_recently: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct UsenetRelease {
     pub download_url: String,
@@ -19,7 +25,7 @@ pub struct UsenetRelease {
     pub release_key: Option<String>,
 }
 
-pub async fn upsert<'e, E>(exec: E, listings: &[Listing]) -> Result<HashMap<NzbRef, String>>
+pub async fn upsert<'e, E>(exec: E, listings: &[Listing]) -> Result<HashMap<NzbRef, Listed>>
 where
     E: Executor<'e, Database = Postgres>,
 {
@@ -35,6 +41,7 @@ where
     let titles: Vec<String> = listings.iter().map(|l| l.release_title.clone()).collect();
     let rows = sqlx::query!(
         r#"
+        WITH upserted AS (
         INSERT INTO usenet_releases (indexer_id, guid, download_url, release_title)
         SELECT DISTINCT ON (indexer_id, guid) indexer_id, guid, download_url, release_title
         FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[])
@@ -43,7 +50,11 @@ where
             download_url = EXCLUDED.download_url,
             release_title = EXCLUDED.release_title,
             updated_at = NOW()
-        RETURNING indexer_id, guid, release_key
+        RETURNING indexer_id, guid, release_key, last_failure_at
+        )
+        SELECT indexer_id AS "indexer_id!", guid AS "guid!", release_key,
+               COALESCE(last_failure_at > NOW() - INTERVAL '24 hours', false) AS "failed_recently!"
+        FROM upserted
         "#,
         &indexer_ids,
         &guids,
@@ -54,15 +65,17 @@ where
     .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|r| {
-            let key = r.release_key?;
-            Some((
+        .map(|r| {
+            (
                 NzbRef {
                     indexer_id: r.indexer_id,
                     guid: r.guid,
                 },
-                key,
-            ))
+                Listed {
+                    release_key: r.release_key,
+                    failed_recently: r.failed_recently,
+                },
+            )
         })
         .collect())
 }
@@ -93,7 +106,8 @@ where
     E: Executor<'e, Database = Postgres>,
 {
     let result = sqlx::query!(
-        r#"UPDATE usenet_releases SET release_key = $3, updated_at = NOW()
+        r#"UPDATE usenet_releases
+           SET release_key = $3, last_failure_at = NULL, last_failure = NULL, updated_at = NOW()
            WHERE indexer_id = $1 AND guid = $2"#,
         indexer_id,
         guid,
@@ -117,4 +131,20 @@ where
     .fetch_all(exec)
     .await?;
     Ok(refs)
+}
+
+pub async fn record_failure<'e, E>(exec: E, nzb_ref: &NzbRef, reason: &str) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query!(
+        r#"UPDATE usenet_releases SET last_failure_at = NOW(), last_failure = $3, updated_at = NOW()
+           WHERE indexer_id = $1 AND guid = $2"#,
+        nzb_ref.indexer_id,
+        nzb_ref.guid,
+        reason,
+    )
+    .execute(exec)
+    .await?;
+    Ok(())
 }

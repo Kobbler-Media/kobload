@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 
+use usenet_proto::{ImportRequest, ImportResponse};
+
 use super::types::{
     ActiveSlots, AddPauses, CachedAvailability, DebridAccountStatus, DebridError,
     DebridProviderType, DebridTorrent, ExistingTorrent, UnrestrictedLink, UsenetDownload,
@@ -19,9 +21,12 @@ pub trait DebridProvider: Send + Sync {
         self.provider_type().display_name()
     }
 
-    /// Whether this provider supports usenet downloads (only TorBox).
     fn supports_usenet(&self) -> bool {
-        false
+        self.provider_type().supports_usenet()
+    }
+
+    fn supports_torrents(&self) -> bool {
+        self.provider_type().supports_torrents()
     }
 
     fn add_pauses(&self) -> Option<AddPauses> {
@@ -152,6 +157,15 @@ pub trait DebridProvider: Send + Sync {
         _api_key: &str,
         _id: &str,
     ) -> Result<UsenetDownload, DebridError> {
+        Err(DebridError::UnsupportedOperation)
+    }
+
+    /// `NotFound` when the engine holds no copy and the request carried no NZB.
+    async fn usenet_import(&self, _request: &ImportRequest) -> Result<ImportResponse, DebridError> {
+        Err(DebridError::UnsupportedOperation)
+    }
+
+    async fn usenet_release(&self, _release_key: &str) -> Result<ImportResponse, DebridError> {
         Err(DebridError::UnsupportedOperation)
     }
 

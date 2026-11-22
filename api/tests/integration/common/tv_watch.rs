@@ -22,7 +22,10 @@ pub struct TvWatch {
 
 impl TvWatch {
     pub async fn start() -> Self {
-        Self::start_with_debrid(Arc::new(kobload_api::debrid::DefaultDebridProviderResolver)).await
+        Self::start_with_debrid(Arc::new(
+            kobload_api::debrid::DefaultDebridProviderResolver::default(),
+        ))
+        .await
     }
 
     pub async fn start_with_debrid(debrid: Arc<dyn DebridProviderResolver>) -> Self {

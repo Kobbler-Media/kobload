@@ -36,14 +36,16 @@
     { value: 'real_debrid', label: 'Real-Debrid' },
     { value: 'alldebrid', label: 'AllDebrid' },
     { value: 'premiumize', label: 'Premiumize' },
-    { value: 'torbox', label: 'TorBox' }
+    { value: 'torbox', label: 'TorBox' },
+    { value: 'usenet', label: 'Usenet (own engine)' }
   ];
 
   const providerDisplayNames: Record<string, string> = {
     real_debrid: 'Real-Debrid',
     alldebrid: 'AllDebrid',
     premiumize: 'Premiumize',
-    torbox: 'TorBox'
+    torbox: 'TorBox',
+    usenet: 'Usenet (own engine)'
   };
 
   const refresh = async () => {
@@ -262,10 +264,12 @@
             <span class="label">Priority</span>
             <span>{provider.priority}</span>
           </div>
-          <div>
-            <span class="label">API Key</span>
-            <span class="masked-key">{provider.api_key.slice(0, 8)}...</span>
-          </div>
+          {#if provider.api_key}
+            <div>
+              <span class="label">API Key</span>
+              <span class="masked-key">{provider.api_key.slice(0, 8)}...</span>
+            </div>
+          {/if}
         </div>
         <div class="actions">
           <button class="btn alt" type="button" onclick={() => openEditor(provider)}>Edit</button>

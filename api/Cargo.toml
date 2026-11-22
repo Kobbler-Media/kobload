@@ -40,7 +40,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "macros", "uuid", "time"] }
 uuid = { version = "1.29.0", features = ["v7", "serde"] }
-time = { version = "0.3.55", features = ["serde"] }
+time = { version = "0.3.55", features = ["serde", "macros"] }
 dotenvy = "0.15.7"
 thiserror = "2.0.21"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "multipart", "query", "gzip", "brotli", "deflate", "stream"] }
@@ -95,6 +95,11 @@ lz-str = "0.2.1"
 
 # Cardigann YAML indexer engine
 cardigann = { path = "../cardigann" }
+usenet-proto = { path = "../usenet-proto" }
+# NNTP login test for usenet servers; ring matches the provider sqlx already links.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1.0.11"
 aho-corasick = "1.1.5"
 
 [dev-dependencies]

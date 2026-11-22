@@ -134,6 +134,7 @@
 .modal-form input[type='number'],
 .modal-form input[type='email'],
 .modal-form input[type='url'],
+.modal-form input[type='date'],
 .modal-form textarea,
 .modal-form select {
   padding: 10px 14px;

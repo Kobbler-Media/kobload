@@ -11,6 +11,7 @@ pub enum DebridProviderType {
     AllDebrid,
     Premiumize,
     TorBox,
+    Usenet,
 }
 
 impl DebridProviderType {
@@ -20,6 +21,7 @@ impl DebridProviderType {
             Self::AllDebrid => "alldebrid",
             Self::Premiumize => "premiumize",
             Self::TorBox => "torbox",
+            Self::Usenet => "usenet",
         }
     }
 
@@ -29,6 +31,7 @@ impl DebridProviderType {
             "alldebrid" => Some(Self::AllDebrid),
             "premiumize" => Some(Self::Premiumize),
             "torbox" => Some(Self::TorBox),
+            "usenet" => Some(Self::Usenet),
             _ => None,
         }
     }
@@ -39,7 +42,16 @@ impl DebridProviderType {
             Self::AllDebrid => "AllDebrid",
             Self::Premiumize => "Premiumize",
             Self::TorBox => "TorBox",
+            Self::Usenet => "Usenet",
         }
+    }
+
+    pub fn supports_usenet(&self) -> bool {
+        matches!(self, Self::TorBox | Self::Usenet)
+    }
+
+    pub fn supports_torrents(&self) -> bool {
+        *self != Self::Usenet
     }
 
     /// Short prefix used in provider-prefixed torrent IDs (e.g. "rd_abc123").
@@ -49,6 +61,7 @@ impl DebridProviderType {
             Self::AllDebrid => "ad",
             Self::Premiumize => "pm",
             Self::TorBox => "tb",
+            Self::Usenet => "nz",
         }
     }
 
@@ -65,6 +78,7 @@ impl DebridProviderType {
             "ad" => Self::AllDebrid,
             "pm" => Self::Premiumize,
             "tb" => Self::TorBox,
+            "nz" => Self::Usenet,
             _ => return None,
         };
         Some((provider, raw))

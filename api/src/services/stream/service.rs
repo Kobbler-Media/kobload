@@ -29,6 +29,7 @@ use crate::scene_titles::TvNaming;
 use crate::services::search::{SearchIndexersParams, search_indexers};
 use crate::services::want::scoring::SearchContext;
 use crate::trash_filters::TrashFilterCache;
+use crate::usenet::outputs::Target;
 use crate::watch::Release;
 use crate::xem::XemCache;
 use nats_jobs::types::{StreamOption, StreamSearchRequest, StreamSearchResponse, StreamSourceType};
@@ -231,19 +232,34 @@ pub async fn stream_search(
         });
     }
 
+    let capable = |p: &&DebridProviderRow, capability: fn(&DebridProviderType) -> bool| {
+        DebridProviderType::parse(&p.provider_type).is_some_and(|t| capability(&t))
+    };
+    let torrent_provider = providers
+        .iter()
+        .find(|p| capable(p, DebridProviderType::supports_torrents));
+    let usenet_providers: Vec<usenet_listing::UsenetProviderRow> = providers
+        .iter()
+        .filter(|p| capable(p, DebridProviderType::supports_usenet))
+        .map(|p| usenet_listing::UsenetProviderRow {
+            id: p.id,
+            provider_type: p.provider_type.clone(),
+        })
+        .collect();
+    let default_provider = torrent_provider.unwrap_or(&providers[0]);
+
     // A resolve has to list the account before adding (RD does not dedup), and the
     // listing takes about a second; starting it now hides it behind the search.
-    if let Some(provider_type) = DebridProviderType::parse(&providers[0].provider_type) {
+    if let Some(provider) = torrent_provider
+        && let Some(provider_type) = DebridProviderType::parse(&provider.provider_type)
+    {
         super::account_index::prefetch(
-            providers[0].id,
+            provider.id,
             ctx.debrid_providers.get(&provider_type),
             ctx.http_client.clone(),
-            providers[0].api_key.clone(),
+            provider.api_key.clone(),
         );
     }
-
-    // Check if any provider supports usenet (TorBox)
-    let has_usenet_provider = providers.iter().any(|p| p.provider_type == "torbox");
 
     // 3. TIERED SOURCES: Hash index (instant) + external APIs (tiered deadlines)
     //
@@ -396,7 +412,7 @@ pub async fn stream_search(
     // Kick off the availability lookup NOW, concurrently with scoring / Tier 2
     // wait / Cardigann fallback. We use hashes known at this point; any later
     // additions (Cardigann) get a supplementary synchronous query below.
-    let default_provider_id = providers[0].id;
+    let default_provider_id = default_provider.id;
     let initial_dead_hash_inputs = collect_torrent_hashes(&fast_releases);
     let dead_hashes_handle = {
         let pool = ctx.pool.clone();
@@ -701,9 +717,7 @@ pub async fn stream_search(
         });
     }
 
-    // 5. Build StreamOption results.
-    // Use first provider as the default for all results.
-    let default_provider = &providers[0];
+    // 5. Build StreamOption results. Torrents go to the first provider that takes them.
 
     // Fold in what we already know about each hash on this provider: drop the
     // ones RD refuses outright, and rank the rest by how likely playback is to
@@ -824,7 +838,9 @@ pub async fn stream_search(
 
     for result in &candidates {
         if result.release.protocol == "torrent" {
-            if let Some(hash) = find_info_hash_for_result(result) {
+            if let Some(hash) =
+                find_info_hash_for_result(result).filter(|_| torrent_provider.is_some())
+            {
                 let normalized = hash.to_lowercase();
 
                 // Extract file_idx from guid pattern "hashidx_{hash}_f{idx}"
@@ -913,55 +929,28 @@ pub async fn stream_search(
                     availability,
                 });
             }
-        } else if has_usenet_provider
-            && result.release.protocol == "usenet"
+        } else if result.release.protocol == "usenet"
             && let Some(ref download_url) = result.release.download_url
-            && let Some(provider) = providers.iter().find(|p| p.provider_type == "torbox")
+            && !usenet_providers.is_empty()
         {
-            let match_score = result.match_score.unwrap_or(0.0);
-            let quality_score = result.quality_score.unwrap_or(0.0);
-            let total_score = result.total_score;
-
-            let quality = result
-                .parsed_quality
-                .as_ref()
-                .and_then(|pq| serde_json::to_value(pq).ok());
-
             let listing = usenet_listing::listing(&result.release, download_url);
-            let option = StreamOption {
-                id: format!("usenet_{}_{}", result.release.guid, provider.id),
-                release_title: result.release.title.clone(),
-                size: result.release.size,
-                indexer: result.release.indexer.clone(),
-                release_key: None,
-                nzb_ref: Some(listing.nzb_ref.clone()),
-                magnet_url: None,
-                quality,
-                total_score,
-                match_score,
-                quality_score,
-                debrid_provider: provider.provider_type.clone(),
-                debrid_provider_id: provider.id,
-                cached: false,
-                source_type: StreamSourceType::Usenet,
-                files: Vec::new(),
-                publish_date: Some(result.release.publish_date.clone()),
-                binge_group: None,
-                playback: None,
-                reported_bad: false,
-                availability: None,
-                group: None,
-                audio_languages: Vec::new(),
-            };
+            ranked.extend(usenet_listing::options(result, &listing, &usenet_providers));
             usenet_listings.push(listing);
-            ranked.push(RankCandidate {
-                option,
-                availability: KnownAvailability::Unknown,
-            });
         }
     }
     if !usenet_listings.is_empty() {
-        usenet_listing::remember(ctx.pool, &mut ranked, &usenet_listings).await;
+        let wanted = request
+            .media_want
+            .as_ref()
+            .map_or(Target::Largest, Target::for_want);
+        usenet_listing::remember(
+            ctx.pool,
+            ctx.debrid_providers,
+            &mut ranked,
+            &usenet_listings,
+            &wanted,
+        )
+        .await;
     }
 
     let rank_provider = RankProvider {
@@ -973,6 +962,7 @@ pub async fn stream_search(
     };
     let mut options = rank_options(ctx.pool, &rank_provider, ranked, &preferences).await;
     options.truncate(limit as usize);
+    super::usenet_warm::remember_auto_play(&options);
     timings.options_build_ms = options_build_start.elapsed().as_millis() as u64;
 
     // Mark results included in final options as best

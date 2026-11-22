@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO usenet_servers\n               (name, host, port, tls, verify_cert, ip_preference, connections, priority, backbone,\n                retention_days, expires_on, quota_bytes, username, password,\n                account_connection_cap, enabled)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, ''), $15, $16)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "usenet_servers",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Bool",
+        "Bool",
+        "Text",
+        "Int4",
+        "Int4",
+        "Text",
+        "Int4",
+        "Date",
+        "Int8",
+        "Text",
+        "Text",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a8697fd3c967c326966c0569306c36a3661ef241cdd13ed333ef39597f8c69f9"
+}

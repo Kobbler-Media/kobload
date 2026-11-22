@@ -92,6 +92,8 @@ pub const TABLES_IN_ORDER: &[&str] = &[
     "stream_trait_outcomes",
     // NZB listings and the release keys their imports aliased them to (independent)
     "usenet_releases",
+    // Servers the usenet engine pulls (independent)
+    "usenet_servers",
     // Two weeks of what the RSS poll saw (independent)
     "release_sightings",
     // Torrent hash index (independent, large — may be slow to backup)

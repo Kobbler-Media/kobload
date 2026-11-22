@@ -1,0 +1,42 @@
+[package]
+name = "kobload-usenet"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+description = "Usenet engine service: streams Range reads and imports NZBs over kob-usenet"
+
+[lib]
+name = "kobload_usenet"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kobload-usenet"
+path = "src/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+
+[dependencies]
+axum = "0.8.9"
+base64 = "0.23.1"
+bytes = "1.12.2"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+kob-usenet = { path = "../../koblibs/kob-usenet" }
+mime_guess = "2.0.5"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+subtle = "2.6.1"
+thiserror = "2"
+tokio = { version = "1.54.1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "io-util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+usenet-proto = { path = "../usenet-proto" }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+kob-usenet = { path = "../../koblibs/kob-usenet", features = ["testkit"] }
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }

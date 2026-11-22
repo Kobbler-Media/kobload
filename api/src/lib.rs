@@ -38,6 +38,7 @@ pub mod state;
 pub mod test_utils;
 pub mod trash_filters;
 pub mod types;
+pub mod usenet;
 pub mod watch;
 pub mod webhook_dispatch;
 pub mod xem;

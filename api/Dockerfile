@@ -10,6 +10,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY .sqlx ./.sqlx
 COPY api ./api
 COPY cardigann ./cardigann
+COPY usenet ./usenet
+COPY usenet-proto ./usenet-proto
 
 FROM base AS dev
 ENV SQLX_OFFLINE=true
@@ -30,6 +32,30 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -p kobload-api && \
     cp /app/target/release/kobload-api /app/kobload-api-binary && \
     cp /app/target/release/backfill-hash-index-se /app/backfill-hash-index-se-binary
+
+FROM base AS builder-usenet
+# kob-usenet is touched so cargo always recompiles it: BuildKit can reuse an older koblibs
+# layer whose mtimes predate an rlib the shared target cache built from newer sources, and
+# cargo would then link that stale engine. Only src/ is touched, so rapidyenc's cmake build
+# stays cached.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=kobload-target,target=/app/target \
+    find /koblibs/kob-usenet/src -name '*.rs' -exec touch {} + && \
+    cargo build --release -p kobload-usenet && \
+    cp /app/target/release/kobload-usenet /app/kobload-usenet-binary
+
+FROM kobload-tools:latest AS prod-usenet
+LABEL org.opencontainers.image.source="https://github.com/Kobbler-Media/kobload"
+WORKDIR /app
+COPY --from=koblibs kob-usenet/src/vendor/LICENSE-infinidysk /usr/share/doc/kobload-usenet/LICENSE-infinidysk
+COPY --from=koblibs kob-usenet/rapidyenc/README.md /usr/share/doc/kobload-usenet/LICENSE-rapidyenc-CC0.md
+COPY --from=koblibs kob-usenet/rapidyenc/crcutil-1.0/LICENSE /usr/share/doc/kobload-usenet/LICENSE-crcutil-Apache-2.0
+RUN cp /usr/share/doc/zlib1g/copyright /usr/share/doc/kobload-usenet/LICENSE-zlib
+COPY --from=builder-usenet /app/kobload-usenet-binary /app/kobload-usenet
+ENV USENET_DATA_DIR=/data
+EXPOSE 7090
+CMD ["/app/kobload-usenet"]
 
 FROM debian:trixie-slim AS definitions
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*

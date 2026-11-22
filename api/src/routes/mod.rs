@@ -23,6 +23,7 @@ pub mod search_download;
 pub mod stream;
 pub mod stream_attempts;
 pub mod system_health;
+pub mod usenet;
 pub mod want;
 pub mod watch;
 pub mod watch_directories;

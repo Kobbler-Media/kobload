@@ -16,7 +16,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/kobbler-media
-  IMAGES: kobload kobload-web
+  IMAGES: kobload kobload-web kobload-usenet
 
 # Each arch builds natively and pushes :sha-<short>-<arch>; `manifest` joins them
 # under :latest and :sha-<short>. A v* tag builds nothing: `release` points the

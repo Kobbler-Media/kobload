@@ -14,6 +14,7 @@ use crate::language::{self, LanguageFit};
 use crate::repositories::stream_outcomes as repo;
 use nats_jobs::types::{
     StreamAvailability, StreamGroup, StreamOption, StreamPlayback, StreamPreference,
+    StreamSourceType,
 };
 
 /// Known availability of a hash on a debrid provider.
@@ -60,6 +61,13 @@ fn outcome_key(option: &StreamOption) -> Option<OutcomeKey> {
         option.release_key.as_deref()?.to_lowercase(),
         option.files.first().map(|f| f.id),
     ))
+}
+
+/// A usenet release's files are listed only once it is imported, so the play before that
+/// is reported for the release as a whole.
+fn release_wide(option: &StreamOption, key: &OutcomeKey) -> Option<OutcomeKey> {
+    (option.source_type == StreamSourceType::Usenet && key.1.is_some())
+        .then(|| (key.0.clone(), None))
 }
 
 /// A release whose default audio track is likely another language than the preferred
@@ -147,7 +155,14 @@ pub async fn rank_options(
         keys.insert(p.release_key.to_lowercase());
     }
     let keys: Vec<String> = keys.into_iter().collect();
-    let rows = repo::releases_for(pool, provider.id, &keys)
+    let mut provider_ids: Vec<Uuid> = candidates
+        .iter()
+        .map(|c| c.option.debrid_provider_id)
+        .chain([provider.id])
+        .collect();
+    provider_ids.sort_unstable();
+    provider_ids.dedup();
+    let rows = repo::releases_for(pool, &provider_ids, &keys)
         .await
         .unwrap_or_else(|e| {
             warn!(error = %e, "release outcome lookup failed; ranking without history");
@@ -199,7 +214,12 @@ pub async fn rank_options(
         .map(|(c, traits)| {
             let mut option = c.option;
             let key = outcome_key(&option);
-            option.playback = key.as_ref().and_then(|k| verdicts.get(k).copied());
+            option.playback = key.as_ref().and_then(|k| {
+                verdicts
+                    .get(k)
+                    .or_else(|| release_wide(&option, k).and_then(|k| verdicts.get(&k)))
+                    .copied()
+            });
             option.reported_bad = key.is_some_and(|k| reported.contains(&k));
             let quality = crate::quality::parse_quality(&option.release_title);
             let continuity_rank = continuity

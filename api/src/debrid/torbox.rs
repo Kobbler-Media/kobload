@@ -187,10 +187,6 @@ impl DebridProvider for TorBoxProvider {
         DebridProviderType::TorBox
     }
 
-    fn supports_usenet(&self) -> bool {
-        true
-    }
-
     fn max_hashes_per_batch(&self) -> usize {
         100
     }

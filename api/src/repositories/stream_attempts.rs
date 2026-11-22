@@ -56,6 +56,7 @@ pub struct Change {
     pub progress: Option<f32>,
     pub torrent_id: Option<String>,
     pub error: Option<String>,
+    pub release_key: Option<String>,
 }
 
 impl Change {
@@ -102,6 +103,7 @@ pub async fn update(pool: &PgPool, id: Uuid, change: &Change) -> Result<()> {
                progress = COALESCE($4, progress),
                torrent_id = COALESCE($5, torrent_id),
                error = COALESCE($6, error),
+               release_key = COALESCE($7, release_key),
                ready_at = CASE WHEN $2 = 'ready' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
                updated_at = NOW()
            WHERE id = $1"#,
@@ -111,6 +113,7 @@ pub async fn update(pool: &PgPool, id: Uuid, change: &Change) -> Result<()> {
         change.progress,
         change.torrent_id,
         change.error,
+        change.release_key,
     )
     .execute(pool)
     .await?;

@@ -76,6 +76,12 @@ services:
       PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
       RUST_LOG: ${RUST_LOG:-info,kobload_api=info}
       NATS_URL: ${NATS_URL:-nats://${NATS_TOKEN:?set NATS_TOKEN}@nats:4222}
+      # Usenet streaming through the engine is on when all four are set. The stream base
+      # URL is where kobbler reaches the engine, so it is a LAN address, not the service name.
+      USENET_ENGINE_URL: ${USENET_ENGINE_URL:-}
+      USENET_STREAM_BASE_URL: ${USENET_STREAM_BASE_URL:-}
+      USENET_CONTROL_KEY: ${USENET_CONTROL_KEY:-}
+      USENET_STREAM_SECRET: ${USENET_STREAM_SECRET:-}
     ports:
       - "${KOBLOAD_PORT:-7080}:7080"
     volumes:
@@ -102,6 +108,44 @@ services:
     depends_on:
       - api
 
+  # Optional usenet engine: streams and downloads straight from usenet providers. Enable it
+  # with COMPOSE_PROFILES=usenet. Its servers are configured in kobload's settings and pulled
+  # from the api with USENET_CONTROL_KEY, which the api must share.
+  usenet:
+    image: ${KOBLOAD_REGISTRY:-ghcr.io/kobbler-media}/kobload-usenet:${KOBLOAD_TAG:-latest}
+    profiles: [usenet]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: prod-usenet
+      additional_contexts:
+        koblibs: ${KOBLIBS_DIR:-../koblibs}
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      USENET_PORT: 7090
+      USENET_DATA_DIR: /data
+      KOBLOAD_URL: ${USENET_KOBLOAD_URL:-http://api:7080}
+      USENET_CONTROL_KEY: ${USENET_CONTROL_KEY:-}
+      USENET_STREAM_SECRET: ${USENET_STREAM_SECRET:-}
+      RUST_LOG: ${USENET_RUST_LOG:-info}
+    # Idle pooled NNTP connections otherwise restart TCP slow start: at ~210 ms RTT that took
+    # an import's first articles from 1.5 s to 4.0 s.
+    sysctls:
+      net.ipv4.tcp_slow_start_after_idle: 0
+    ports:
+      - "${USENET_PORT:-7090}:7090"
+    volumes:
+      - usenet_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7090/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - api
+
 # Optional: bitmagnet provides a local DHT torrent index that Kobload can sync
 # from (see api/src/jobs/handlers/bitmagnet_sync.rs). Not required to run
 # Kobload. Enable it with the docker-compose.bitmagnet.yml overlay:
@@ -112,3 +156,4 @@ services:
 volumes:
   nats_data:
   kobload_pg:
+  usenet_data:

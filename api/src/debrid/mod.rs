@@ -8,6 +8,7 @@ mod registry;
 pub mod throttle;
 pub mod torbox;
 pub mod types;
+pub mod usenet;
 
 pub use provider::DebridProvider;
 pub use registry::{DebridProviderResolver, DefaultDebridProviderResolver};

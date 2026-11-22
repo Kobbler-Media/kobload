@@ -514,7 +514,10 @@ import type {
   SearchAndDownloadResponse,
   QualityProfile,
   MediaWant,
-  PaginatedResponse
+  PaginatedResponse,
+  UsenetServer,
+  UsenetServerInput,
+  UsenetTestResult
 } from '#lib/types.js';
 
 export async function listWatchPatterns(params?: {
@@ -830,6 +833,41 @@ export async function testDebridProvider(config: {
 
 export async function testDebridProviderById(id: string): Promise<DebridTestResult> {
   return request(`/api/v1/admin/debrid/providers/${id}/test`, { method: 'POST' });
+}
+
+// Usenet Servers
+
+export async function getUsenetServers(): Promise<UsenetServer[]> {
+  return request('/api/v1/admin/usenet/servers');
+}
+
+export async function createUsenetServer(server: UsenetServerInput): Promise<{ id: string }> {
+  return request('/api/v1/admin/usenet/servers', {
+    method: 'POST',
+    body: JSON.stringify(server)
+  });
+}
+
+export async function updateUsenetServer(id: string, server: UsenetServerInput): Promise<void> {
+  return request(`/api/v1/admin/usenet/servers/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(server)
+  });
+}
+
+export async function deleteUsenetServer(id: string): Promise<void> {
+  return request(`/api/v1/admin/usenet/servers/${id}`, { method: 'DELETE' });
+}
+
+export async function testUsenetServer(server: UsenetServerInput): Promise<UsenetTestResult> {
+  return request('/api/v1/admin/usenet/servers/test', {
+    method: 'POST',
+    body: JSON.stringify(server)
+  });
+}
+
+export async function testUsenetServerById(id: string): Promise<UsenetTestResult> {
+  return request(`/api/v1/admin/usenet/servers/${id}/test`, { method: 'POST' });
 }
 
 // Debrid - Public Tracker Setup

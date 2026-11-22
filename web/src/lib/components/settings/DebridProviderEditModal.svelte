@@ -45,6 +45,8 @@
   let testResult = $state<DebridTestResult | null>(null);
   let showApiKey = $state(false);
 
+  const needsApiKey = $derived(form.provider_type !== 'usenet');
+
   const canClose = discardGuard(form);
   const cancel = () => {
     if (canClose()) onClose();
@@ -60,8 +62,8 @@
   });
 
   const save = async () => {
-    if (!form.name.trim() || !form.api_key.trim()) {
-      formError = 'Name and API key are required.';
+    if (!form.name.trim() || (needsApiKey && !form.api_key.trim())) {
+      formError = needsApiKey ? 'Name and API key are required.' : 'Name is required.';
       return;
     }
     saving = true;
@@ -70,7 +72,7 @@
       const payload = {
         name: form.name.trim(),
         provider_type: form.provider_type,
-        api_key: form.api_key.trim(),
+        api_key: needsApiKey ? form.api_key.trim() : '',
         enabled: form.enabled,
         priority: form.priority
       };
@@ -88,7 +90,7 @@
   };
 
   const test = async () => {
-    if (!form.api_key.trim() || !form.provider_type) {
+    if (!form.provider_type || (needsApiKey && !form.api_key.trim())) {
       testResult = { success: false, message: 'Provider type and API key are required' };
       return;
     }
@@ -97,7 +99,7 @@
     try {
       testResult = await testDebridProvider({
         provider_type: form.provider_type,
-        api_key: form.api_key.trim()
+        api_key: needsApiKey ? form.api_key.trim() : ''
       });
     } catch (err) {
       testResult = { success: false, message: err instanceof Error ? err.message : 'Test failed' };
@@ -145,49 +147,58 @@
         Name
         <input type="text" bind:value={form.name} placeholder="My Debrid Provider" />
       </label>
-      <div class="field">
-        <span>API Key</span>
-        <div class="api-key-wrapper">
-          {#if showApiKey}
-            <input
-              type="text"
-              bind:value={form.api_key}
-              placeholder="Paste your API key"
-              autocomplete="one-time-code"
-            />
-          {:else}
-            <input
-              type="password"
-              bind:value={form.api_key}
-              placeholder="Paste your API key"
-              autocomplete="one-time-code"
-            />
-          {/if}
-          <button
-            class="toggle-visibility"
-            type="button"
-            onclick={() => (showApiKey = !showApiKey)}
-            aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              {#if showApiKey}
-                <path
-                  d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.804 11.804 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"
-                ></path>
-              {:else}
-                <path
-                  d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
-                ></path>
-              {/if}
-            </svg>
-          </button>
+      {#if needsApiKey}
+        <div class="field">
+          <span>API Key</span>
+          <div class="api-key-wrapper">
+            {#if showApiKey}
+              <input
+                type="text"
+                bind:value={form.api_key}
+                placeholder="Paste your API key"
+                autocomplete="one-time-code"
+              />
+            {:else}
+              <input
+                type="password"
+                bind:value={form.api_key}
+                placeholder="Paste your API key"
+                autocomplete="one-time-code"
+              />
+            {/if}
+            <button
+              class="toggle-visibility"
+              type="button"
+              onclick={() => (showApiKey = !showApiKey)}
+              aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                {#if showApiKey}
+                  <path
+                    d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.804 11.804 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"
+                  ></path>
+                {:else}
+                  <path
+                    d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"
+                  ></path>
+                {/if}
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      {/if}
       <label>
         Priority
         <input type="number" bind:value={form.priority} min="0" placeholder="0" />
       </label>
     </div>
+
+    {#if !needsApiKey}
+      <p class="hint">
+        Streams from your own usenet servers through the kobload usenet engine. Configure servers
+        under Settings → Usenet Servers.
+      </p>
+    {/if}
 
     <div class="checkbox-row">
       <label class="checkbox">
@@ -206,7 +217,7 @@
       class="btn compact alt"
       type="button"
       onclick={test}
-      disabled={testing || !form.provider_type || !form.api_key.trim()}
+      disabled={testing || !form.provider_type || (needsApiKey && !form.api_key.trim())}
     >
       {testing ? 'Testing...' : 'Test Connection'}
     </button>

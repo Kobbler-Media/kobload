@@ -65,6 +65,8 @@ mod submit_dedup_test;
 mod tv_disambiguation_test;
 mod tv_search_targets_test;
 mod upgrade_dedup_test;
+mod usenet_servers_test;
+mod usenet_stream_test;
 mod watch_directories_test;
 mod watch_directory_notify_test;
 mod watch_directory_scan_test;

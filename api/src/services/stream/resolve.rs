@@ -60,7 +60,9 @@ pub async fn stream_resolve(
 
     let provider = ctx.debrid_providers.get(&provider_type);
 
-    if let Some(nzb_ref) = &request.nzb_ref {
+    if provider_type == DebridProviderType::Usenet {
+        super::usenet_resolve::resolve(ctx, provider, &provider_config.api_key, request).await
+    } else if let Some(nzb_ref) = &request.nzb_ref {
         let release = usenet_releases::get(ctx.pool, nzb_ref)
             .await
             .map_err(|e| StreamSearchError::Database(e.to_string()))?
@@ -96,7 +98,7 @@ pub async fn stream_resolve(
     }
 }
 
-fn lane(request: &StreamResolveRequest) -> Lane {
+pub(super) fn lane(request: &StreamResolveRequest) -> Lane {
     match request.priority.unwrap_or_default() {
         StreamPriority::User => Lane::user(),
         StreamPriority::Warm => Lane::background(),

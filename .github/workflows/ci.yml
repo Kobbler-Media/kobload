@@ -96,4 +96,4 @@ jobs:
         working-directory: kobload
         env:
           NATS_TOKEN: unused-at-build
-        run: docker compose build api web
+        run: docker compose build api web usenet

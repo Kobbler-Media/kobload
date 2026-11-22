@@ -244,7 +244,7 @@ mod tests {
             sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent").unwrap()
         });
         let http = reqwest::Client::new();
-        let debrid = Arc::new(DefaultDebridProviderResolver);
+        let debrid = Arc::new(DefaultDebridProviderResolver::default());
         DefaultDownloadClientResolver::new(pool, http, debrid)
     }
 

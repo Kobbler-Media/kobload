@@ -1,0 +1,82 @@
+use sqlx::PgPool;
+use time::Date;
+use time::macros::format_description;
+use tracing::warn;
+use usenet_proto::{EngineConfigResponse, IpPreference, UsenetServer};
+
+use super::caps;
+use crate::repositories::usenet_servers::UsenetServerRow;
+use crate::repositories::{RepositoryError, clients, usenet_servers};
+
+pub fn format_date(date: Date) -> String {
+    date.format(format_description!("[year]-[month]-[day]"))
+        .unwrap_or_default()
+}
+
+pub fn parse_date(date: &str) -> Option<Date> {
+    Date::parse(date.trim(), format_description!("[year]-[month]-[day]")).ok()
+}
+
+pub fn ip_preference(value: &str) -> IpPreference {
+    match value {
+        "v4" => IpPreference::V4,
+        "v6" => IpPreference::V6,
+        _ => IpPreference::Any,
+    }
+}
+
+fn to_wire(row: UsenetServerRow) -> UsenetServer {
+    UsenetServer {
+        id: row.id.to_string(),
+        name: row.name,
+        host: row.host,
+        port: u16::try_from(row.port).unwrap_or_default(),
+        tls: row.tls,
+        verify_cert: row.verify_cert,
+        ip_preference: ip_preference(&row.ip_preference),
+        connections: u32::try_from(row.connections).unwrap_or_default(),
+        priority: u32::try_from(row.priority).unwrap_or_default(),
+        backbone: row.backbone.filter(|b| !b.trim().is_empty()),
+        retention_days: row.retention_days.and_then(|d| u32::try_from(d).ok()),
+        expires_on: row.expires_on.map(format_date),
+        quota_bytes: row.quota_bytes.and_then(|q| u64::try_from(q).ok()),
+        username: row.username,
+        password: row.password,
+    }
+}
+
+pub async fn engine_config(pool: &PgPool) -> Result<EngineConfigResponse, RepositoryError> {
+    let servers = usenet_servers::list(pool)
+        .await?
+        .into_iter()
+        .filter(|r| r.enabled)
+        .map(to_wire)
+        .collect();
+    Ok(EngineConfigResponse { servers })
+}
+
+pub async fn warn_at_startup(pool: &PgPool) {
+    let rows = match usenet_servers::list(pool).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(error = %e, "Could not check usenet connection caps");
+            return;
+        }
+    };
+    if !rows.iter().any(|r| r.enabled) {
+        return;
+    }
+    for account in caps::accounts(&rows).iter().filter(|a| a.over_cap()) {
+        warn!(account = %account.describe(), "Usenet servers exceed the account's connection cap");
+    }
+    let sab_running = clients::list_clients(pool)
+        .await
+        .map(|cs| cs.iter().any(|c| c.enabled && c.client_type == "sabnzbd"))
+        .unwrap_or(false);
+    if sab_running {
+        warn!(
+            "SABnzbd is still enabled: it holds its own connections to the same usenet accounts, \
+             so the engine's connections plus SABnzbd's must stay within each account's cap"
+        );
+    }
+}

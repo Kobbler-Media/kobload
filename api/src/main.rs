@@ -194,11 +194,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trash_filters = Arc::new(kobload_api::trash_filters::TrashFilterCache::new());
     trash_filters.ensure_loaded(&http_client, &pool).await;
 
+    let debrid_providers: Arc<dyn kobload_api::debrid::DebridProviderResolver> =
+        match kobload_api::usenet::EngineSettings::from_env() {
+            Some(settings) => {
+                info!(engine = %settings.engine_url, "Usenet engine streaming enabled");
+                kobload_api::usenet::config::warn_at_startup(&pool).await;
+                Arc::new(
+                    kobload_api::debrid::DefaultDebridProviderResolver::with_usenet(Arc::new(
+                        kobload_api::usenet::UsenetEngine::new(settings, http_client.clone()),
+                    )),
+                )
+            }
+            None => Arc::new(kobload_api::debrid::DefaultDebridProviderResolver::default()),
+        };
+
     let download_clients: Arc<dyn kobload_api::download_clients::DownloadClientResolver> =
         Arc::new(DefaultDownloadClientResolver::new(
             pool.clone(),
             http_client.clone(),
-            Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
+            debrid_providers.clone(),
         ));
 
     let state = AppState {
@@ -212,7 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         watch_pattern_events,
         nats: nats_state,
         http_client,
-        debrid_providers: Arc::new(kobload_api::debrid::DefaultDebridProviderResolver),
+        debrid_providers,
         download_clients,
         indexers: Arc::new(DefaultIndexerResolver::new(definitions.clone())),
         definitions,
@@ -336,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(routes::watch::routes())
         .merge(routes::watch_directories::routes())
         .merge(routes::system_health::routes())
+        .merge(routes::usenet::routes())
         .merge(routes::webhooks::routes())
         .merge(routes::api_info::routes())
         .merge(kobload_api::openapi::routes())

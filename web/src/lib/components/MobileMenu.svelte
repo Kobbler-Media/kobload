@@ -22,6 +22,7 @@
     indexers: ['prowlarr', 'api', 'config', 'rss', 'feeds', 'sources'],
     definitions: ['cardigann', 'yaml', 'indexer definitions'],
     clients: ['transmission', 'sabnzbd', 'downloader'],
+    'usenet servers': ['usenet', 'nntp', 'newsgroup', 'provider', 'backbone', 'engine'],
     protocol: ['usenet', 'torrent', 'priority', 'delay', 'fallback'],
     'media types': ['types', 'categories', 'routing'],
     'quality profiles': ['quality', 'resolution', 'format'],
@@ -131,6 +132,16 @@
   };
 
   const settingsItems = [
+    {
+      href: '/settings/debrid',
+      label: 'Debrid',
+      icon: 'M13 10V3L4 14h7v7l9-11h-7z'
+    },
+    {
+      href: '/settings/usenet',
+      label: 'Usenet Servers',
+      icon: 'M20 13H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 19c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM20 3H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z'
+    },
     {
       href: '/settings/indexers',
       label: 'Indexers',

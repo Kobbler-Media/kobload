@@ -118,7 +118,7 @@ where
 
 pub async fn releases_for<'e, E>(
     exec: E,
-    provider_id: Uuid,
+    provider_ids: &[Uuid],
     release_keys: &[String],
 ) -> Result<Vec<ReleaseOutcomeRow>>
 where
@@ -130,9 +130,9 @@ where
         SELECT release_key, file_id, last_success_at, last_failure_at, reported_bad_at,
                binge_group
         FROM stream_release_outcomes
-        WHERE provider_id = $1 AND release_key = ANY($2)
+        WHERE provider_id = ANY($1) AND release_key = ANY($2)
         "#,
-        provider_id,
+        provider_ids,
         release_keys,
     )
     .fetch_all(exec)

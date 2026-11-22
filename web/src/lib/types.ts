@@ -722,3 +722,51 @@ export type ReviewItem = {
   };
   scopes: { scope: AliasScope; label: string }[];
 };
+
+export type IpPreference = 'any' | 'v4' | 'v6';
+
+export type UsenetServer = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  tls: boolean;
+  verify_cert: boolean;
+  ip_preference: IpPreference;
+  connections: number;
+  priority: number;
+  backbone: string | null;
+  retention_days: number | null;
+  expires_on: string | null;
+  quota_bytes: number | null;
+  username: string;
+  has_password: boolean;
+  account_connection_cap: number | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UsenetServerInput = {
+  name: string;
+  host: string;
+  port: number;
+  tls: boolean;
+  verify_cert: boolean;
+  ip_preference: IpPreference;
+  connections: number;
+  priority: number;
+  backbone: string | null;
+  retention_days: number | null;
+  expires_on: string | null;
+  quota_bytes: number | null;
+  username: string;
+  password?: string | null;
+  account_connection_cap: number | null;
+  enabled: boolean;
+};
+
+export type UsenetTestResult = {
+  success: boolean;
+  message: string;
+};

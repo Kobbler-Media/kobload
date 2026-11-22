@@ -1,5 +1,5 @@
 [workspace]
-members = ["api", "cardigann"]
+members = ["api", "cardigann", "usenet", "usenet-proto"]
 resolver = "2"
 
 # Optimize regex in dev builds — debug regex is 50-100x slower than release,

@@ -23,6 +23,7 @@ pub mod stream_outcomes;
 pub mod stream_torrents;
 pub mod trash_filters;
 pub mod usenet_releases;
+pub mod usenet_servers;
 pub mod watch;
 pub mod watch_directories;
 pub mod webhooks;

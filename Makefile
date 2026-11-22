@@ -5,7 +5,7 @@ TEST_DATABASE_URL ?= postgres://kobload:kobload@localhost:$(KOBLOAD_TEST_DB_PORT
 # Exported so docker-compose.test.yml sees the same port.
 export KOBLOAD_TEST_DB_PORT
 
-.PHONY: all quick web install up fmt fmt-api fmt-web lint lint-api lint-web check check-web sqlx-check sqlx-prepare sqlx-migrate build build-api build-web test test-api test-db-up test-db-down docker-push tools
+.PHONY: all quick web install up fmt fmt-api fmt-usenet fmt-web lint lint-api lint-usenet lint-web check check-web sqlx-check sqlx-prepare sqlx-migrate build build-api build-usenet build-web test test-api test-usenet test-db-up test-db-down docker-push tools
 
 # sqlx-cli is needed only by the sqlx-* targets. Fail with instructions rather
 # than cargo's opaque "no such subcommand".
@@ -24,16 +24,32 @@ quick: fmt lint check build
 # Web-only checks - for frontend-only changes
 web: fmt-web lint-web check-web build-web
 
-fmt: fmt-api fmt-web
-lint: lint-api lint-web
+fmt: fmt-api fmt-usenet fmt-web
+lint: lint-api lint-usenet lint-web
 check: check-web sqlx-check
-build: build-api build-web
+build: build-api build-usenet build-web
 
 fmt-api:
 	cargo fmt --manifest-path api/Cargo.toml
 
 lint-api:
 	SQLX_OFFLINE=true cargo clippy --manifest-path api/Cargo.toml --all-targets -- -D warnings
+
+# The usenet engine and its wire crate need no database. Packages are named rather than
+# `--all`, which would also reformat the koblibs path dependencies.
+USENET_PACKAGES := -p kobload-usenet -p usenet-proto
+
+fmt-usenet:
+	cargo fmt $(USENET_PACKAGES)
+
+lint-usenet:
+	cargo clippy $(USENET_PACKAGES) --all-targets -- -D warnings
+
+build-usenet:
+	cargo build -p kobload-usenet
+
+test-usenet:
+	cargo test $(USENET_PACKAGES)
 
 # Verify .sqlx cache matches code. If stale, run: make sqlx-prepare
 # `-- --all-targets` so test-only query macros (api/tests/) are included; without
@@ -79,7 +95,7 @@ check-web:
 build-web:
 	@if [ -d web/node_modules ]; then npm --prefix web run build; else echo "web: skipping build (run 'make install')"; fi
 
-test: test-api
+test: test-api test-usenet
 
 test-db-up:
 	docker compose -f docker-compose.test.yml up -d --wait
@@ -108,12 +124,13 @@ export KOBLOAD_TAG := $(TAG)
 endif
 
 docker-push: tools
-	docker compose build api web
-	docker compose push api web
+	docker compose build api web usenet
+	docker compose push api web usenet
 	@echo ""
 	@echo "=== Pushed digests ==="
 	@docker inspect $(REGISTRY)/kobload:$(KOBLOAD_TAG) --format '  api: {{index .RepoDigests 0}}' 2>/dev/null || true
 	@docker inspect $(REGISTRY)/kobload-web:$(KOBLOAD_TAG) --format '  web: {{index .RepoDigests 0}}' 2>/dev/null || true
+	@docker inspect $(REGISTRY)/kobload-usenet:$(KOBLOAD_TAG) --format '  usenet: {{index .RepoDigests 0}}' 2>/dev/null || true
 	@echo ""
 	@echo "Pruning old build artifacts..."
 	docker image prune -f --filter "dangling=true"

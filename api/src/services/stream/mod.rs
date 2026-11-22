@@ -10,7 +10,11 @@ mod release_fit;
 mod resolve;
 mod service;
 mod trait_risk;
+mod usenet_files;
+mod usenet_flight;
 mod usenet_listing;
+mod usenet_resolve;
+mod usenet_warm;
 pub mod vouched;
 pub mod warm_cache;
 

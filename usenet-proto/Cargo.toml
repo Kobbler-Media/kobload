@@ -1,0 +1,16 @@
+[package]
+name = "usenet-proto"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+description = "Wire types and signed stream tokens shared by kobload-api and kobload-usenet"
+
+[dependencies]
+base64 = "0.23.1"
+hmac = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+thiserror = "2"

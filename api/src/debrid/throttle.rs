@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use tracing::warn;
+use usenet_proto::{ImportRequest, ImportResponse};
 
 use super::magnet;
 use super::provider::DebridProvider;
@@ -82,6 +83,12 @@ struct Limits {
 /// the download client, which shares the key but not this gate.
 fn limits(provider: DebridProviderType) -> Limits {
     match provider {
+        DebridProviderType::Usenet => Limits {
+            per_sec: 50.0,
+            burst: 100.0,
+            user_reserve: 3.0,
+            download_reserve: 2.0,
+        },
         DebridProviderType::RealDebrid => Limits {
             per_sec: 3.0,
             burst: 8.0,
@@ -448,6 +455,18 @@ impl DebridProvider for Throttled {
 
     fn supports_usenet(&self) -> bool {
         self.inner.supports_usenet()
+    }
+
+    fn supports_torrents(&self) -> bool {
+        self.inner.supports_torrents()
+    }
+
+    async fn usenet_import(&self, request: &ImportRequest) -> Result<ImportResponse, DebridError> {
+        self.run(|| self.inner.usenet_import(request)).await
+    }
+
+    async fn usenet_release(&self, release_key: &str) -> Result<ImportResponse, DebridError> {
+        self.run(|| self.inner.usenet_release(release_key)).await
     }
 
     fn max_hashes_per_batch(&self) -> usize {
