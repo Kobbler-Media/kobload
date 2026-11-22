@@ -76,6 +76,13 @@
 
   const selectedType = $derived(clientTypes.find((t) => t.id === form.client_type));
 
+  const missingFields = $derived(
+    (selectedType?.fields ?? []).filter((f) => {
+      const value = form[f.name as keyof typeof form];
+      return f.required && (typeof value !== 'string' || !value.trim());
+    })
+  );
+
   $effect(() => {
     const seed = client ? null : typeDefaults(form.client_type);
     if (!seed) return;
@@ -90,8 +97,12 @@
   });
 
   const save = async () => {
-    if (!form.name.trim() || !form.base_url.trim()) {
-      formError = 'Name and base URL are required.';
+    if (!form.name.trim()) {
+      formError = 'Name is required.';
+      return;
+    }
+    if (missingFields.length > 0) {
+      formError = `${missingFields.map((f) => f.label).join(', ')} required.`;
       return;
     }
     saving = true;
@@ -234,7 +245,7 @@
       class="btn compact alt"
       type="button"
       onclick={test}
-      disabled={testing || !form.client_type || !form.base_url}
+      disabled={testing || !form.client_type || missingFields.length > 0}
     >
       {testing ? 'Testing...' : 'Test'}
     </button>

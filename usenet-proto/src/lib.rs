@@ -6,9 +6,11 @@
 mod config;
 mod import;
 mod jobs;
+mod secret;
 mod token;
 
 pub use config::{EngineConfigResponse, IpPreference, UsenetServer};
 pub use import::{ImportMode, ImportRequest, ImportResponse, OutputInfo};
-pub use jobs::{JobRequest, JobState, JobStatus};
+pub use jobs::{JobFailure, JobRequest, JobState, JobStatus};
+pub use secret::{MIN_SECRET_BYTES, SecretError, check_secrets, keys_match};
 pub use token::{Purpose, StreamClaims, TokenError, sign, verify};

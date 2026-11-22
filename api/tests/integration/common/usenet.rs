@@ -16,13 +16,15 @@ use uuid::Uuid;
 
 use super::tv_watch::{TvWatch, usenet_release};
 use kobload_api::debrid::DefaultDebridProviderResolver;
+use kobload_api::repositories::usenet_releases;
 use kobload_api::usenet::{EngineSettings, UsenetEngine};
 use kobload_api::watch::Release;
+use nats_jobs::NzbRef;
 use nats_jobs::types::{StreamOption, StreamSourceType};
 use usenet_proto::{ImportRequest, ImportResponse, OutputInfo, Purpose, StreamClaims};
 
-pub const CONTROL_KEY: &str = "control-key-under-test";
-pub const STREAM_SECRET: &str = "stream-secret-under-test";
+pub const CONTROL_KEY: &str = "control-key-under-test-control-key-under-test";
+pub const STREAM_SECRET: &str = "stream-secret-under-test-stream-secret-under-test";
 pub const STREAM_BASE: &str = "http://10.9.9.9:7090";
 pub const INDEXER_KEY: &str = "indexer-key-under-test";
 
@@ -39,8 +41,18 @@ struct EngineState {
     by_cache_key: HashMap<String, ImportResponse>,
     by_release_key: HashMap<String, ImportResponse>,
     layouts: HashMap<String, Vec<OutputInfo>>,
-    rejected: Vec<String>,
+    rejected: HashMap<String, (StatusCode, String)>,
     delay: Duration,
+    release_delay: Duration,
+}
+
+fn posted_guid(nzb: &[u8]) -> String {
+    let text = String::from_utf8_lossy(nzb);
+    text.split("subject=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[derive(Clone)]
@@ -79,22 +91,13 @@ async fn import(
         )
             .into_response();
     };
-    let guid = req
-        .cache_key
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .to_string();
-    if s.rejected.contains(&guid) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "error": "missing_articles" })),
-        )
-            .into_response();
-    }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(nzb)
         .unwrap();
+    let guid = posted_guid(&bytes);
+    if let Some((status, code)) = s.rejected.get(&guid) {
+        return (*status, Json(json!({ "error": code }))).into_response();
+    }
     let release_key = format!("nzb-{}", const_hex::encode(Sha256::digest(&bytes)));
     let outputs = s.layouts.get(&guid).cloned().unwrap_or_else(|| {
         vec![OutputInfo {
@@ -120,6 +123,8 @@ async fn release(
     if !authorized(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    let delay = state.lock().unwrap().release_delay;
+    tokio::time::sleep(delay).await;
     match state.lock().unwrap().by_release_key.get(&key) {
         Some(found) => Json(found.clone()).into_response(),
         None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response(),
@@ -158,7 +163,43 @@ impl MockEngine {
     }
 
     pub fn reject(&self, guid: &str) {
-        self.state.lock().unwrap().rejected.push(guid.to_string());
+        self.refuse(guid, StatusCode::UNPROCESSABLE_ENTITY, "missing_articles");
+    }
+
+    pub fn refuse(&self, guid: &str, status: StatusCode, code: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .rejected
+            .insert(guid.to_string(), (status, code.to_string()));
+    }
+
+    pub fn accept(&self, guid: &str) {
+        self.state.lock().unwrap().rejected.remove(guid);
+    }
+
+    pub fn release_delay(&self, delay: Duration) {
+        self.state.lock().unwrap().release_delay = delay;
+    }
+
+    /// The engine holds a release kobload's in-memory file list has never seen.
+    pub fn hold(&self, release_key: &str, files: &[(&str, u64)]) {
+        let outputs = files
+            .iter()
+            .enumerate()
+            .map(|(index, (path, size))| OutputInfo {
+                index,
+                path: path.to_string(),
+                size: *size,
+            })
+            .collect();
+        self.state.lock().unwrap().by_release_key.insert(
+            release_key.to_string(),
+            ImportResponse {
+                release_key: release_key.to_string(),
+                outputs,
+            },
+        );
     }
 
     pub fn delay(&self, delay: Duration) {
@@ -186,40 +227,75 @@ impl MockEngine {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Served {
+    Status(StatusCode),
+    Huge,
+}
+
+#[derive(Default)]
+struct HostState {
+    fetches: Vec<String>,
+    served: HashMap<String, Served>,
+}
+
 #[derive(Clone)]
 pub struct NzbHost {
     pub url: String,
-    fetches: Arc<Mutex<Vec<String>>>,
+    state: Arc<Mutex<HostState>>,
 }
 
 async fn nzb(
-    State(fetches): State<Arc<Mutex<Vec<String>>>>,
+    State(state): State<Arc<Mutex<HostState>>>,
     Path(guid): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
     if query.get("apikey").map(String::as_str) != Some(INDEXER_KEY) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    fetches.lock().unwrap().push(guid.clone());
-    format!("<nzb><file subject=\"{guid}\"/></nzb>").into_response()
+    let served = {
+        let mut s = state.lock().unwrap();
+        s.fetches.push(guid.clone());
+        s.served.get(&guid).copied()
+    };
+    match served {
+        Some(Served::Status(status)) => status.into_response(),
+        Some(Served::Huge) => {
+            let chunk = axum::body::Bytes::from(vec![b' '; 1 << 20]);
+            let body = futures::stream::iter(
+                (0..130).map(move |_| Ok::<_, std::io::Error>(chunk.clone())),
+            );
+            axum::body::Body::from_stream(body).into_response()
+        }
+        None => format!("<nzb><file subject=\"{guid}\"/></nzb>").into_response(),
+    }
 }
 
 impl NzbHost {
     pub async fn start() -> Self {
-        let fetches = Arc::new(Mutex::new(Vec::new()));
+        let state = Arc::new(Mutex::new(HostState::default()));
         let app = Router::new()
             .route("/nzb/{guid}", get(nzb))
-            .with_state(fetches.clone());
+            .with_state(state.clone());
         Self {
             url: serve(app).await,
-            fetches,
+            state,
         }
     }
 
-    pub fn fetches(&self, guid: &str) -> usize {
-        self.fetches
+    pub fn serve(&self, guid: &str, served: Served) {
+        self.state
             .lock()
             .unwrap()
+            .served
+            .insert(guid.to_string(), served);
+    }
+
+    pub fn fetches(&self, guid: &str) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .fetches
             .iter()
             .filter(|g| *g == guid)
             .count()
@@ -263,8 +339,29 @@ impl UsenetRig {
         release
     }
 
+    pub fn nzb_ref(&self, guid: &str) -> NzbRef {
+        usenet_releases::nzb_ref(&self.tv.source.id.to_string(), guid)
+    }
+
     pub fn cache_key(&self, guid: &str) -> String {
-        format!("{}/{guid}", self.tv.source.id)
+        self.nzb_ref(guid).guid
+    }
+
+    /// A listing as a search would store it, without the search.
+    pub async fn list(&self, guid: &str, title: &str) -> NzbRef {
+        let release = self.nzb(guid, title);
+        usenet_releases::upsert(
+            &self.tv.server.pool,
+            &[usenet_releases::Listing {
+                indexer_id: self.tv.source.id.to_string(),
+                guid: guid.to_string(),
+                download_url: release.download_url.unwrap(),
+                release_title: release.title,
+            }],
+        )
+        .await
+        .unwrap();
+        self.nzb_ref(guid)
     }
 
     pub async fn options(&self, show: &str, episode: &str) -> Vec<StreamOption> {

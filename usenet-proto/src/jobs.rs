@@ -22,6 +22,13 @@ pub enum JobState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobFailure {
+    Content,
+    Infrastructure,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobStatus {
     pub id: String,
@@ -34,4 +41,6 @@ pub struct JobStatus {
     pub storage: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub failure: Option<JobFailure>,
 }

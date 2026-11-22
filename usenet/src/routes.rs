@@ -1,9 +1,10 @@
 use axum::Router;
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{get, post};
 
-use crate::auth::require_bearer;
+use crate::auth::{require_control_key, require_metrics_key};
 use crate::state::AppState;
 use crate::{import, metrics, stream};
 
@@ -17,14 +18,28 @@ pub fn router(state: AppState) -> Router {
             post(import::import).layer(DefaultBodyLimit::max(IMPORT_LIMIT)),
         )
         .route("/v1/releases/{key}", get(import::release))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_control_key,
+        ));
+    let scrape = Router::new()
         .route("/metrics", get(metrics::metrics))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            require_bearer,
+            require_metrics_key,
         ));
     Router::new()
         .route("/stream/{token}", get(stream::stream).head(stream::stream))
-        .route("/healthz", get(|| async { "ok" }))
+        .route("/healthz", get(healthz))
         .merge(control)
+        .merge(scrape)
         .with_state(state)
+}
+
+async fn healthz(State(state): State<AppState>) -> (StatusCode, &'static str) {
+    if state.configured.is_set() {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "waiting for config")
+    }
 }

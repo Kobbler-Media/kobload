@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use kobload_api::download_clients::{
     DownloadClientCapabilities, DownloadClientError, DownloadClientHandler, DownloadClientResolver,
-    PollResult, ScannedFile,
+    NewDownload, PollResult, ScannedFile,
 };
 use kobload_api::indexers::{
     IndexerCapabilities, IndexerContext, IndexerError, IndexerHandler, IndexerResolver,
@@ -75,7 +75,7 @@ impl DownloadClientHandler for MockDownloadClient {
         _http_client: &reqwest::Client,
         _client: &DownloadClientConfig,
         _bytes: &[u8],
-        _title: &str,
+        _download: &NewDownload<'_>,
     ) -> Result<String, DownloadClientError> {
         let mut results = self.add_bytes_results.lock().unwrap();
         if results.is_empty() {

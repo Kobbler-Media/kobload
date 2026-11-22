@@ -11,12 +11,18 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::outcomes::record_probe;
+use super::usenet_failure::import_failed;
 use super::usenet_files;
+use super::usenet_nzb::{self, FetchError};
 use super::warm_cache::UnavailableReason;
 use crate::debrid::{DebridError, DebridProvider, Lane};
 use crate::repositories::usenet_releases;
 use nats_jobs::NzbRef;
 use usenet_proto::{ImportMode, ImportRequest, ImportResponse};
+
+pub const WARM_SKIPPED: &str = "Not warmed: only the release a search would auto-play is grabbed from the indexer ahead of a tap";
+/// Long enough that a burst of taps and warms on a refused NZB grabs it once.
+const FETCH_FAILURE_MINUTES: i32 = 15;
 
 #[derive(Debug, Clone)]
 pub struct ImportFailure {
@@ -35,12 +41,9 @@ pub struct ImportJob {
     pub download_url: String,
     pub name: String,
     pub known_key: Option<String>,
-}
-
-impl ImportJob {
-    pub fn cache_key(&self) -> String {
-        format!("{}/{}", self.nzb_ref.indexer_id, self.nzb_ref.guid)
-    }
+    pub fetch_failure: Option<String>,
+    /// Whether the indexer may be asked for the NZB when the engine has no copy.
+    pub may_grab: bool,
 }
 
 struct Flight {
@@ -49,7 +52,9 @@ struct Flight {
     outcome: Shared<BoxFuture<'static, Imported>>,
 }
 
-static FLIGHTS: LazyLock<DashMap<(Uuid, String), Flight>> = LazyLock::new(DashMap::new);
+type FlightKey = (Uuid, String, bool);
+
+static FLIGHTS: LazyLock<DashMap<FlightKey, Flight>> = LazyLock::new(DashMap::new);
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct Joined {
@@ -60,7 +65,7 @@ pub struct Joined {
 /// One import per provider and NZB at a time: a tap, a warm and a binge of the same release
 /// share it, so the indexer is asked for the NZB at most once.
 pub async fn import(job: ImportJob, lane: Lane) -> Joined {
-    let key = (job.provider_id, job.cache_key());
+    let key = (job.provider_id, job.nzb_ref.guid.clone(), job.may_grab);
     let (outcome, joined) = match FLIGHTS.entry(key.clone()) {
         dashmap::Entry::Occupied(e) => {
             if lane.is_user() {
@@ -70,15 +75,19 @@ pub async fn import(job: ImportJob, lane: Lane) -> Joined {
         }
         dashmap::Entry::Vacant(v) => {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let task = tokio::spawn(run(job));
+            // The entry goes when the import ends, not when a caller polls it: a caller that
+            // hung up would otherwise leave a finished flight for the next tap to join.
+            let task = tokio::spawn(async move {
+                let out = run(job).await;
+                FLIGHTS.remove_if(&key, |_, f| f.id == id);
+                out
+            });
             let outcome = async move {
-                let out = task.await.unwrap_or_else(|e| {
+                task.await.unwrap_or_else(|e| {
                     Err(ImportFailure {
                         message: format!("Usenet import aborted: {e}"),
                     })
-                });
-                FLIGHTS.remove_if(&key, |_, f| f.id == id);
-                out
+                })
             }
             .boxed()
             .shared();
@@ -96,24 +105,36 @@ pub async fn import(job: ImportJob, lane: Lane) -> Joined {
     }
 }
 
+fn failure(message: impl Into<String>) -> ImportFailure {
+    ImportFailure {
+        message: message.into(),
+    }
+}
+
 async fn run(job: ImportJob) -> Imported {
     let mut request = ImportRequest {
-        cache_key: job.cache_key(),
+        cache_key: job.nzb_ref.guid.clone(),
         name: job.name.clone(),
         mode: ImportMode::Stream,
         password: None,
         nzb_base64: None,
     };
     let result = match job.handler.usenet_import(&request).await {
-        Err(DebridError::NotFound) => match fetch_nzb(&job.http_client, &job.download_url).await {
-            Ok(nzb) => {
-                request.nzb_base64 = Some(STANDARD.encode(nzb));
-                job.handler.usenet_import(&request).await
+        Err(DebridError::NotFound) => {
+            if !job.may_grab {
+                return Err(failure(WARM_SKIPPED));
             }
-            Err(message) => {
-                return Err(ImportFailure { message });
+            if let Some(remembered) = &job.fetch_failure {
+                return Err(failure(remembered.clone()));
             }
-        },
+            match usenet_nzb::fetch(&job.http_client, &job.download_url).await {
+                Ok(nzb) => {
+                    request.nzb_base64 = Some(STANDARD.encode(nzb));
+                    job.handler.usenet_import(&request).await
+                }
+                Err(e) => return Err(failure(fetch_failed(&job, &e).await)),
+            }
+        }
         other => other,
     };
     match result {
@@ -122,11 +143,13 @@ async fn run(job: ImportJob) -> Imported {
             Ok(Arc::new(imported))
         }
         Err(e) => {
-            let message = format!("Usenet import failed: {e}");
-            if refused(&e) {
+            let message = import_failed(&e);
+            if invalid_nzb(&e) {
+                remember_fetch_failure(&job, &message).await;
+            } else if refused(&e) {
                 remember_refusal(&job, &message).await;
             }
-            Err(ImportFailure { message })
+            Err(failure(message))
         }
     }
 }
@@ -137,16 +160,34 @@ fn refused(e: &DebridError) -> bool {
     matches!(e, DebridError::Status(status, _) if status.as_u16() == 422)
 }
 
-async fn remember_import(job: &ImportJob, imported: &ImportResponse) {
-    let key = &imported.release_key;
-    if let Err(e) = usenet_releases::set_usenet_release_key(
+fn invalid_nzb(e: &DebridError) -> bool {
+    matches!(e, DebridError::Status(status, code) if status.as_u16() == 400 && code == "invalid_nzb")
+}
+
+async fn fetch_failed(job: &ImportJob, error: &FetchError) -> String {
+    let message = error.message();
+    if error.remembered() {
+        remember_fetch_failure(job, &message).await;
+    }
+    message
+}
+
+async fn remember_fetch_failure(job: &ImportJob, message: &str) {
+    if let Err(e) = usenet_releases::record_fetch_failure(
         &job.pool,
-        &job.nzb_ref.indexer_id,
-        &job.nzb_ref.guid,
-        key,
+        &job.nzb_ref,
+        message,
+        FETCH_FAILURE_MINUTES,
     )
     .await
     {
+        warn!(error = %e, "Failed to remember a refused NZB grab");
+    }
+}
+
+async fn remember_import(job: &ImportJob, imported: &ImportResponse) {
+    let key = &imported.release_key;
+    if let Err(e) = usenet_releases::set_usenet_release_key(&job.pool, &job.nzb_ref, key).await {
         warn!(error = %e, release_key = %key, "Failed to remember an imported NZB's key");
     }
     usenet_files::store(key, imported.outputs.clone());
@@ -168,25 +209,4 @@ async fn remember_refusal(job: &ImportJob, message: &str) {
         )
         .await;
     }
-}
-
-/// The URL carries the indexer's API key, so neither it nor reqwest's error (which quotes
-/// it) is ever reported.
-async fn fetch_nzb(http_client: &reqwest::Client, download_url: &str) -> Result<Vec<u8>, String> {
-    let resp = http_client.get(download_url).send().await.map_err(|e| {
-        format!(
-            "Could not fetch the NZB from the indexer: {}",
-            e.without_url()
-        )
-    })?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("The indexer answered {status} for the NZB"));
-    }
-    resp.bytes().await.map(|b| b.to_vec()).map_err(|e| {
-        format!(
-            "Could not read the NZB from the indexer: {}",
-            e.without_url()
-        )
-    })
 }

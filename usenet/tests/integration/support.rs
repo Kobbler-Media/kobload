@@ -17,6 +17,7 @@ use usenet_proto::{ImportMode, ImportRequest, ImportResponse, Purpose, StreamCla
 
 pub const ARTICLE: usize = 16 * 1024;
 pub const CONTROL: &str = "control-key";
+pub const METRICS: &str = "metrics-key";
 pub const SECRET: &[u8] = b"stream-secret";
 const POSTED: i64 = 1_790_000_000;
 const EBML: [u8; 4] = [0x1A, 0x45, 0xDF, 0xA3];
@@ -31,25 +32,32 @@ pub struct Fixture {
     pub files: Vec<Posted>,
 }
 
+fn posted(name: &'static str, prefix: &str, len: usize, seed: u8) -> Posted {
+    let mut data: Vec<u8> = (0..len)
+        .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 1)
+        .collect();
+    data[..4].copy_from_slice(&EBML);
+    let articles = post(prefix, name, &data, ARTICLE);
+    Posted {
+        name,
+        data,
+        articles,
+    }
+}
+
 impl Fixture {
     pub fn season() -> Self {
-        let file = |name: &'static str, prefix: &str, len: usize, seed: u8| {
-            let mut data: Vec<u8> = (0..len)
-                .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 1)
-                .collect();
-            data[..4].copy_from_slice(&EBML);
-            let articles = post(prefix, name, &data, ARTICLE);
-            Posted {
-                name,
-                data,
-                articles,
-            }
-        };
         Self {
             files: vec![
-                file("Show.S01E01.mkv", "e01", 12 * ARTICLE + 777, 3),
-                file("Show.S01E02.mkv", "e02", 9 * ARTICLE + 1234, 7),
+                posted("Show.S01E01.mkv", "e01", 12 * ARTICLE + 777, 3),
+                posted("Show.S01E02.mkv", "e02", 9 * ARTICLE + 1234, 7),
             ],
+        }
+    }
+
+    pub fn feature() -> Self {
+        Self {
+            files: vec![posted("Feature.2026.mkv", "f", 48 * ARTICLE + 99, 11)],
         }
     }
 
@@ -128,11 +136,17 @@ pub fn server(id: &str, nntp: &LoopbackServer) -> ServerConfig {
 }
 
 pub async fn engine(dir: &Path, servers: Vec<ServerConfig>) -> Arc<Engine> {
-    Arc::new(
-        Engine::new(EngineConfig::new(dir.to_path_buf(), servers))
-            .await
-            .expect("engine"),
-    )
+    warm_engine(dir, servers, 0).await
+}
+
+pub async fn warm_engine(
+    dir: &Path,
+    servers: Vec<ServerConfig>,
+    min_connections: usize,
+) -> Arc<Engine> {
+    let mut config = EngineConfig::new(dir.to_path_buf(), servers);
+    config.min_connections = min_connections;
+    Arc::new(Engine::new(config).await.expect("engine"))
 }
 
 pub struct Harness {
@@ -146,8 +160,11 @@ impl Harness {
 
     pub async fn with_gap(dir: &Path, nntp: &LoopbackServer, gap: Duration) -> Self {
         let engine = engine(dir, vec![server("a", nntp)]).await;
-        let app = router(AppState::new(engine, CONTROL, SECRET).with_byte_gap(gap));
-        Self { app }
+        let state = AppState::new(engine, CONTROL, SECRET)
+            .with_byte_gap(gap)
+            .with_metrics_key(Some(METRICS));
+        state.configured().set();
+        Self { app: router(state) }
     }
 
     pub async fn send(&self, request: Request<Body>) -> Response<Body> {
@@ -196,7 +213,11 @@ impl Harness {
     }
 
     pub async fn metrics(&self) -> String {
-        let response = self.control("GET", "/metrics", None).await;
+        let request = Request::get("/metrics")
+            .header(header::AUTHORIZATION, format!("Bearer {METRICS}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = self.send(request).await;
         assert_eq!(response.status(), StatusCode::OK);
         String::from_utf8(collect(response).await.0).unwrap()
     }

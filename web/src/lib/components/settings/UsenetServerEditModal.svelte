@@ -1,12 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { Modal, SearchSelect, type SearchSelectItem } from '@koblibs/ui';
-  import {
-    createUsenetServer,
-    updateUsenetServer,
-    testUsenetServer,
-    testUsenetServerById
-  } from '#lib/api/client.js';
+  import { createUsenetServer, updateUsenetServer, testUsenetServer } from '#lib/api/client.js';
   import type {
     IpPreference,
     UsenetServer,
@@ -63,6 +58,14 @@
   let testResult = $state<UsenetTestResult | null>(null);
 
   const canClose = discardGuard(form);
+
+  const endpointChanged = $derived(
+    server != null &&
+      (form.host.trim().toLowerCase() !== server.host.trim().toLowerCase() ||
+        Number(form.port) !== server.port ||
+        form.tls !== server.tls)
+  );
+  const needsPassword = $derived(endpointChanged && !form.password);
   const cancel = () => {
     if (canClose()) onClose();
   };
@@ -102,6 +105,8 @@
 
   const validate = (): string => {
     if (!form.name.trim() || !form.host.trim()) return 'Name and host are required.';
+    if (/[\r\n]/.test(form.username) || /[\r\n]/.test(form.password))
+      return 'Username and password cannot contain line breaks.';
     const port = Number(form.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) return 'Port must be 1–65535.';
     if (!Number.isInteger(Number(form.connections)) || Number(form.connections) < 1)
@@ -111,6 +116,8 @@
 
   const save = async () => {
     formError = validate();
+    if (!formError && needsPassword)
+      formError = 'Enter the password again: the host, port or TLS setting changed.';
     if (formError) return;
     saving = true;
     try {
@@ -134,10 +141,7 @@
     testing = true;
     testResult = null;
     try {
-      testResult =
-        server && !form.password
-          ? await testUsenetServerById(server.id)
-          : await testUsenetServer(buildPayload());
+      testResult = await testUsenetServer(buildPayload(), server?.id);
     } catch (err) {
       testResult = { success: false, message: err instanceof Error ? err.message : 'Test failed' };
     } finally {
@@ -211,9 +215,16 @@
         <input
           type="password"
           bind:value={form.password}
-          placeholder={server?.has_password ? 'unchanged' : ''}
+          placeholder={server?.has_password && !endpointChanged ? 'unchanged' : ''}
+          required={needsPassword}
           autocomplete="new-password"
         />
+        {#if needsPassword}
+          <span class="hint">
+            The host, port or TLS setting changed, so the saved password is not sent there. Enter it
+            again.
+          </span>
+        {/if}
       </label>
       <label>
         Connections

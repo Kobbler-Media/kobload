@@ -153,6 +153,7 @@ async fn test_download_grab_reuses_a_torrent_a_stream_already_added() {
         priority: None,
         release_title: None,
         file_name: None,
+        episode: None,
     };
     assert!(stream_resolve(&ctx, &request).await.unwrap().cached);
     f.grab(&hash('a')).await;

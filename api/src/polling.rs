@@ -5,7 +5,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::download_clients::{
-    DownloadClientError, PollResult, ScannedFile, expand_archives, select_download_client,
+    DownloadClientError, PollResult, ScannedFile, client_of_download, expand_archives,
 };
 use crate::helpers::{broadcast_download_updated, log_event};
 use crate::jobs;
@@ -37,8 +37,7 @@ async fn retry_files_scan(state: &AppState, download: &PendingDownload) -> Files
         return FilesScanRetryResult::CouldNotPoll;
     };
 
-    let Ok(client) = select_download_client(&state.pool, Some(client_id), &download.protocol).await
-    else {
+    let Ok(client) = client_of_download(&state.pool, client_id).await else {
         return FilesScanRetryResult::CouldNotPoll;
     };
 
@@ -361,6 +360,8 @@ pub async fn poll_downloads(state: AppState) {
 }
 
 pub async fn poll_once(state: &AppState) {
+    crate::usenet::reconcile_jobs(state).await;
+
     let pending = downloads_repo::fetch_pending_downloads(&state.pool)
         .await
         .unwrap_or_else(|e| {
@@ -462,11 +463,10 @@ pub async fn poll_once(state: &AppState) {
             continue;
         };
 
-        let client =
-            match select_download_client(&state.pool, Some(client_id), &download.protocol).await {
-                Ok(client) => client,
-                Err(_) => continue,
-            };
+        let client = match client_of_download(&state.pool, client_id).await {
+            Ok(client) => client,
+            Err(_) => continue,
+        };
 
         let handler = match state.download_clients.get(client.client_type.as_str()) {
             Some(handler) => handler,
@@ -764,13 +764,7 @@ async fn retry_pending_submissions(state: &AppState) {
         let new_attempts = download.submission_attempts + 1;
 
         // Get download client
-        let client = match crate::download_clients::select_download_client(
-            &state.pool,
-            Some(download.download_client_id),
-            &download.protocol,
-        )
-        .await
-        {
+        let client = match client_of_download(&state.pool, download.download_client_id).await {
             Ok(client) => client,
             Err(_) => {
                 warn!(
@@ -781,7 +775,7 @@ async fn retry_pending_submissions(state: &AppState) {
                     &state.pool,
                     download.id,
                     new_attempts,
-                    Some("download client not found or disabled"),
+                    Some("download client no longer exists"),
                 )
                 .await;
                 continue;
@@ -847,7 +841,7 @@ async fn retry_pending_submissions(state: &AppState) {
                 )
                 .await;
 
-                if new_attempts >= 10 {
+                if new_attempts >= downloads_repo::MAX_SUBMISSION_ATTEMPTS {
                     let error = format!(
                         "Download client unavailable after {} attempts: {}",
                         new_attempts, e

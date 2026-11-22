@@ -70,17 +70,16 @@ async fn range_requests_get_exact_bytes_and_headers() {
             &[],
         ),
         case(
-            Some("bytes=20-10".into()),
+            Some("bytes=-0".into()),
             StatusCode::RANGE_NOT_SATISFIABLE,
             Some(format!("bytes */{len}")),
             &[],
         ),
-        case(
-            Some("bytes=0-1,5-6".into()),
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            Some(format!("bytes */{len}")),
-            &[],
-        ),
+        case(Some("bytes=20-10".into()), StatusCode::OK, None, data),
+        case(Some("bytes=0-1,5-6".into()), StatusCode::OK, None, data),
+        case(Some("items=0-5".into()), StatusCode::OK, None, data),
+        case(Some("bytes=abc-".into()), StatusCode::OK, None, data),
+        case(Some("bytes 0-5".into()), StatusCode::OK, None, data),
     ];
 
     for Case {

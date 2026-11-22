@@ -128,15 +128,24 @@ services:
       KOBLOAD_URL: ${USENET_KOBLOAD_URL:-http://api:7080}
       USENET_CONTROL_KEY: ${USENET_CONTROL_KEY:-}
       USENET_STREAM_SECRET: ${USENET_STREAM_SECRET:-}
+      USENET_METRICS_KEY: ${USENET_METRICS_KEY:-}
+      USENET_MIN_CONNECTIONS: ${USENET_MIN_CONNECTIONS:-4}
       RUST_LOG: ${USENET_RUST_LOG:-info}
     # Idle pooled NNTP connections otherwise restart TCP slow start: at ~210 ms RTT that took
     # an import's first articles from 1.5 s to 4.0 s.
     sysctls:
       net.ipv4.tcp_slow_start_after_idle: 0
+    # The image runs as uid/gid 10001; set these to the owner of KOBLOAD_DOWNLOADS so the
+    # engine can write finished downloads there (chown the usenet_data volume to match).
+    user: "${USENET_UID:-10001}:${USENET_GID:-10001}"
+    # Loopback by default: the stream port serves anyone holding a signed URL, so publish it
+    # only on the LAN address kobbler reaches it at (USENET_BIND), never on all interfaces.
     ports:
-      - "${USENET_PORT:-7090}:7090"
+      - "${USENET_BIND:-127.0.0.1}:${USENET_PORT:-7090}:7090"
     volumes:
       - usenet_data:/data
+      # Same mount and path as the api's, so a finished job's path means the same in both.
+      - ${KOBLOAD_DOWNLOADS:-./data/downloads}:/downloads
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:7090/healthz"]
       interval: 10s

@@ -102,6 +102,9 @@ pub const TABLES_IN_ORDER: &[&str] = &[
     "torrent_hash_files",
 ];
 
+/// Indexer download URLs carry the indexer's API key, and a search lists them again.
+const REDACTED: &[(&str, &str)] = &[("usenet_releases", "download_url")];
+
 #[derive(Debug, Error)]
 pub enum BackupError {
     #[error("IO error: {0}")]
@@ -187,12 +190,22 @@ async fn export_table(pool: &PgPool, table: &str, output_dir: &Path) -> BackupRe
         return Ok(());
     }
 
-    let column_list = columns.join(", ");
+    let select_list = columns
+        .iter()
+        .map(|column| {
+            if REDACTED.contains(&(table, column.as_str())) {
+                format!("''::text AS {column}")
+            } else {
+                column.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
 
     // Use PostgreSQL COPY TO STDOUT for high-performance export
     let copy_query = format!(
-        "COPY {} ({}) TO STDOUT WITH (FORMAT CSV, HEADER)",
-        table, column_list
+        "COPY (SELECT {} FROM {}) TO STDOUT WITH (FORMAT CSV, HEADER)",
+        select_list, table
     );
 
     let mut copy_stream = pool.copy_out_raw(&copy_query).await?;

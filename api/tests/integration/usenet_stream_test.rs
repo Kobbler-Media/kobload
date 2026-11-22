@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 
 use crate::common::usenet::{UsenetRig, assert_purpose, claims, purposes};
 use kobload_api::repositories::{app_settings, usenet_releases};
-use nats_jobs::NzbRef;
 use nats_jobs::types::{StreamAvailability, StreamPlayback};
 use usenet_proto::Purpose;
 
@@ -56,12 +55,12 @@ async fn test_search_lists_usenet_options_on_the_usenet_provider() {
     let option = &all[0];
     assert_eq!(option.debrid_provider, "usenet");
     assert_eq!(option.debrid_provider_id, rig.provider);
+    assert_eq!(option.nzb_ref, Some(rig.nzb_ref("g-list")));
+    assert!(!option.id.contains("g-list"), "{}", option.id);
     assert_eq!(
-        option.nzb_ref,
-        Some(NzbRef {
-            indexer_id: rig.tv.source.id.to_string(),
-            guid: "g-list".to_string()
-        })
+        option.availability,
+        Some(StreamAvailability::Likely),
+        "a fresh usenet pick on our engine is likely, so kobbler may warm it"
     );
     assert!(rig.engine.imports().is_empty(), "searching imports nothing");
     rig.tv.server.cleanup().await;
@@ -86,21 +85,9 @@ async fn test_resolve_imports_once_and_returns_signed_engine_urls() {
             ("Extras/Engine.Movie.2026.Featurette.mkv", GB),
         ],
     );
-    let listing = rig.nzb("g-movie", "Engine.Movie.2026.1080p.BluRay.x264-NZB");
-    let nzb_ref = NzbRef {
-        indexer_id: rig.tv.source.id.to_string(),
-        guid: "g-movie".to_string(),
-    };
-    usenet_releases::upsert(
-        &rig.tv.server.pool,
-        &[usenet_releases::Listing {
-            nzb_ref: nzb_ref.clone(),
-            download_url: listing.download_url.clone().unwrap(),
-            release_title: listing.title.clone(),
-        }],
-    )
-    .await
-    .unwrap();
+    let nzb_ref = rig
+        .list("g-movie", "Engine.Movie.2026.1080p.BluRay.x264-NZB")
+        .await;
 
     let (status, first) = rig.resolve(json!({ "nzb_ref": nzb_ref })).await;
     assert_eq!(status, StatusCode::OK, "{first}");
@@ -109,6 +96,7 @@ async fn test_resolve_imports_once_and_returns_signed_engine_urls() {
     assert_eq!(first["cached"], true);
     assert_eq!(first["filename"], "Engine.Movie.2026.1080p.mkv");
     assert_eq!(first["filesize"], 4 * GB);
+    assert_eq!(first["file_id"], 1);
     assert!(first["torrent_id"].is_null(), "{first}");
     let (play, cache) = purposes(&first);
     assert_purpose(&play, Purpose::Play);
@@ -254,6 +242,26 @@ async fn test_an_episode_resolves_to_its_output_and_a_multi_episode_file_serves_
     assert_eq!(status, StatusCode::OK, "{by_id}");
     assert_eq!(claims(by_id["stream_url"].as_str().unwrap()).output, 0);
     assert_eq!(by_id["filename"], "Engine.Pack.Show.S01E01.1080p.mkv");
+    let (status, by_name) = rig
+        .resolve(json!({ "release_key": key, "file_name": "Engine.Pack.Show.S01E02E03.1080p.mkv" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{by_name}");
+    assert_eq!(
+        by_name["file_id"], 1,
+        "a multi-episode file re-resolves by its name"
+    );
+
+    let (status, missing) = rig
+        .resolve(json!({ "release_key": key, "episode": { "season": 1, "episode": 7 } }))
+        .await;
+    assert!(
+        !status.is_success(),
+        "a pack never falls back to another episode: {missing}"
+    );
+    assert!(
+        missing.as_str().unwrap().contains("S01E07 was not found"),
+        "{missing}"
+    );
     assert_eq!(
         rig.nzbs.fetches("g-pack"),
         1,
@@ -263,7 +271,63 @@ async fn test_an_episode_resolves_to_its_output_and_a_multi_episode_file_serves_
 }
 
 #[tokio::test]
-async fn test_a_warm_resolve_imports_only_the_auto_play_pick() {
+async fn test_a_pack_resolves_each_requested_episode_with_no_search_behind_it() {
+    let rig = UsenetRig::start().await;
+    rig.engine.layout(
+        "g-season",
+        &[
+            ("Engine.Season.Show.S01E04.1080p.mkv", GB),
+            ("Engine.Season.Show.S01E05.1080p.mkv", GB),
+            ("Engine.Season.Show.S01E06.1080p.mkv", 2 * GB),
+            ("Engine.Season.Show.S01E06.1080p.en.srt", 40_000),
+        ],
+    );
+    let nzb_ref = rig
+        .list("g-season", "Engine.Season.Show.S01.1080p.WEB-DL.x264-NZB")
+        .await;
+
+    let (status, e05) = rig
+        .resolve(json!({ "nzb_ref": nzb_ref, "episode": { "season": 1, "episode": 5 } }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{e05}");
+    assert_eq!(e05["filename"], "Engine.Season.Show.S01E05.1080p.mkv");
+    assert_eq!(e05["file_id"], 1);
+    assert_eq!(claims(e05["stream_url"].as_str().unwrap()).output, 1);
+
+    let key = e05["release_key"].as_str().unwrap();
+    let (status, e06) = rig
+        .resolve(
+            json!({ "release_key": key, "episode": { "season": 1, "episode": 6 },
+                         "release_title": "Engine.Season.Show.S01.1080p.WEB-DL.x264-NZB" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{e06}");
+    assert_eq!(e06["filename"], "Engine.Season.Show.S01E06.1080p.mkv");
+    assert_eq!(e06["file_id"], 2);
+
+    let (status, whole) = rig.resolve(json!({ "release_key": key })).await;
+    assert_eq!(status, StatusCode::OK, "{whole}");
+    assert_eq!(
+        whole["file_id"], 2,
+        "with nothing asked for, the largest video plays"
+    );
+    rig.tv.server.cleanup().await;
+}
+
+/// kobbler's prewarm resolves each pickable option with `priority: warm`, built from the
+/// option by `apply_option` (nzb_ref, release_key, first file, title).
+fn warm_body(option: &nats_jobs::types::StreamOption) -> Value {
+    json!({
+        "nzb_ref": option.nzb_ref,
+        "release_key": option.release_key,
+        "file_id": option.files.first().map(|f| f.id),
+        "release_title": option.release_title,
+        "priority": "warm",
+    })
+}
+
+#[tokio::test]
+async fn test_warming_grabs_only_the_auto_play_pick_but_warms_imported_ones_freely() {
     let rig = UsenetRig::start().await;
     rig.tv.indexer.set_search_results(vec![
         rig.nzb("g-top", "Engine.Warm.Show.S01E05.1080p.WEB-DL.x264-NZB"),
@@ -271,38 +335,50 @@ async fn test_a_warm_resolve_imports_only_the_auto_play_pick() {
     ]);
     let options = rig.options("Engine Warm Show", "5").await;
     assert_eq!(options.len(), 2, "{options:?}");
-    let top = options[0].nzb_ref.clone().unwrap();
-    let low = options[1].nzb_ref.clone().unwrap();
+    assert!(
+        options
+            .iter()
+            .all(|o| o.availability == Some(StreamAvailability::Likely)),
+        "kobbler's pickable needs Ready or Likely: {options:?}"
+    );
+    let (top, low) = (&options[0], &options[1]);
 
-    let (status, body) = rig
-        .resolve(json!({ "nzb_ref": low, "priority": "warm" }))
-        .await;
+    let (status, body) = rig.resolve(warm_body(low)).await;
     assert!(
         !status.is_success(),
-        "warming a fallback imported it: {body}"
+        "warming a fallback grabbed it: {body}"
     );
-    assert!(
-        rig.engine.imports().is_empty(),
-        "{:?}",
-        rig.engine.imports()
-    );
-    assert_eq!(rig.nzbs.fetches(&low.guid), 0);
+    assert_eq!(rig.engine.imports_with_nzb(), 0);
+    assert_eq!(rig.nzbs.fetches("g-low"), 0);
 
-    let (status, body) = rig
-        .resolve(json!({ "nzb_ref": top, "priority": "warm" }))
-        .await;
+    let (status, body) = rig.resolve(warm_body(top)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (play, cache) = purposes(&body);
     assert_purpose(&play, Purpose::Play);
     assert_purpose(&cache, Purpose::Warm);
-    assert_eq!(rig.nzbs.fetches(&top.guid), 1);
+    assert_eq!(rig.nzbs.fetches("g-top"), 1);
 
-    let (status, body) = rig.resolve(json!({ "nzb_ref": low })).await;
+    let (status, body) = rig.resolve(json!({ "nzb_ref": low.nzb_ref })).await;
     assert_eq!(
         status,
         StatusCode::OK,
         "a tap still imports a fallback: {body}"
     );
+    assert_eq!(rig.nzbs.fetches("g-low"), 1);
+
+    let options = rig.options("Engine Warm Show", "5").await;
+    let low = options
+        .iter()
+        .find(|o| o.nzb_ref == Some(rig.nzb_ref("g-low")))
+        .unwrap();
+    assert!(low.release_key.is_some());
+    let (status, body) = rig.resolve(warm_body(low)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an imported release warms freely: {body}"
+    );
+    assert_eq!(rig.nzbs.fetches("g-low"), 1, "and costs no grab");
     rig.tv.server.cleanup().await;
 }
 
@@ -319,14 +395,19 @@ async fn test_failures_are_remembered_for_the_usenet_provider() {
     assert_eq!(options.len(), 2, "{options:?}");
     let dead = options
         .iter()
-        .find(|o| o.nzb_ref.as_ref().unwrap().guid == "g-dead")
+        .find(|o| o.nzb_ref == Some(rig.nzb_ref("g-dead")))
         .unwrap();
     let (status, body) = rig.resolve(json!({ "nzb_ref": dead.nzb_ref })).await;
     assert!(!status.is_success(), "{body}");
+    assert!(
+        body.as_str().unwrap().contains("not cached")
+            && body.as_str().unwrap().contains("missing_articles"),
+        "{body}"
+    );
 
     let good = options
         .iter()
-        .find(|o| o.nzb_ref.as_ref().unwrap().guid == "g-good")
+        .find(|o| o.nzb_ref == Some(rig.nzb_ref("g-good")))
         .unwrap();
     let resolved = rig.resolve_option(good).await;
     let key = resolved["release_key"].as_str().unwrap();
@@ -346,7 +427,7 @@ async fn test_failures_are_remembered_for_the_usenet_provider() {
     let by_guid = |guid: &str| {
         options
             .iter()
-            .find(|o| o.nzb_ref.as_ref().unwrap().guid == guid)
+            .find(|o| o.nzb_ref == Some(rig.nzb_ref(guid)))
             .unwrap()
     };
     assert_eq!(

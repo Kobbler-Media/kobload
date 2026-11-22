@@ -1,4 +1,5 @@
 use nats_jobs::MediaWant;
+use nats_jobs::StreamEpisode;
 use nats_jobs::types::StreamFile;
 use usenet_proto::OutputInfo;
 
@@ -6,7 +7,10 @@ use crate::parsing::file::VIDEO_EXTENSIONS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Episode { season: Option<u32>, episode: u32 },
+    Episodes {
+        season: Option<u32>,
+        episodes: Vec<u32>,
+    },
     Largest,
 }
 
@@ -16,9 +20,9 @@ impl Target {
             MediaWant::TvEpisode {
                 season, episode, ..
             } => match episode.trim().parse() {
-                Ok(episode) => Self::Episode {
+                Ok(episode) => Self::Episodes {
                     season: season.trim().parse().ok(),
-                    episode,
+                    episodes: vec![episode],
                 },
                 Err(_) => Self::Largest,
             },
@@ -26,27 +30,60 @@ impl Target {
         }
     }
 
+    pub fn for_episode(episode: StreamEpisode) -> Self {
+        match u32::try_from(episode.episode) {
+            Ok(number) => Self::Episodes {
+                season: u32::try_from(episode.season).ok(),
+                episodes: vec![number],
+            },
+            Err(_) => Self::Largest,
+        }
+    }
+
     pub fn from_title(title: &str) -> Self {
         let parsed = crate::parsing::parse_release(title, "tv");
         match parsed.media.as_tv() {
-            Some(tv) if tv.episodes.len() == 1 => Self::Episode {
+            Some(tv) if !tv.episodes.is_empty() => Self::Episodes {
                 season: tv.season,
-                episode: tv.episodes[0],
+                episodes: tv.episodes.clone(),
             },
             _ => Self::Largest,
         }
     }
 
     fn matches(&self, output: &OutputInfo) -> bool {
-        let Self::Episode { season, episode } = self else {
+        let Self::Episodes { season, episodes } = self else {
             return false;
         };
         let parsed = crate::parsing::parse_release(&stem(&output.path), "tv");
         parsed.media.as_tv().is_some_and(|tv| {
-            tv.episodes.contains(episode)
+            episodes.iter().all(|e| tv.episodes.contains(e))
                 && (season.is_none() || tv.season.is_none() || tv.season == *season)
         })
     }
+
+    fn describe(&self) -> String {
+        match self {
+            Self::Episodes { season, episodes } => {
+                let episodes: String = episodes.iter().map(|e| format!("E{e:02}")).collect();
+                match season {
+                    Some(season) => format!("S{season:02}{episodes}"),
+                    None => episodes,
+                }
+            }
+            Self::Largest => "the main video".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum Unplayable {
+    #[error("file {0} was not found in this release")]
+    NoFile(i32),
+    #[error("{0} was not found in this pack")]
+    NoEpisode(String),
+    #[error("Resolved release is not a video: it holds no playable file")]
+    NoVideo,
 }
 
 fn basename(path: &str) -> &str {
@@ -78,28 +115,36 @@ fn is_sample(output: &OutputInfo) -> bool {
         .any(|t| t == "sample")
 }
 
-/// The output a request stands for: the given index, else the largest video that holds the
-/// wanted episode, else the largest video that is not a sample.
+/// The output a request stands for: the given index, else the largest video holding the
+/// wanted episodes, else the largest video that is not a sample. A pack never falls back
+/// from a wanted episode to another one's file.
 pub fn choose<'a>(
     outputs: &'a [OutputInfo],
     file_id: Option<i32>,
     target: &Target,
-) -> Option<&'a OutputInfo> {
+) -> Result<&'a OutputInfo, Unplayable> {
     if let Some(id) = file_id {
         return outputs
             .iter()
-            .find(|o| i64::try_from(o.index).ok() == Some(i64::from(id)));
+            .find(|o| i64::try_from(o.index).ok() == Some(i64::from(id)))
+            .ok_or(Unplayable::NoFile(id));
     }
     let videos = || outputs.iter().filter(|o| is_video(o) && !is_sample(o));
-    videos()
+    if let Some(found) = videos()
         .filter(|o| target.matches(o))
         .max_by_key(|o| o.size)
-        .or_else(|| videos().max_by_key(|o| o.size))
+    {
+        return Ok(found);
+    }
+    if matches!(target, Target::Episodes { .. }) && videos().count() > 1 {
+        return Err(Unplayable::NoEpisode(target.describe()));
+    }
+    videos().max_by_key(|o| o.size).ok_or(Unplayable::NoVideo)
 }
 
 /// Clients play the first listed file, so the one the search was for leads.
 pub fn listed_files(outputs: &[OutputInfo], target: &Target) -> Vec<StreamFile> {
-    let lead = choose(outputs, None, target).map(|o| o.index);
+    let lead = choose(outputs, None, target).ok().map(|o| o.index);
     let mut ordered: Vec<&OutputInfo> = outputs.iter().collect();
     ordered.sort_by_key(|o| (Some(o.index) != lead, o.index));
     ordered
@@ -139,9 +184,9 @@ mod tests {
             ("Show.S01E04.mkv", 10),
         ]);
         for (episode, index) in [(1, 0), (2, 1), (3, 1), (4, 3)] {
-            let target = Target::Episode {
+            let target = Target::Episodes {
                 season: Some(1),
-                episode,
+                episodes: vec![episode],
             };
             assert_eq!(
                 choose(&pack, None, &target).unwrap().index,
@@ -161,7 +206,10 @@ mod tests {
         ]);
         assert_eq!(choose(&movie, None, &Target::Largest).unwrap().index, 2);
         assert_eq!(choose(&movie, Some(3), &Target::Largest).unwrap().index, 3);
-        assert!(choose(&movie, Some(9), &Target::Largest).is_none());
+        assert_eq!(
+            choose(&movie, Some(9), &Target::Largest),
+            Err(Unplayable::NoFile(9))
+        );
     }
 
     #[test]
@@ -171,9 +219,9 @@ mod tests {
             ("Show.S01E02.mkv", 10),
             ("Show.S01E02.srt", 1),
         ]);
-        let target = Target::Episode {
+        let target = Target::Episodes {
             season: Some(1),
-            episode: 2,
+            episodes: vec![2],
         };
         let ids: Vec<i32> = listed_files(&pack, &target).iter().map(|f| f.id).collect();
         assert_eq!(ids, vec![1, 0, 2]);

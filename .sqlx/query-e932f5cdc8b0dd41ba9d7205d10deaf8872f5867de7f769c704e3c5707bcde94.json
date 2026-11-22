@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT external_id AS \"external_id!\" FROM downloads WHERE external_id = ANY($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "external_id!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "external_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "e932f5cdc8b0dd41ba9d7205d10deaf8872f5867de7f769c704e3c5707bcde94"
+}

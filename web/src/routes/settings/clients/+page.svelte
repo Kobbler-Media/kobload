@@ -108,7 +108,7 @@
           <div>
             <h3>{client.name}</h3>
             <p class="muted">
-              {client.client_type} · {client.protocol} · {client.base_url}
+              {[client.client_type, client.protocol, client.base_url].filter(Boolean).join(' · ')}
             </p>
           </div>
           <span class="status-chip">{client.enabled ? 'enabled' : 'disabled'}</span>

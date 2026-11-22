@@ -1,0 +1,46 @@
+use std::collections::HashMap;
+
+use kobload_usenet::{Settings, SettingsError};
+
+const CONTROL: &str = "c0ntrol-key-c0ntrol-key-c0ntrol-key";
+const STREAM: &str = "stream-secret-stream-secret-stream";
+const METRICS: &str = "metrics-key-metrics-key-metrics-key";
+
+fn settings(vars: &[(&str, &str)]) -> Result<Settings, SettingsError> {
+    let mut env: HashMap<&str, &str> = HashMap::from([
+        ("KOBLOAD_URL", "http://api:7080"),
+        ("USENET_CONTROL_KEY", CONTROL),
+        ("USENET_STREAM_SECRET", STREAM),
+    ]);
+    env.extend(vars.iter().copied());
+    Settings::from_lookup(|name| env.get(name).map(|v| (*v).to_owned()))
+}
+
+#[test]
+fn defaults_warm_four_connections_and_leave_metrics_closed() {
+    let default = settings(&[]).unwrap();
+    assert_eq!(default.min_connections, 4);
+    assert_eq!(default.metrics_key, None);
+    let set = settings(&[
+        ("USENET_MIN_CONNECTIONS", "8"),
+        ("USENET_METRICS_KEY", METRICS),
+    ])
+    .unwrap();
+    assert_eq!(set.min_connections, 8);
+    assert_eq!(set.metrics_key.as_deref(), Some(METRICS));
+}
+
+#[test]
+fn weak_or_shared_secrets_refuse_to_start() {
+    let refused = [
+        vec![("USENET_CONTROL_KEY", "dev-usenet-control-key")],
+        vec![("USENET_STREAM_SECRET", "short")],
+        vec![("USENET_STREAM_SECRET", CONTROL)],
+        vec![("USENET_METRICS_KEY", "metrics")],
+        vec![("USENET_METRICS_KEY", CONTROL)],
+        vec![("USENET_MIN_CONNECTIONS", "many")],
+    ];
+    for vars in refused {
+        assert!(settings(&vars).is_err(), "{vars:?}");
+    }
+}

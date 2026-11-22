@@ -74,14 +74,20 @@ pub async fn stream(
     let mut reader = state.engine.open(&key, claims.output, purpose(&claims))?;
     reader.set_end(start + count);
     tracing::debug!(%key, output = claims.output, start, count, purpose = ?claims.purpose, "stream");
-    let pump = Pump {
+    let mut pump = Pump {
         reader,
         at: start,
         remaining: count,
         gap: state.byte_gap,
         label: format!("{key}/{}", claims.output),
+        damage: state.damage.clone(),
+        sought: false,
     };
-    response.body(pump.into_body()).map_err(internal)
+    let first = pump
+        .first()
+        .await
+        .map_err(|failure| ApiError::new(failure.status(), failure.code()))?;
+    response.body(pump.into_body(first)).map_err(internal)
 }
 
 const fn purpose(claims: &StreamClaims) -> kob_usenet::Purpose {

@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::download_clients::{DownloadClientError, DownloadClientResolver};
+use crate::download_clients::{DownloadClientError, DownloadClientResolver, NewDownload};
 use crate::helpers::{broadcast_download_created, log_event};
 use crate::indexers::{IndexerContext, IndexerResolver};
 use crate::repositories::{
@@ -191,7 +191,7 @@ pub async fn submit_download(
     // rejects a concurrent in-flight submission for the same URL (returns None), so the
     // second of two racing watch patterns never reaches the download client. A NULL
     // dedup_key always inserts. We finalize this row's real status after the client add.
-    let reservation = downloads_repo::DownloadInput {
+    let reservation = || downloads_repo::DownloadInput {
         source: input.source.clone(),
         protocol: protocol.clone(),
         profile_id: None,
@@ -211,19 +211,27 @@ pub async fn submit_download(
         media_kind: input.media_kind.clone(),
         submission_error: None,
     };
-    let reserved_id = downloads_repo::reserve_download(ctx.pool, reservation, dedup_key.as_deref())
+    let db_error = |e: crate::repositories::RepositoryError| {
+        DownloadServiceError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    };
+    let reserved = downloads_repo::reserve_download(ctx.pool, reservation(), dedup_key.as_deref())
         .await
-        .map_err(|e| DownloadServiceError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let reserved_id = match reserved_id {
-        Some(id) => Some(id),
+        .map_err(db_error)?;
+    let id = match reserved {
+        Some(id) => id,
         // Reservation lost the race. The winner almost always still holds an active row —
-        // return it as suppressed. If it has already been released (winner failed), fall
-        // through with no reservation and create a fresh row after the client add.
+        // return it as suppressed. If it has already been released (winner failed), reserve
+        // a row without the key: the client add needs the download's id.
         None => {
             if let Some(existing) = suppress_duplicate(ctx, &input, &download_url).await {
                 return Ok(existing);
             }
-            None
+            downloads_repo::reserve_download(ctx.pool, reservation(), None)
+                .await
+                .map_err(db_error)?
+                .ok_or_else(|| {
+                    DownloadServiceError::new(StatusCode::INTERNAL_SERVER_ERROR, "no row reserved")
+                })?
         }
     };
 
@@ -277,8 +285,13 @@ pub async fn submit_download(
             let add_result = match handler {
                 Ok(handler) => match release_payload {
                     ReleasePayload::Bytes(bytes) => {
+                        let download = NewDownload {
+                            id,
+                            title: &input.name,
+                            password: release_password(input.release_payload.as_ref()),
+                        };
                         handler
-                            .add_bytes(ctx.http_client, &download_client, &bytes, &input.name)
+                            .add_bytes(ctx.http_client, &download_client, &bytes, &download)
                             .await
                     }
                     ReleasePayload::Url(url) => {
@@ -329,48 +342,18 @@ pub async fn submit_download(
         Some(0.0)
     };
 
-    // Finalize the reserved row, or (rare released-key fallback) create a fresh one.
-    let id = if let Some(id) = reserved_id {
-        downloads_repo::finalize_submission(
-            ctx.pool,
-            id,
-            &status,
-            external_id.as_deref(),
-            error.as_deref(),
-            submission_error.as_deref(),
-            progress,
-            &download_url,
-        )
-        .await
-        .map_err(|e| DownloadServiceError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        id
-    } else {
-        let input_row = downloads_repo::DownloadInput {
-            source: input.source.clone(),
-            protocol: protocol.clone(),
-            profile_id: None,
-            name: input.name.clone(),
-            download_url: download_url.clone(),
-            download_client_id: download_client.id,
-            external_id: external_id.clone(),
-            callback_url: input.callback_url.clone(),
-            auth_token: input.auth_token.clone(),
-            metadata: Some(input.metadata.clone()),
-            status: status.clone(),
-            progress,
-            error: error.clone(),
-            release_payload: input.release_payload.clone(),
-            api_key_id: input.api_key_id,
-            quality_profile_id: input.quality_profile_id,
-            media_kind: input.media_kind.clone(),
-            submission_error: submission_error.clone(),
-        };
-        downloads_repo::create_download(ctx.pool, input_row)
-            .await
-            .map_err(|e| {
-                DownloadServiceError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            })?
-    };
+    downloads_repo::finalize_submission(
+        ctx.pool,
+        id,
+        &status,
+        external_id.as_deref(),
+        error.as_deref(),
+        submission_error.as_deref(),
+        progress,
+        &download_url,
+    )
+    .await
+    .map_err(db_error)?;
 
     log_event(
         ctx.pool,
@@ -735,7 +718,19 @@ pub async fn retry_submission(
         .map_err(DownloadClientError::Request)?
         .to_vec();
 
+    let new_download = NewDownload {
+        id: download.id,
+        title: &download.name,
+        password: release_password(download.release_payload.as_ref()),
+    };
     handler
-        .add_bytes(http_client, client, &bytes, &download.name)
+        .add_bytes(http_client, client, &bytes, &new_download)
         .await
+}
+
+fn release_password(release: Option<&serde_json::Value>) -> Option<&str> {
+    release?
+        .get("password")?
+        .as_str()
+        .filter(|p| !p.trim().is_empty())
 }

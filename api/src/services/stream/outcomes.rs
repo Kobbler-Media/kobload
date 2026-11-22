@@ -143,6 +143,17 @@ pub async fn record_report(
         release_key: release_key.clone(),
         file_id: report.file_id,
     });
+    // Missing or corrupt articles are the copy's own fault, so the release is dead for
+    // every later search, not only failed for this viewer.
+    if super::usenet_failure::is_damage(reason) {
+        record_availability(
+            pool,
+            &release_key,
+            provider_id,
+            Some(UnavailableReason::Dead),
+        )
+        .await;
+    }
     let reason: String = reason.chars().take(200).collect();
     repo::record_failure(pool, provider_id, &release_key, report.file_id, &reason).await?;
     Ok(())

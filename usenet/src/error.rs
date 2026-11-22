@@ -33,6 +33,8 @@ impl From<kob_usenet::Error> for ApiError {
             E::UnknownRelease(_) | E::UnknownOutput { .. } => {
                 (StatusCode::NOT_FOUND, "unknown_release")
             }
+            E::UnknownJob(_) => (StatusCode::NOT_FOUND, "unknown_job"),
+            E::DuplicateJob(_) => (StatusCode::CONFLICT, "duplicate_job"),
             E::Nzb(_) => (StatusCode::BAD_REQUEST, "invalid_nzb"),
             E::NestedNzb => (StatusCode::UNPROCESSABLE_ENTITY, "nested_nzb"),
             E::Retention => (StatusCode::UNPROCESSABLE_ENTITY, "retention"),

@@ -11,7 +11,7 @@ use crate::auth::require_auth;
 use crate::repositories::usenet_servers::{self as repo, UsenetServerInput, UsenetServerRow};
 use crate::state::AppState;
 use crate::usenet::config::{format_date, parse_date};
-use crate::usenet::{ProbeTarget, probe, violation};
+use crate::usenet::{ProbeTarget, probe, sab_servers, same_host, violation};
 
 #[derive(Debug, Serialize)]
 pub struct UsenetServerView {
@@ -104,6 +104,14 @@ pub struct UsenetServerBody {
     enabled: bool,
 }
 
+#[derive(Deserialize)]
+pub struct TestBody {
+    #[serde(default)]
+    id: Option<Uuid>,
+    #[serde(flatten)]
+    server: UsenetServerBody,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TestResult {
     success: bool,
@@ -116,8 +124,21 @@ fn blank(value: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+const PASSWORD_AGAIN: &str =
+    "Enter the password again: it is only sent to the host, port and TLS setting it was saved for";
+
 impl UsenetServerBody {
+    // NNTP is line-based, so a line break in a credential would smuggle a command.
+    fn check_credentials(&self) -> Result<(), String> {
+        let broken = |v: &str| v.contains(['\r', '\n']);
+        if broken(&self.username) || self.password.as_deref().is_some_and(broken) {
+            return Err("The username and password cannot contain line breaks".to_string());
+        }
+        Ok(())
+    }
+
     fn validate(self) -> Result<UsenetServerInput, String> {
+        self.check_credentials()?;
         if self.name.trim().is_empty() || self.host.trim().is_empty() {
             return Err("A server needs a name and a host".to_string());
         }
@@ -163,7 +184,7 @@ impl UsenetServerBody {
             expires_on,
             quota_bytes: self.quota_bytes,
             username: self.username.trim().to_string(),
-            password: self.password.filter(|p| !p.is_empty()),
+            password: blank_password(self.password),
             account_connection_cap: self.account_connection_cap,
             enabled: self.enabled,
         })
@@ -195,6 +216,10 @@ fn candidate(id: Uuid, input: &UsenetServerInput) -> UsenetServerRow {
     }
 }
 
+fn same_endpoint(row: &UsenetServerRow, host: &str, port: i32, tls: bool) -> bool {
+    same_host(&row.host, host) && row.port == port && row.tls == tls
+}
+
 fn database_error(e: impl std::fmt::Display) -> Response {
     warn!(error = %e, "Usenet server query failed");
     (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
@@ -211,7 +236,15 @@ async fn checked(
         .validate()
         .map_err(|e| (StatusCode::BAD_REQUEST, e).into_response())?;
     let stored = repo::list(&state.pool).await.map_err(database_error)?;
-    if let Some(over) = violation(&stored, &candidate(id, &input)) {
+    if input.password.is_none()
+        && let Some(row) = stored.iter().find(|r| r.id == id)
+        && !row.password.is_empty()
+        && !same_endpoint(row, &input.host, input.port, input.tls)
+    {
+        return Err((StatusCode::BAD_REQUEST, PASSWORD_AGAIN).into_response());
+    }
+    let sab = sab_servers(&state.pool, &state.http_client).await;
+    if let Some(over) = violation(&stored, &candidate(id, &input), &sab) {
         return Err((StatusCode::BAD_REQUEST, over.describe()).into_response());
     }
     Ok(input)
@@ -337,22 +370,50 @@ async fn run_probe(
 pub async fn test_unsaved(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<UsenetServerBody>,
+    Json(body): Json<TestBody>,
 ) -> Response {
     if require_auth(&state, &headers).await.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let password = body.password.clone().unwrap_or_default();
+    let server = body.server;
+    if let Err(e) = server.check_credentials() {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    let password = match (blank_password(server.password.clone()), body.id) {
+        (Some(typed), _) => typed,
+        (None, None) => String::new(),
+        (None, Some(id)) => match repo::get(&state.pool, id).await {
+            Ok(Some(row))
+                if row.password.is_empty()
+                    || same_endpoint(&row, &server.host, server.port, server.tls) =>
+            {
+                row.password
+            }
+            Ok(Some(_)) => {
+                return Json(TestResult {
+                    success: false,
+                    message: PASSWORD_AGAIN.to_string(),
+                })
+                .into_response();
+            }
+            Ok(None) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+            Err(e) => return database_error(e),
+        },
+    };
     run_probe(
-        &body.host,
-        body.port,
-        body.tls,
-        body.verify_cert,
-        &body.username,
+        server.host.trim(),
+        server.port,
+        server.tls,
+        server.verify_cert,
+        server.username.trim(),
         &password,
     )
     .await
     .into_response()
+}
+
+fn blank_password(password: Option<String>) -> Option<String> {
+    password.filter(|p| !p.is_empty())
 }
 
 pub async fn test_saved(

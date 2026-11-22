@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT indexer_id, guid FROM usenet_releases WHERE release_key = $1\n           ORDER BY indexer_id, guid",
+  "query": "SELECT indexer_id, ref_key AS guid FROM usenet_releases WHERE release_key = $1\n           ORDER BY indexer_id, ref_key",
   "describe": {
     "columns": [
       {
@@ -21,7 +21,7 @@
         "origin": {
           "Table": {
             "table": "usenet_releases",
-            "name": "guid"
+            "name": "ref_key"
           }
         }
       }
@@ -36,5 +36,5 @@
       false
     ]
   },
-  "hash": "5a93267286649e78fd2a19071e4c5781c71ad90bdc27e495c97b9fbed6811906"
+  "hash": "c1e738a22100fa838555446300f5c5608b461e4d57a2a733123f6721418ae9ac"
 }

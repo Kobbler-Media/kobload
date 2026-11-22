@@ -8,5 +8,7 @@ mod pull;
 mod purpose;
 mod range;
 mod restart;
+mod settings;
+mod startup;
 mod support;
 mod token;

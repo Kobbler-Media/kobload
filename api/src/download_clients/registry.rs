@@ -3,10 +3,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sqlx::PgPool;
 
+use uuid::Uuid;
+
 use crate::debrid::DebridProviderResolver;
 use crate::types::{DownloadClientConfig, TestConnectionResult};
 
 use super::debrid::DebridHandler;
+use super::usenet::UsenetHandler;
 use super::{
     DownloadClientError, PollResult, add_sabnzbd, add_transmission_bytes, add_transmission_url,
     poll_sabnzbd, poll_transmission, remove_sabnzbd, remove_transmission,
@@ -16,6 +19,12 @@ use super::{
 pub struct DownloadClientCapabilities {
     pub supports_add_url: bool,
     pub supports_add_bytes: bool,
+}
+
+pub struct NewDownload<'a> {
+    pub id: Uuid,
+    pub title: &'a str,
+    pub password: Option<&'a str>,
 }
 
 #[async_trait]
@@ -35,7 +44,7 @@ pub trait DownloadClientHandler: Send + Sync {
         http_client: &reqwest::Client,
         client: &DownloadClientConfig,
         bytes: &[u8],
-        title: &str,
+        download: &NewDownload<'_>,
     ) -> Result<String, DownloadClientError>;
 
     async fn poll(
@@ -93,6 +102,9 @@ impl DownloadClientResolver for DefaultDownloadClientResolver {
         match client_type {
             "transmission" => Some(Arc::new(TransmissionHandler)),
             "sabnzbd" => Some(Arc::new(SabnzbdHandler)),
+            "usenet" => Some(Arc::new(UsenetHandler::new(
+                self.debrid_providers.usenet_engine(),
+            ))),
             "debrid" => Some(Arc::new(DebridHandler::new(
                 self.pool.clone(),
                 self.http_client.clone(),
@@ -133,7 +145,7 @@ impl DownloadClientHandler for TransmissionHandler {
         http_client: &reqwest::Client,
         client: &DownloadClientConfig,
         bytes: &[u8],
-        _title: &str,
+        _download: &NewDownload<'_>,
     ) -> Result<String, DownloadClientError> {
         add_transmission_bytes(http_client, client, bytes).await
     }
@@ -195,9 +207,9 @@ impl DownloadClientHandler for SabnzbdHandler {
         http_client: &reqwest::Client,
         client: &DownloadClientConfig,
         bytes: &[u8],
-        title: &str,
+        download: &NewDownload<'_>,
     ) -> Result<String, DownloadClientError> {
-        add_sabnzbd(http_client, client, bytes, title).await
+        add_sabnzbd(http_client, client, bytes, download.title).await
     }
 
     async fn poll(
@@ -254,6 +266,7 @@ mod tests {
         assert!(resolver.get("transmission").is_some());
         assert!(resolver.get("sabnzbd").is_some());
         assert!(resolver.get("debrid").is_some());
+        assert!(resolver.get("usenet").is_some());
         assert!(resolver.get("unknown").is_none());
     }
 
@@ -267,6 +280,11 @@ mod tests {
 
         let sabnzbd = resolver.get("sabnzbd").expect("handler");
         let caps = sabnzbd.capabilities();
+        assert!(!caps.supports_add_url);
+        assert!(caps.supports_add_bytes);
+
+        let usenet = resolver.get("usenet").expect("handler");
+        let caps = usenet.capabilities();
         assert!(!caps.supports_add_url);
         assert!(caps.supports_add_bytes);
 

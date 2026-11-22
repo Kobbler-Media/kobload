@@ -1,6 +1,8 @@
 pub mod debrid;
 pub mod sabnzbd;
+mod storage;
 pub mod transmission;
+mod usenet;
 
 mod registry;
 mod types;
@@ -16,8 +18,9 @@ use crate::types::DownloadClientConfig;
 
 pub use registry::{
     DefaultDownloadClientResolver, DownloadClientCapabilities, DownloadClientHandler,
-    DownloadClientResolver,
+    DownloadClientResolver, NewDownload,
 };
+pub use storage::{ScanResult, scan_storage_path};
 pub use types::{DownloadClientError, PollResult, ScannedFile, get_extension};
 
 pub use sabnzbd::{add_sabnzbd, poll_sabnzbd, remove_sabnzbd, test_sabnzbd};
@@ -26,26 +29,21 @@ pub use transmission::{
     test_transmission,
 };
 
-pub async fn select_download_client(
+/// Enabled or not: disabling a client only stops new grabs, so the jobs it already
+/// holds still finish, import and get released.
+pub async fn client_of_download(
     pool: &PgPool,
-    client_id: Option<Uuid>,
-    protocol: &str,
+    client_id: Uuid,
 ) -> Result<DownloadClientConfig, axum::response::Response> {
-    let result = if let Some(client_id) = client_id {
-        clients_repo::get_enabled_client_by_id(pool, client_id).await
-    } else {
-        clients_repo::get_default_client_for_protocol(pool, protocol).await
-    };
-
-    match result {
+    match clients_repo::get_client_by_id(pool, client_id).await {
         Ok(Some(client)) => Ok(client),
         Ok(None) => Err((
             StatusCode::BAD_REQUEST,
-            format!("no enabled download client for protocol {protocol}"),
+            format!("download client {client_id} no longer exists"),
         )
             .into_response()),
         Err(err) => {
-            tracing::warn!(error = %err, "failed to select download client");
+            tracing::warn!(error = %err, "failed to load download client");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response())
         }
     }

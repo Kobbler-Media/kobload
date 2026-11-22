@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use subtle::ConstantTimeEq;
-use usenet_proto::{ImportRequest, ImportResponse, Purpose, StreamClaims};
+use serde::de::DeserializeOwned;
+use usenet_proto::{ImportRequest, ImportResponse, JobRequest, JobStatus, Purpose, StreamClaims};
 
 /// kobbler keeps a resolved URL this long before it resolves again.
 pub const STREAM_TTL: Duration = Duration::from_secs(6 * 3600);
@@ -27,19 +27,51 @@ impl std::fmt::Debug for EngineSettings {
 }
 
 impl EngineSettings {
-    pub fn from_env() -> Option<Self> {
-        let var = |name: &str| {
-            std::env::var(name)
-                .ok()
+    pub fn from_env() -> Result<Option<Self>, String> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Unset means usenet streaming is off; set partly, or with weak or shared secrets,
+    /// kobload refuses to start rather than run with a guessable key.
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, String> {
+        const NAMES: [&str; 4] = [
+            "USENET_ENGINE_URL",
+            "USENET_STREAM_BASE_URL",
+            "USENET_CONTROL_KEY",
+            "USENET_STREAM_SECRET",
+        ];
+        let [engine_url, stream_base_url, control_key, stream_secret] = NAMES.map(|name| {
+            lookup(name)
                 .map(|v| v.trim().trim_end_matches('/').to_string())
                 .filter(|v| !v.is_empty())
+        });
+        let (Some(engine_url), Some(stream_base_url), Some(control_key), Some(stream_secret)) =
+            (engine_url, stream_base_url, control_key, stream_secret)
+        else {
+            let set: Vec<&str> = NAMES
+                .into_iter()
+                .filter(|name| lookup(name).is_some_and(|v| !v.trim().is_empty()))
+                .collect();
+            return match set.as_slice() {
+                [] => Ok(None),
+                set => Err(format!(
+                    "The usenet engine needs all of {} set, but only {} are",
+                    NAMES.join(", "),
+                    set.join(", ")
+                )),
+            };
         };
-        Some(Self {
-            engine_url: var("USENET_ENGINE_URL")?,
-            stream_base_url: var("USENET_STREAM_BASE_URL")?,
-            control_key: var("USENET_CONTROL_KEY")?,
-            stream_secret: var("USENET_STREAM_SECRET")?,
-        })
+        usenet_proto::check_secrets(&[
+            ("USENET_CONTROL_KEY", &control_key),
+            ("USENET_STREAM_SECRET", &stream_secret),
+        ])
+        .map_err(|e| e.to_string())?;
+        Ok(Some(Self {
+            engine_url,
+            stream_base_url,
+            control_key,
+            stream_secret,
+        }))
     }
 }
 
@@ -53,6 +85,8 @@ pub enum EngineError {
     Unavailable(String),
     #[error("the usenet engine answered {0}: {1}")]
     Status(u16, String),
+    #[error("the usenet engine has no job {0}")]
+    UnknownJob(String),
     #[error("the usenet engine is unreachable: {0}")]
     Request(#[from] reqwest::Error),
 }
@@ -68,8 +102,7 @@ impl UsenetEngine {
     }
 
     pub fn accepts_control_key(&self, token: &str) -> bool {
-        let expected = self.settings.control_key.as_bytes();
-        token.len() == expected.len() && bool::from(token.as_bytes().ct_eq(expected))
+        usenet_proto::keys_match(token, &self.settings.control_key)
     }
 
     pub async fn import(&self, request: &ImportRequest) -> Result<ImportResponse, EngineError> {
@@ -95,6 +128,58 @@ impl UsenetEngine {
             .send()
             .await?;
         decode(resp).await
+    }
+
+    pub async fn add_job(&self, job: &JobRequest) -> Result<JobStatus, EngineError> {
+        let resp = self
+            .http
+            .post(self.jobs_url())
+            .bearer_auth(&self.settings.control_key)
+            .json(job)
+            .send()
+            .await?;
+        decode(resp).await
+    }
+
+    pub async fn jobs(&self) -> Result<Vec<JobStatus>, EngineError> {
+        let resp = self
+            .http
+            .get(self.jobs_url())
+            .bearer_auth(&self.settings.control_key)
+            .send()
+            .await?;
+        decode(resp).await
+    }
+
+    pub async fn job(&self, id: &str) -> Result<JobStatus, EngineError> {
+        let resp = self
+            .http
+            .get(format!("{}/{id}", self.jobs_url()))
+            .bearer_auth(&self.settings.control_key)
+            .send()
+            .await?;
+        decode(resp).await.map_err(|e| match e {
+            EngineError::NotCached => EngineError::UnknownJob(id.to_string()),
+            e => e,
+        })
+    }
+
+    pub async fn delete_job(&self, id: &str, delete_files: bool) -> Result<(), EngineError> {
+        let resp = self
+            .http
+            .delete(format!("{}/{id}", self.jobs_url()))
+            .query(&[("delete_files", delete_files)])
+            .bearer_auth(&self.settings.control_key)
+            .send()
+            .await?;
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        Err(error_of(resp).await)
+    }
+
+    fn jobs_url(&self) -> String {
+        format!("{}/v1/jobs", self.settings.engine_url)
     }
 
     pub async fn health(&self) -> Result<(), EngineError> {
@@ -128,20 +213,24 @@ impl UsenetEngine {
     }
 }
 
-async fn decode(resp: reqwest::Response) -> Result<ImportResponse, EngineError> {
-    let status = resp.status();
-    if status.is_success() {
+async fn decode<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, EngineError> {
+    if resp.status().is_success() {
         return Ok(resp.json().await?);
     }
+    Err(error_of(resp).await)
+}
+
+async fn error_of(resp: reqwest::Response) -> EngineError {
+    let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let reason = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|v| v["error"].as_str().map(str::to_string))
         .unwrap_or_else(|| body.chars().take(200).collect());
-    Err(match status.as_u16() {
+    match status.as_u16() {
         404 => EngineError::NotCached,
         422 => EngineError::Rejected(reason),
         503 => EngineError::Unavailable(reason),
         code => EngineError::Status(code, reason),
-    })
+    }
 }

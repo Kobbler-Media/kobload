@@ -3,6 +3,7 @@
 mod crud;
 mod lifecycle;
 mod polling;
+mod reconcile;
 
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -96,6 +97,11 @@ pub use polling::{
     mark_submission_failed, mark_submission_success, schedule_import_retry, touch_callback_attempt,
     update_callback_attempt, update_callback_error, update_enriched_metadata, update_files_json,
     update_files_scan_error, update_poll_status, update_status, update_submission_attempt,
+};
+
+pub use reconcile::{
+    InFlightDownload, MAX_SUBMISSION_ATTEMPTS, Requeue, in_flight_for_client_type,
+    known_external_ids, requeue_submission,
 };
 
 // Re-export lifecycle operations

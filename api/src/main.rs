@@ -195,7 +195,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     trash_filters.ensure_loaded(&http_client, &pool).await;
 
     let debrid_providers: Arc<dyn kobload_api::debrid::DebridProviderResolver> =
-        match kobload_api::usenet::EngineSettings::from_env() {
+        match kobload_api::usenet::EngineSettings::from_env().unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Refusing to start with this usenet engine config");
+            std::process::exit(1);
+        }) {
             Some(settings) => {
                 info!(engine = %settings.engine_url, "Usenet engine streaming enabled");
                 kobload_api::usenet::config::warn_at_startup(&pool).await;

@@ -99,6 +99,7 @@ impl Fixture {
                 priority,
                 release_title,
                 file_name: None,
+                episode: None,
             },
         )
         .await

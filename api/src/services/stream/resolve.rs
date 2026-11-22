@@ -160,6 +160,7 @@ async fn resolve_torrent(
             torrent_id: Some(torrent_id),
             release_key: Some(info_hash.to_string()),
             cache_url: None,
+            file_id: request.file_id,
         });
     }
 
@@ -195,6 +196,7 @@ async fn resolve_torrent(
                 torrent_id: Some(torrent_id),
                 release_key: Some(info_hash.to_string()),
                 cache_url: None,
+                file_id: request.file_id,
             })
         }
         Acquired::Pending { torrent_id, .. } => {
@@ -209,6 +211,7 @@ async fn resolve_torrent(
                 torrent_id: Some(ctx.provider_type.prefixed_id(&torrent_id)),
                 release_key: Some(info_hash.to_string()),
                 cache_url: None,
+                file_id: request.file_id,
             })
         }
         Acquired::Refused => Err(StreamSearchError::DebridError(REFUSED_MESSAGE.to_string())),
@@ -275,6 +278,7 @@ async fn resolve_usenet(
                     torrent_id: Some(download_id.clone()),
                     release_key: release.release_key,
                     cache_url: None,
+                    file_id: None,
                 });
             }
             DebridTorrentStatus::Error { ref message } => {

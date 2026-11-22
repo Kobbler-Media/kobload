@@ -859,10 +859,13 @@ export async function deleteUsenetServer(id: string): Promise<void> {
   return request(`/api/v1/admin/usenet/servers/${id}`, { method: 'DELETE' });
 }
 
-export async function testUsenetServer(server: UsenetServerInput): Promise<UsenetTestResult> {
+export async function testUsenetServer(
+  server: UsenetServerInput,
+  storedId?: string
+): Promise<UsenetTestResult> {
   return request('/api/v1/admin/usenet/servers/test', {
     method: 'POST',
-    body: JSON.stringify(server)
+    body: JSON.stringify({ ...server, id: storedId ?? null })
   });
 }
 

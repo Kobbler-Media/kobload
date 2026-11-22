@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT d.id, d.external_id AS \"external_id!\"\n        FROM downloads d\n        JOIN download_clients c ON c.id = d.download_client_id\n        WHERE c.client_type = $1\n          AND d.status IN ('queued', 'downloading')\n          AND d.external_id IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "external_id!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "downloads",
+            "name": "external_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "ba75b8eb5cef01f5a2251c6400960ee16f65e6a78ffab4a24ddd9b4cdafc7dd3"
+}

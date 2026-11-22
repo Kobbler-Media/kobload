@@ -11,7 +11,7 @@ use uuid::Uuid;
 use serde::Deserialize;
 
 use crate::auth::require_auth;
-use crate::download_clients::{expand_archives, select_download_client};
+use crate::download_clients::{client_of_download, expand_archives};
 use crate::helpers::{broadcast_download_updated, log_event};
 use crate::jobs;
 use crate::jobs::handlers::build_callback_from_enriched;
@@ -433,11 +433,10 @@ pub async fn rescan_download(
     };
 
     // Select download client
-    let client =
-        match select_download_client(&state.pool, Some(client_id), &rescan_info.protocol).await {
-            Ok(client) => client,
-            Err(resp) => return resp,
-        };
+    let client = match client_of_download(&state.pool, client_id).await {
+        Ok(client) => client,
+        Err(resp) => return resp,
+    };
 
     // Get handler for client type
     let handler = match state.download_clients.get(client.client_type.as_str()) {

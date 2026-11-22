@@ -6,7 +6,7 @@
 use crate::jobs::JobError;
 use crate::jobs::worker::JobHandler;
 use crate::repositories::{
-    release_sightings, search_cache, stream_attempts, stream_torrents, xem_cache,
+    release_sightings, search_cache, stream_attempts, stream_torrents, usenet_releases, xem_cache,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -17,6 +17,8 @@ use uuid::Uuid;
 
 /// A stream's torrent still downloading after this long is forgotten rather than reclaimed.
 const STREAM_TORRENT_DAYS: i32 = 7;
+/// A listing never imported is only a search result; a new search lists it again.
+const UNIMPORTED_LISTING_DAYS: i32 = 30;
 
 /// Handler for cache cleanup jobs.
 pub struct CacheCleanupHandler {
@@ -104,6 +106,11 @@ impl JobHandler for CacheCleanupHandler {
             .await
             .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
 
+        let usenet_listings_deleted =
+            usenet_releases::prune_unimported(&self.pool, UNIMPORTED_LISTING_DAYS)
+                .await
+                .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
+
         let probes_ingested = crate::services::stream::outcomes::ingest_past_probes(&self.pool)
             .await
             .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
@@ -123,6 +130,7 @@ impl JobHandler for CacheCleanupHandler {
             "stream_attempts_abandoned": attempts_abandoned,
             "stream_attempts_deleted": attempts_deleted,
             "stream_torrents_deleted": stream_torrents_deleted,
+            "usenet_listings_deleted": usenet_listings_deleted,
             "stream_probes_ingested": probes_ingested
         }))
     }

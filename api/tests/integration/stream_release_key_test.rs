@@ -13,7 +13,6 @@ use crate::common::stream_fixtures::hash;
 use crate::common::tv_watch::{TvWatch, episode_want, torrent_release, usenet_release};
 use kobload_api::repositories::usenet_releases;
 use kobload_api::watch::Release;
-use nats_jobs::NzbRef;
 use nats_jobs::types::{StreamOption, StreamPlayback, StreamSourceType};
 
 const SECRET: &str = "s3cr3t-indexer-key";
@@ -95,10 +94,15 @@ async fn test_stream_search_lists_usenet_by_reference_and_never_leaks_the_indexe
     assert_eq!(nzb.len(), 1, "{options:?}");
     assert_eq!(
         nzb[0].nzb_ref,
-        Some(NzbRef {
-            indexer_id: rig.tv.source.id.to_string(),
-            guid: "g-1".to_string(),
-        })
+        Some(usenet_releases::nzb_ref(
+            &rig.tv.source.id.to_string(),
+            "g-1"
+        ))
+    );
+    let listed = serde_json::to_string(&options).unwrap();
+    assert!(
+        !listed.contains("g-1"),
+        "the indexer's guid never leaves kobload: {listed}"
     );
     assert_eq!(nzb[0].release_key, None);
     let torrent = options
@@ -258,35 +262,40 @@ async fn test_two_indexers_listing_one_imported_nzb_share_its_outcomes() {
     let key = "nzb-5e7a";
     let source = rig.tv.source.id.to_string();
     assert!(
-        usenet_releases::set_usenet_release_key(pool, &source, "g-a", key)
-            .await
-            .unwrap()
+        usenet_releases::set_usenet_release_key(
+            pool,
+            &usenet_releases::nzb_ref(&source, "g-a"),
+            key
+        )
+        .await
+        .unwrap()
     );
     assert!(
-        usenet_releases::set_usenet_release_key(pool, &other_indexer.to_string(), "g-b", key)
-            .await
-            .unwrap()
+        usenet_releases::set_usenet_release_key(
+            pool,
+            &usenet_releases::nzb_ref(&other_indexer.to_string(), "g-b"),
+            key
+        )
+        .await
+        .unwrap()
     );
     assert!(
-        !usenet_releases::set_usenet_release_key(pool, "nobody", "unlisted", key)
-            .await
-            .unwrap()
+        !usenet_releases::set_usenet_release_key(
+            pool,
+            &usenet_releases::nzb_ref("nobody", "unlisted"),
+            key
+        )
+        .await
+        .unwrap()
     );
     let mut aliases = usenet_releases::aliases(pool, key).await.unwrap();
     aliases.sort_by(|a, b| a.guid.cmp(&b.guid));
-    assert_eq!(
-        aliases,
-        vec![
-            NzbRef {
-                indexer_id: source.clone(),
-                guid: "g-a".to_string()
-            },
-            NzbRef {
-                indexer_id: other_indexer.to_string(),
-                guid: "g-b".to_string()
-            },
-        ]
-    );
+    let mut expected = vec![
+        usenet_releases::nzb_ref(&source, "g-a"),
+        usenet_releases::nzb_ref(&other_indexer.to_string(), "g-b"),
+    ];
+    expected.sort_by(|a, b| a.guid.cmp(&b.guid));
+    assert_eq!(aliases, expected);
 
     rig.report(key, false).await;
     let options = rig.options().await;

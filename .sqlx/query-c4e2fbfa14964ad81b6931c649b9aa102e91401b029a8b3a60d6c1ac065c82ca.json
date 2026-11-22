@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM usenet_releases\n           WHERE release_key IS NULL AND updated_at < NOW() - make_interval(days => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4e2fbfa14964ad81b6931c649b9aa102e91401b029a8b3a60d6c1ac065c82ca"
+}

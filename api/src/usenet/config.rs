@@ -5,8 +5,9 @@ use tracing::warn;
 use usenet_proto::{EngineConfigResponse, IpPreference, UsenetServer};
 
 use super::caps;
+use super::sab_share::sab_servers;
 use crate::repositories::usenet_servers::UsenetServerRow;
-use crate::repositories::{RepositoryError, clients, usenet_servers};
+use crate::repositories::{RepositoryError, usenet_servers};
 
 pub fn format_date(date: Date) -> String {
     date.format(format_description!("[year]-[month]-[day]"))
@@ -66,17 +67,8 @@ pub async fn warn_at_startup(pool: &PgPool) {
     if !rows.iter().any(|r| r.enabled) {
         return;
     }
-    for account in caps::accounts(&rows).iter().filter(|a| a.over_cap()) {
+    let sab = sab_servers(pool, &crate::http::new_client()).await;
+    for account in caps::accounts(&rows, &sab).iter().filter(|a| a.over_cap()) {
         warn!(account = %account.describe(), "Usenet servers exceed the account's connection cap");
-    }
-    let sab_running = clients::list_clients(pool)
-        .await
-        .map(|cs| cs.iter().any(|c| c.enabled && c.client_type == "sabnzbd"))
-        .unwrap_or(false);
-    if sab_running {
-        warn!(
-            "SABnzbd is still enabled: it holds its own connections to the same usenet accounts, \
-             so the engine's connections plus SABnzbd's must stay within each account's cap"
-        );
     }
 }

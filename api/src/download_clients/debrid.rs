@@ -18,7 +18,7 @@ use crate::services::stream::attempt_log::AttemptLog;
 use crate::services::stream::flight::{self, Acquired, FlightContext, Job};
 use crate::types::{DownloadClientConfig, TestConnectionResult};
 
-use super::registry::{DownloadClientCapabilities, DownloadClientHandler};
+use super::registry::{DownloadClientCapabilities, DownloadClientHandler, NewDownload};
 
 /// In-memory tracker for debrid downloads in progress.
 /// Keyed by external_id string.
@@ -223,7 +223,7 @@ impl DownloadClientHandler for DebridHandler {
         _http_client: &reqwest::Client,
         _client: &DownloadClientConfig,
         _bytes: &[u8],
-        _title: &str,
+        _download: &NewDownload<'_>,
     ) -> Result<String, DownloadClientError> {
         Err(DownloadClientError::Message(
             "debrid download client does not support torrent file uploads, use a magnet URL"

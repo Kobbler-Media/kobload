@@ -298,3 +298,240 @@ async fn test_without_an_engine_the_config_endpoint_and_provider_test_refuse() {
     assert_eq!(result["success"], false, "{result}");
     server.cleanup().await;
 }
+
+async fn created_id(rig: &UsenetRig, body: &Value) -> String {
+    let (status, created) = create(rig, body).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    serde_json::from_str::<Value>(&created).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn update(rig: &UsenetRig, id: &str, body: &Value) -> (StatusCode, String) {
+    let resp = rig
+        .tv
+        .server
+        .admin_client()
+        .put_json(&format!("{SERVERS}/{id}"), body)
+        .await;
+    (resp.status, resp.text())
+}
+
+async fn test_body(rig: &UsenetRig, body: &Value) -> (StatusCode, Value) {
+    let resp = rig
+        .tv
+        .server
+        .admin_client()
+        .post_json(&format!("{SERVERS}/test"), body)
+        .await;
+    let status = resp.status;
+    let text = resp.text();
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    )
+}
+
+#[tokio::test]
+async fn test_moving_a_server_to_another_endpoint_needs_its_password_again() {
+    let rig = UsenetRig::start().await;
+    let id = created_id(&rig, &server("Primary", "alice", 10)).await;
+    let without_password = |field: &str, value: Value| {
+        let mut body = server("Primary", "alice", 10);
+        body["password"] = Value::Null;
+        body[field] = value;
+        body
+    };
+
+    for (field, value) in [
+        ("host", json!("news.elsewhere.test")),
+        ("port", json!(443)),
+        ("tls", json!(false)),
+    ] {
+        let (status, body) = update(&rig, &id, &without_password(field, value.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}: {body}");
+        assert!(body.to_lowercase().contains("password"), "{field}: {body}");
+    }
+    let (status, body) = update(
+        &rig,
+        &id,
+        &without_password("host", json!(" NEWS.Example.test ")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "the same host: {body}");
+    let (status, body) = update(&rig, &id, &without_password("connections", json!(12))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let mut moved = server("Primary", "alice", 10);
+    moved["host"] = json!("news.elsewhere.test");
+    moved["password"] = json!("a-new-provider-password");
+    let (status, body) = update(&rig, &id, &moved).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, body) = engine_config(&rig, Some(CONTROL_KEY)).await;
+    let config: EngineConfigResponse = serde_json::from_str(&body).unwrap();
+    assert_eq!(config.servers[0].host, "news.elsewhere.test");
+    assert_eq!(config.servers[0].password, "a-new-provider-password");
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_line_breaks_in_credentials_are_refused() {
+    let rig = UsenetRig::start().await;
+    let id = created_id(&rig, &server("Primary", "alice", 10)).await;
+    for (field, value) in [
+        ("username", "alice\r\nQUIT"),
+        ("username", "alice\n"),
+        ("password", "secret\rAUTHINFO"),
+        ("password", "secret\nQUIT"),
+    ] {
+        let mut body = server("Primary", "alice", 10);
+        body[field] = json!(value);
+        let (status, text) = create(&rig, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "create {field}: {text}");
+        let (status, text) = update(&rig, &id, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "update {field}: {text}");
+        let (status, result) = test_body(&rig, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "test {field}: {result}");
+    }
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_an_edited_server_is_tested_where_the_form_points() {
+    let rig = UsenetRig::start().await;
+    let stored = fake_nntp(PASSWORD).await;
+    let elsewhere = fake_nntp("elsewhere-password").await;
+    let local = |port: u16, password: Value| {
+        let mut body = server("Local", "alice", 4);
+        body["host"] = json!("127.0.0.1");
+        body["port"] = json!(port);
+        body["tls"] = json!(false);
+        body["password"] = password;
+        body
+    };
+    let id = created_id(&rig, &local(stored, json!(PASSWORD))).await;
+
+    let mut edited = local(stored, Value::Null);
+    edited["id"] = json!(id);
+    edited["username"] = json!("alice-renamed");
+    let (status, result) = test_body(&rig, &edited).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(
+        result["success"], true,
+        "the stored password is used: {result}"
+    );
+
+    let mut moved = local(elsewhere, Value::Null);
+    moved["id"] = json!(id);
+    let (_, result) = test_body(&rig, &moved).await;
+    assert_eq!(result["success"], false, "{result}");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("password"),
+        "the stored password does not follow a new endpoint: {result}"
+    );
+
+    moved["password"] = json!("elsewhere-password");
+    let (_, result) = test_body(&rig, &moved).await;
+    assert_eq!(
+        result["success"], true,
+        "the edited port is tested: {result}"
+    );
+    rig.tv.server.cleanup().await;
+}
+
+const SAB_KEY: &str = "sab-api-key-under-test";
+
+async fn sab_config(
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if q.get("apikey").map(String::as_str) != Some(SAB_KEY)
+        || q.get("mode").map(String::as_str) != Some("get_config")
+        || q.get("section").map(String::as_str) != Some("servers")
+    {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
+    axum::Json(json!({ "config": { "servers": [
+        { "name": "primary", "displayname": "Primary", "host": " NEWS.Example.TEST", "port": 563,
+          "username": "alice", "password": "**********", "connections": 12, "enable": 1 },
+        { "name": "spare", "host": "news.example.test", "port": 119,
+          "username": "alice", "password": "**********", "connections": "40", "enable": 0 },
+        { "name": "other", "host": "news.other.test", "port": 563,
+          "username": "alice", "password": "**********", "connections": 50, "enable": 1 }
+    ] } }))
+    .into_response()
+}
+
+async fn mock_sab() -> String {
+    let app = axum::Router::new().route("/api", axum::routing::get(sab_config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    url
+}
+
+async fn add_sab(rig: &UsenetRig, base_url: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO download_clients (id, name, client_type, protocol, base_url, api_key, enabled, is_default)
+         VALUES ($1, 'SAB', 'sabnzbd', 'usenet', $2, $3, true, false) RETURNING id",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(base_url)
+    .bind(SAB_KEY)
+    .fetch_one(&rig.tv.server.pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn test_sabnzbd_connections_to_the_same_account_count_toward_its_cap() {
+    let rig = UsenetRig::start().await;
+    let sab = add_sab(&rig, &mock_sab().await).await;
+
+    let (status, body) = create(&rig, &server("Primary", "alice", 20)).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "20 + SAB's 12 > 30: {body}"
+    );
+    assert!(body.contains("SABnzbd"), "{body}");
+    let id = created_id(&rig, &server("Primary", "alice", 18)).await;
+    let (status, body) = update(&rig, &id, &server("Primary", "alice", 19)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = create(&rig, &server("Another login", "bob", 30)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "SAB's login is alice, not bob: {body}"
+    );
+
+    sqlx::query("UPDATE download_clients SET enabled = false WHERE id = $1")
+        .bind(sab)
+        .execute(&rig.tv.server.pool)
+        .await
+        .unwrap();
+    let (status, body) = update(&rig, &id, &server("Primary", "alice", 30)).await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "a disabled SAB holds nothing: {body}"
+    );
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_an_unreachable_sabnzbd_does_not_block_a_save() {
+    let rig = UsenetRig::start().await;
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    add_sab(&rig, &url).await;
+    let (status, body) = create(&rig, &server("Primary", "alice", 30)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    rig.tv.server.cleanup().await;
+}

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use tokio::fs;
-use uuid::Uuid;
 
-use crate::download_clients::{DownloadClientError, PollResult, ScannedFile, get_extension};
+use super::storage::scan_storage_path;
+use crate::download_clients::{DownloadClientError, PollResult};
 use crate::types::{DownloadClientConfig, TestConnectionResult};
 
 /// Parse SABnzbd timeleft string (format: "H:MM:SS" or "0:02:35") to seconds.
@@ -564,134 +564,6 @@ fn is_job_folder(dir: &std::path::Path, name: &str) -> bool {
                     .strip_prefix('.')
                     .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
         })
-}
-
-/// Result of scanning a storage path
-pub struct ScanResult {
-    pub files: Vec<ScannedFile>,
-    /// If set, indicates the scan failed (directory inaccessible, etc.)
-    pub error: Option<String>,
-}
-
-/// Scan storage path and return all files found
-pub async fn scan_storage_path(storage: &str) -> ScanResult {
-    if storage.is_empty() {
-        return ScanResult {
-            files: Vec::new(),
-            error: Some("SABnzbd reported empty storage path".to_string()),
-        };
-    }
-
-    let root_path = PathBuf::from(storage);
-    let mut files = Vec::new();
-
-    match fs::metadata(&root_path).await {
-        Ok(meta) if meta.is_file() => {
-            // Single file - return it directly
-            let path_str = root_path.to_string_lossy().to_string();
-            let filename = root_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            files.push(ScannedFile {
-                id: Uuid::now_v7(),
-                absolute_path: path_str,
-                relative_path: filename.clone(),
-                size: meta.len() as i64,
-                extension: get_extension(&filename),
-                split_rar_volumes: None,
-                distributed_rar_sources: None,
-                distributed_numeric_sources: None,
-                numeric_split_type: None,
-                score: None,
-                classification: None,
-                file_metadata: None,
-                mime_type: None,
-            });
-            return ScanResult { files, error: None };
-        }
-        Ok(meta) if meta.is_dir() => {
-            // Directory - scan recursively (continues below)
-        }
-        Ok(_) => {
-            return ScanResult {
-                files: Vec::new(),
-                error: Some(format!(
-                    "Storage path is neither file nor directory: {}",
-                    storage
-                )),
-            };
-        }
-        Err(e) => {
-            return ScanResult {
-                files: Vec::new(),
-                error: Some(format!(
-                    "Cannot access storage path '{}': {} (network share not mounted?)",
-                    storage, e
-                )),
-            };
-        }
-    }
-
-    // Recursively scan directory
-    let mut dirs = vec![(root_path.clone(), PathBuf::new())];
-    while let Some((dir, relative_base)) = dirs.pop() {
-        let mut entries = match fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(e) => {
-                // If we can't read the root directory, that's an error
-                if dir == root_path {
-                    return ScanResult {
-                        files: Vec::new(),
-                        error: Some(format!(
-                            "Cannot read storage directory '{}': {} (network share not mounted?)",
-                            storage, e
-                        )),
-                    };
-                }
-                // For subdirectories, just skip
-                continue;
-            }
-        };
-
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let entry_path = entry.path();
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-            let relative_path = if relative_base.as_os_str().is_empty() {
-                PathBuf::from(&entry_name)
-            } else {
-                relative_base.join(&entry_name)
-            };
-
-            match entry.metadata().await {
-                Ok(meta) if meta.is_dir() => {
-                    dirs.push((entry_path, relative_path));
-                }
-                Ok(meta) if meta.is_file() => {
-                    let absolute_str = entry_path.to_string_lossy().to_string();
-                    let relative_str = relative_path.to_string_lossy().to_string();
-                    files.push(ScannedFile {
-                        id: Uuid::now_v7(),
-                        absolute_path: absolute_str,
-                        relative_path: relative_str.clone(),
-                        size: meta.len() as i64,
-                        extension: get_extension(&relative_str),
-                        split_rar_volumes: None,
-                        distributed_rar_sources: None,
-                        distributed_numeric_sources: None,
-                        numeric_split_type: None,
-                        score: None,
-                        classification: None,
-                        file_metadata: None,
-                        mime_type: None,
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
-
-    ScanResult { files, error: None }
 }
 
 pub async fn test_sabnzbd(

@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::download_clients::{DownloadClientResolver, select_download_client};
+use crate::download_clients::{DownloadClientResolver, client_of_download};
 use crate::helpers::{broadcast_download_updated, log_event};
 use crate::polling::trigger_research_for_download;
 use crate::repositories::Result;
@@ -170,7 +170,7 @@ pub async fn release_from_client(
     let (Some(client_id), Some(external_id)) = (info.download_client_id, info.external_id) else {
         return;
     };
-    let Ok(client) = select_download_client(pool, Some(client_id), &info.protocol).await else {
+    let Ok(client) = client_of_download(pool, client_id).await else {
         return;
     };
     if !client.delete_after_import {

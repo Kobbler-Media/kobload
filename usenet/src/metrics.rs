@@ -7,17 +7,32 @@ use kob_usenet::ProviderStats;
 use kob_usenet::vendor::core::trace::Outcome;
 use kob_usenet::vendor::nntp::Workload;
 
+use crate::damage::{Damage, ReadFailure};
 use crate::state::AppState;
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        render(&state.engine.stats()),
+        render(&state.engine.stats(), &state.damage),
     )
 }
 
-fn render(providers: &[ProviderStats]) -> String {
+fn render(providers: &[ProviderStats], damage: &Damage) -> String {
     let mut out = String::new();
+    family(
+        &mut out,
+        "kobload_usenet_stream_failures_total",
+        "counter",
+        "Stream reads refused or aborted, by reason.",
+    );
+    for failure in ReadFailure::ALL {
+        let _ = writeln!(
+            out,
+            "kobload_usenet_stream_failures_total{{code=\"{}\"}} {}",
+            failure.code(),
+            damage.count(failure)
+        );
+    }
     let mut per_provider =
         |name: &str, kind: &str, help: &str, value: fn(&ProviderStats) -> u64| {
             family(&mut out, name, kind, help);

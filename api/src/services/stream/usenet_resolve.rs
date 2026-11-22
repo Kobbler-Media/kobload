@@ -7,7 +7,7 @@ use super::attempt_log::{AttemptLog, Origin, Started, Step};
 use super::resolve::{StreamResolveContext, lane};
 use super::service::StreamSearchError;
 use super::usenet_flight::{self, ImportJob};
-use super::{usenet_listing, usenet_warm};
+use super::usenet_warm;
 use crate::debrid::{DebridProvider, Throttled};
 use crate::repositories::stream_attempts::Change;
 use crate::repositories::usenet_releases::{self, UsenetRelease};
@@ -16,9 +16,6 @@ use crate::usenet::{STREAM_TTL, UsenetEngine};
 use nats_jobs::NzbRef;
 use nats_jobs::types::{StreamResolveRequest, StreamResolveResponse};
 use usenet_proto::{ImportResponse, OutputInfo, Purpose};
-
-const WARM_SKIPPED: &str =
-    "Not warmed: only the release a search would auto-play is imported ahead of a tap";
 
 fn failed(message: impl Into<String>) -> StreamSearchError {
     StreamSearchError::DebridError(message.into())
@@ -42,15 +39,16 @@ pub async fn resolve(
         .ok_or_else(|| failed("The usenet engine is not configured"))?;
     let (nzb_ref, release) = listed(ctx, request).await?;
     let lane = lane(request);
-    if !lane.is_user() && !usenet_warm::may_warm(request.debrid_provider_id, &nzb_ref) {
-        return Err(failed(WARM_SKIPPED));
-    }
+    // A warm import costs an indexer grab only for an NZB never imported; that one is left
+    // to the pick a search would auto-play.
+    let may_grab = lane.is_user()
+        || release.release_key.is_some()
+        || usenet_warm::may_warm(request.debrid_provider_id, &nzb_ref);
     let title = request
         .release_title
         .clone()
         .or_else(|| release.release_title.clone())
         .unwrap_or_else(|| nzb_ref.guid.clone());
-    let cache_key = format!("{}/{}", nzb_ref.indexer_id, nzb_ref.guid);
     let log = AttemptLog::start(
         ctx.pool,
         Started {
@@ -60,7 +58,7 @@ pub async fn resolve(
             } else {
                 Origin::Warm
             },
-            release_key: release.release_key.as_deref().unwrap_or(&cache_key),
+            release_key: release.release_key.as_deref().unwrap_or(&nzb_ref.guid),
             file_id: request.file_id,
             release_title: Some(&title),
             file_name: request.file_name.as_deref(),
@@ -79,6 +77,8 @@ pub async fn resolve(
         download_url: release.download_url.clone(),
         name: title,
         known_key: release.release_key.clone(),
+        fetch_failure: release.fetch_failure.clone(),
+        may_grab,
     };
     let flight = usenet_flight::import(job, lane.clone()).await;
     if flight.joined {
@@ -102,12 +102,14 @@ pub async fn resolve(
         }
     };
 
-    let target = target(request, &nzb_ref);
-    let Some(output) = outputs::choose(&imported.outputs, request.file_id, &target) else {
-        let message = format!("{} holds no file to play", imported.release_key);
-        log.record(Step::Failed, &message, Change::failed(&message))
-            .await;
-        return Err(failed(message));
+    let output = match outputs::choose(&imported.outputs, request.file_id, &target(request)) {
+        Ok(output) => output,
+        Err(unplayable) => {
+            let message = unplayable.to_string();
+            log.record(Step::Failed, &message, Change::failed(&message))
+                .await;
+            return Err(failed(message));
+        }
     };
     let purpose = if lane.is_user() {
         Purpose::Cache
@@ -153,17 +155,16 @@ async fn listed(
     Err(failed("This NZB is not listed any more; search again"))
 }
 
-fn target(request: &StreamResolveRequest, nzb_ref: &NzbRef) -> Target {
-    let by_title = |t: &Option<String>| t.as_deref().map(Target::from_title);
-    [
-        by_title(&request.file_name),
-        by_title(&request.release_title),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|t| *t != Target::Largest)
-    .or_else(|| usenet_listing::target(nzb_ref))
-    .unwrap_or(Target::Largest)
+fn target(request: &StreamResolveRequest) -> Target {
+    if let Some(episode) = request.episode {
+        return Target::for_episode(episode);
+    }
+    [&request.file_name, &request.release_title]
+        .into_iter()
+        .flatten()
+        .map(|t| Target::from_title(t))
+        .find(|t| *t != Target::Largest)
+        .unwrap_or(Target::Largest)
 }
 
 fn response(
@@ -185,5 +186,6 @@ fn response(
         cached: true,
         torrent_id: None,
         release_key: Some(key.clone()),
+        file_id: i32::try_from(output.index).ok(),
     }
 }

@@ -1,4 +1,5 @@
 use std::io::{self, SeekFrom};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -6,7 +7,9 @@ use bytes::{Bytes, BytesMut};
 use futures_util::stream;
 use kob_usenet::OutputReader;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
+
+use crate::damage::{Damage, ReadFailure};
 
 const CHUNK: usize = 256 * 1024;
 
@@ -16,36 +19,67 @@ pub struct Pump {
     pub remaining: u64,
     pub gap: Duration,
     pub label: String,
+    pub damage: Arc<Damage>,
+    pub sought: bool,
 }
 
 impl Pump {
-    pub fn into_body(self) -> Body {
+    // A failure before the headers can still change the status, so the first chunk is read
+    // up front and its failure answered with a code kobbler can act on.
+    pub async fn first(&mut self) -> Result<Bytes, ReadFailure> {
+        let deadline = Instant::now() + self.gap;
+        let mut first = BytesMut::new();
+        while first.len() < CHUNK && self.remaining > 0 {
+            match timeout_at(deadline, self.next()).await {
+                Ok(Ok(bytes)) => first.extend_from_slice(&bytes),
+                Ok(Err(error)) => return Err(self.failed(&error, "stream refused")),
+                Err(_) if !first.is_empty() => break,
+                Err(_) => return Err(self.failed(&self.silent(), "stream refused")),
+            }
+        }
+        Ok(first.freeze())
+    }
+
+    pub fn into_body(self, first: Bytes) -> Body {
         Body::from_stream(stream::unfold(
-            (Some(self), false),
-            |(pump, sought)| async move {
+            (Some(self), Some(first)),
+            |(pump, first)| async move {
+                if let Some(first) = first {
+                    return Some((Ok(first), (pump, None)));
+                }
                 let mut pump = pump.filter(|p| p.remaining > 0)?;
-                match pump.next(sought).await {
-                    Ok(bytes) => Some((Ok(bytes), (Some(pump), true))),
+                match pump.next().await {
+                    Ok(bytes) => Some((Ok(bytes), (Some(pump), None))),
                     Err(error) => {
-                        tracing::warn!(
-                            stream = pump.label,
-                            at = pump.at,
-                            left = pump.remaining,
-                            %error,
-                            "stream aborted"
-                        );
-                        Some((Err(error), (None, true)))
+                        pump.failed(&error, "stream aborted");
+                        Some((Err(error), (None, None)))
                     }
                 }
             },
         ))
     }
 
-    async fn next(&mut self, sought: bool) -> io::Result<Bytes> {
-        if !sought {
+    fn failed(&self, error: &io::Error, what: &'static str) -> ReadFailure {
+        let failure = ReadFailure::of(error);
+        self.damage.record(failure);
+        tracing::warn!(
+            stream = self.label,
+            at = self.at,
+            left = self.remaining,
+            code = failure.code(),
+            damaged = failure.is_damage(),
+            %error,
+            "{what}"
+        );
+        failure
+    }
+
+    async fn next(&mut self) -> io::Result<Bytes> {
+        if !self.sought {
             timeout(self.gap, self.reader.seek(SeekFrom::Start(self.at)))
                 .await
                 .map_err(|_| self.silent())??;
+            self.sought = true;
         }
         let want = usize::try_from(self.remaining).map_or(CHUNK, |r| r.min(CHUNK));
         let mut buf = BytesMut::zeroed(want);

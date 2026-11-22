@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use kob_usenet::vendor::testkit::LoopbackServer;
-use kobload_usenet::{ConfigPull, Pulled};
+use kobload_usenet::{ConfigPull, Configured, Pulled};
 use usenet_proto::{EngineConfigResponse, IpPreference, UsenetServer};
 
 use crate::support::{CONTROL, engine};
@@ -74,7 +74,13 @@ async fn the_engine_applies_pulled_servers_only_when_they_change() {
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path(), Vec::new()).await;
     assert!(names(&engine).is_empty());
-    let mut pull = ConfigPull::new(Arc::clone(&engine), &url, CONTROL);
+    let mut pull = ConfigPull::new(
+        Arc::clone(&engine),
+        &url,
+        CONTROL,
+        dir.path(),
+        Configured::default(),
+    );
 
     assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(1));
     assert_eq!(names(&engine), [("provider a".to_owned(), 0, 2)]);
@@ -105,7 +111,13 @@ async fn a_pull_with_the_wrong_key_applies_nothing() {
     let url = kobload(served).await;
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path(), Vec::new()).await;
-    let mut pull = ConfigPull::new(Arc::clone(&engine), &url, "wrong-key");
+    let mut pull = ConfigPull::new(
+        Arc::clone(&engine),
+        &url,
+        "wrong-key",
+        dir.path(),
+        Configured::default(),
+    );
 
     let error = pull.tick().await.unwrap_err();
     assert!(error.to_string().contains("401"), "{error}");

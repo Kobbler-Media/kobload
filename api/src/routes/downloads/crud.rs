@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::{get_api_key_id, require_auth};
-use crate::download_clients::select_download_client;
+use crate::download_clients::client_of_download;
 use crate::helpers::{
     download_url_context_for_indexer_source, extract_indexer_source_id, log_event,
 };
@@ -253,7 +253,7 @@ pub async fn delete_download(
     let should_remove = query.cancel && (is_active || protocol == "usenet");
     if should_remove
         && let (Some(client_id), Some(external_id)) = (client_id, external_id.clone())
-        && let Ok(client) = select_download_client(&state.pool, Some(client_id), &protocol).await
+        && let Ok(client) = client_of_download(&state.pool, client_id).await
     {
         let remove_result = match state.download_clients.get(client.client_type.as_str()) {
             Some(handler) => {
@@ -339,8 +339,7 @@ pub async fn clear_downloads(
                 }
                 if let (Some(client_id), Some(external_id)) =
                     (dl.download_client_id, dl.external_id)
-                    && let Ok(client) =
-                        select_download_client(&state.pool, Some(client_id), &dl.protocol).await
+                    && let Ok(client) = client_of_download(&state.pool, client_id).await
                     && let Some(handler) = state.download_clients.get(client.client_type.as_str())
                     && let Err(err) = handler
                         .remove(&state.http_client, &client, &external_id, true)

@@ -35,7 +35,7 @@ impl UsenetProvider {
 impl From<EngineError> for DebridError {
     fn from(e: EngineError) -> Self {
         match e {
-            EngineError::NotCached => Self::NotFound,
+            EngineError::NotCached | EngineError::UnknownJob(_) => Self::NotFound,
             EngineError::Rejected(reason) => {
                 Self::Status(reqwest::StatusCode::UNPROCESSABLE_ENTITY, reason)
             }

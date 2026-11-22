@@ -22,21 +22,29 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_env()?;
-    let engine =
-        Arc::new(Engine::new(EngineConfig::new(settings.data_dir.clone(), Vec::new())).await?);
-    tokio::spawn(
-        ConfigPull::new(
-            Arc::clone(&engine),
-            &settings.kobload_url,
-            &settings.control_key,
-        )
-        .run(PULL_EVERY),
-    );
-    let app = router(AppState::new(
-        engine,
+    let mut config = EngineConfig::new(settings.data_dir.clone(), Vec::new());
+    config.min_connections = settings.min_connections;
+    let engine = Arc::new(Engine::new(config).await?);
+    let state = AppState::new(
+        Arc::clone(&engine),
         &settings.control_key,
         settings.stream_secret.as_bytes(),
-    ));
+    )
+    .with_metrics_key(settings.metrics_key.as_deref());
+    let mut pull = ConfigPull::new(
+        engine,
+        &settings.kobload_url,
+        &settings.control_key,
+        &settings.data_dir,
+        state.configured(),
+    );
+    match pull.restore() {
+        Ok(true) => tracing::info!("serving the last applied engine config until kobload answers"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "could not restore the last engine config"),
+    }
+    tokio::spawn(pull.run(PULL_EVERY));
+    let app = router(state);
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, settings.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, data_dir = %settings.data_dir.display(), kobload = settings.kobload_url, "serving");

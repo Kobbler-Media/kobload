@@ -16,6 +16,7 @@ pub mod sport;
 pub mod stream_fixtures;
 pub mod tv_watch;
 pub mod usenet;
+pub mod usenet_jobs;
 
 pub use client::*;
 pub use mocks::*;

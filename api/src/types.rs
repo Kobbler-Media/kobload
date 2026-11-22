@@ -395,6 +395,18 @@ impl DownloadClientType {
                 ],
             },
             Self {
+                id: "usenet".to_string(),
+                name: "Usenet (built-in engine)".to_string(),
+                protocol: "usenet".to_string(),
+                fields: vec![DownloadClientField {
+                    name: "category".to_string(),
+                    label: "Category".to_string(),
+                    field_type: "text".to_string(),
+                    placeholder: Some("kobload".to_string()),
+                    required: true,
+                }],
+            },
+            Self {
                 id: "debrid".to_string(),
                 name: "Debrid".to_string(),
                 protocol: "torrent".to_string(),
