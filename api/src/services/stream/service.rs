@@ -680,7 +680,9 @@ pub async fn stream_search(
                 duration_ms: Some(timings.usenet_ms as i32),
             });
         }
-        scored.extend(indexer_search::score(ctx.pool, request, &collected.releases, &naming).await);
+        scored.extend(
+            indexer_search::score_usenet(ctx.pool, request, &collected.releases, &naming).await,
+        );
         releases.extend(collected.releases);
     }
 

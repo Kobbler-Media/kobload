@@ -120,12 +120,34 @@ pub async fn score(
     releases: &[Release],
     naming: &TvNaming,
 ) -> Vec<ProcessedRelease> {
+    score_with(pool, request, releases, naming, false).await
+}
+
+/// A usenet season pack is offered for one of its episodes: the engine imports its layout
+/// on resolve and streams only the wanted file.
+pub async fn score_usenet(
+    pool: &PgPool,
+    request: &StreamSearchRequest,
+    releases: &[Release],
+    naming: &TvNaming,
+) -> Vec<ProcessedRelease> {
+    score_with(pool, request, releases, naming, true).await
+}
+
+async fn score_with(
+    pool: &PgPool,
+    request: &StreamSearchRequest,
+    releases: &[Release],
+    naming: &TvNaming,
+    usenet_episode_packs: bool,
+) -> Vec<ProcessedRelease> {
     if releases.is_empty() {
         return Vec::new();
     }
     let patterns = build_patterns(request, naming);
     let quality_profile = load_quality_profile(pool, request).await;
-    let config = scoring_config(request, &patterns, quality_profile.as_ref(), None, naming);
+    let mut config = scoring_config(request, &patterns, quality_profile.as_ref(), None, naming);
+    config.usenet_episode_packs = usenet_episode_packs;
     let scored = crate::services::want::scoring::score_batch(releases, &config);
     let candidate_count = scored.iter().filter(|pr| pr.is_candidate()).count();
     info!(

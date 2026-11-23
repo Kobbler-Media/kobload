@@ -3,45 +3,18 @@
 
 use std::time::{Duration, Instant};
 
-use crate::common::stream_fixtures::{create_provider, hash};
+use crate::common::stream_fixtures::create_provider;
 use crate::common::tv_watch::{TvWatch, episode_want};
 use crate::common::usenet::UsenetRig;
-use kobload_api::repositories::hash_index::{self, HashIndexEntry};
 use nats_jobs::types::{StreamOption, StreamSourceType};
-
-async fn seed_torrent(tv: &TvWatch, title: &str, hash_char: char) {
-    hash_index::upsert_batch(
-        &tv.server.pool,
-        &[HashIndexEntry {
-            info_hash: hash(hash_char),
-            imdb_id: None,
-            tmdb_id: None,
-            original_title: title.to_string(),
-            parsed_title: None,
-            year: None,
-            quality: None,
-            size: Some(2_000_000_000),
-            magnet_url: None,
-            source: "test".to_string(),
-            seeders: Some(50),
-            season: None,
-            episodes: None,
-        }],
-    )
-    .await
-    .unwrap();
-}
 
 async fn torrent_and_usenet_rig(show: &str) -> UsenetRig {
     let rig = UsenetRig::start().await;
     create_provider(&rig.tv.server.pool, "real_debrid").await;
     let dotted = show.replace(' ', ".");
-    seed_torrent(
-        &rig.tv,
-        &format!("{show} S01E05 1080p WEB-DL x264-TOR"),
-        'c',
-    )
-    .await;
+    rig.tv
+        .seed_hash_index(&format!("{show} S01E05 1080p WEB-DL x264-TOR"), 'c')
+        .await;
     rig.tv.indexer.set_search_results(vec![rig.nzb(
         "g-usenet",
         &format!("{dotted}.S01E05.1080p.WEB-DL.x264-NZB"),
@@ -79,12 +52,8 @@ async fn test_usenet_options_are_listed_beside_fast_torrent_candidates() {
 async fn test_no_usenet_provider_spends_no_indexer_search() {
     let tv = TvWatch::start().await;
     create_provider(&tv.server.pool, "real_debrid").await;
-    seed_torrent(
-        &tv,
-        "No Usenet Provider Show S01E05 1080p WEB-DL x264-TOR",
-        'd',
-    )
-    .await;
+    tv.seed_hash_index("No Usenet Provider Show S01E05 1080p WEB-DL x264-TOR", 'd')
+        .await;
     tv.indexer
         .set_search_results(vec![crate::common::tv_watch::usenet_release(
             "g-unused",

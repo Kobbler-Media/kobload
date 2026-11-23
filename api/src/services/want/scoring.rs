@@ -830,6 +830,7 @@ pub struct ScoringConfig<'a> {
     pub xem_show_map: Option<&'a XemShowMap>,
     pub show_aliases: &'a [String],
     pub preferred_protocol: Option<&'a str>,
+    pub usenet_episode_packs: bool,
 
     prepared_targets: std::sync::OnceLock<Vec<PreparedTarget<'a>>>,
     sport_vocab: std::sync::OnceLock<Option<sport::SportVocab>>,
@@ -861,6 +862,7 @@ impl<'a> ScoringConfig<'a> {
             xem_show_map: None,
             show_aliases: &[],
             preferred_protocol: None,
+            usenet_episode_packs: false,
             prepared_targets: std::sync::OnceLock::new(),
             sport_vocab: std::sync::OnceLock::new(),
         }
@@ -1133,6 +1135,10 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
             config.tv_naming(),
             sport.as_ref(),
         )
+        .filter(|reason| {
+            !(*reason == nats_jobs::StructuralRejectReason::EpisodeWantPackRejected
+                && usenet_pack_holds_episode(release, &facts.parsed(reject_kind), config))
+        })
     });
     let structural_rejected = structural_result.is_some();
     if let Some(reason) = structural_result {
@@ -1256,6 +1262,20 @@ pub fn score_release_facts(facts: &ReleaseFacts, config: &ScoringConfig) -> Proc
         freshness_bonus: fresh_bonus,
         context_flags: vec![],
     }
+}
+
+fn usenet_pack_holds_episode(
+    release: &Release,
+    parsed: &ParsedRelease,
+    config: &ScoringConfig,
+) -> bool {
+    config.usenet_episode_packs
+        && release.protocol == "usenet"
+        && matches!(
+            (config.media_want, &parsed.media),
+            (Some(MediaWant::TvEpisode { season, .. }), ParsedMedia::Tv(tv))
+                if season_matches(tv.season, season)
+        )
 }
 
 /// Score a batch of releases through the unified pipeline.

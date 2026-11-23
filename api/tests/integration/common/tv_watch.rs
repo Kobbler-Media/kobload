@@ -8,6 +8,7 @@ use super::{
     TestServerOptions,
 };
 use kobload_api::debrid::DebridProviderResolver;
+use kobload_api::repositories::hash_index::{self, HashIndexEntry};
 use kobload_api::repositories::{clients as clients_repo, watch as watch_repo};
 use kobload_api::services::stream::{StreamSearchContext, stream_search};
 use kobload_api::watch::Release;
@@ -177,6 +178,29 @@ impl TvWatch {
             audio_languages: Vec::new(),
         };
         stream_search(&ctx, &request).await.unwrap().options
+    }
+
+    pub async fn seed_hash_index(&self, title: &str, hash_char: char) {
+        hash_index::upsert_batch(
+            &self.server.pool,
+            &[HashIndexEntry {
+                info_hash: super::stream_fixtures::hash(hash_char),
+                imdb_id: None,
+                tmdb_id: None,
+                original_title: title.to_string(),
+                parsed_title: None,
+                year: None,
+                quality: None,
+                size: Some(2_000_000_000),
+                magnet_url: None,
+                source: "test".to_string(),
+                seeders: Some(50),
+                season: None,
+                episodes: None,
+            }],
+        )
+        .await
+        .unwrap();
     }
 
     pub async fn grabbed(&self, pattern_id: Uuid) -> Vec<String> {

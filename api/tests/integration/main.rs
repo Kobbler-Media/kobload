@@ -70,6 +70,7 @@ mod upgrade_dedup_test;
 mod usenet_cleanup_test;
 mod usenet_contract_test;
 mod usenet_download_client_test;
+mod usenet_episode_pack_test;
 mod usenet_failure_test;
 mod usenet_health_test;
 mod usenet_job_recovery_test;
