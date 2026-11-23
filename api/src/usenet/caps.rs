@@ -19,11 +19,7 @@ impl AccountLoad {
     }
 
     pub fn describe(&self) -> String {
-        let login = if self.username.is_empty() {
-            self.host.clone()
-        } else {
-            format!("{}@{}", self.username, self.host)
-        };
+        let login = format!("The account on {}", self.host);
         let held = if self.sab_connections > 0 {
             format!(
                 "{} connections ({} here plus SABnzbd's {})",

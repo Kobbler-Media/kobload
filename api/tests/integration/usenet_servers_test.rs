@@ -138,6 +138,11 @@ async fn test_an_account_cannot_be_given_more_connections_than_its_cap() {
     let (status, body) = create(&rig, &server("Primary 2", "alice", 15)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body.contains("30"), "{body}");
+    assert!(body.contains("news.example.test"), "{body}");
+    assert!(
+        !body.contains("alice"),
+        "a refusal never echoes the login: {body}"
+    );
     let (status, body) = create(&rig, &server("Other login", "carol", 15)).await;
     assert_eq!(
         status,

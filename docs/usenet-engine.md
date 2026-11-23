@@ -58,11 +58,12 @@ Treat the port as internal anyway:
   ```bash
   # Drop anything to the engine's published address (USENET_BIND:USENET_PORT, 192.168.1.20:7090
   # here) that is not from the media server (192.168.1.30). --ctorigdst/--ctorigdstport match
-  # the address before Docker's DNAT rewrites it to the container's.
-  iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdst 192.168.1.20 --ctorigdstport 7090 ! -s 192.168.1.30 -j DROP
+  # the address before Docker's DNAT rewrites it to the container's. --ctdir ORIGINAL limits the
+  # rule to packets towards the engine; the engine's replies share the same conntrack entry.
+  iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdst 192.168.1.20 --ctorigdstport 7090 --ctdir ORIGINAL ! -s 192.168.1.30 -j DROP
   ```
 
-  The API reaches the engine over the compose network at the container's own address, so the rule doesn't match it. Leave `--ctorigdst` in: without it the rule also drops the API's calls, which arrive on container port 7090 too. Use the same rule with `ip6tables` if the port is published on an IPv6 address.
+  The API reaches the engine over the compose network at the container's own address, so the rule doesn't match it. Leave `--ctorigdst` in: without it the rule also drops the API's calls, which arrive on container port 7090 too. Leave `--ctdir ORIGINAL` in too: without it the rule drops the engine's replies to the media server, because they come from the container, not from the allowed address, and carry the same original destination. Use the same rule with `ip6tables` if the port is published on an IPv6 address.
 
   `DOCKER-USER` rules don't survive a reboot, and Docker creates the chain only when it starts. Install the rule with a oneshot unit that runs after Docker and checks before it inserts, so a restart of the unit never adds a duplicate. `/etc/systemd/system/usenet-engine-firewall.service`:
 
@@ -76,7 +77,7 @@ Treat the port as internal anyway:
   [Service]
   Type=oneshot
   RemainAfterExit=yes
-  ExecStart=/bin/sh -c 'R="DOCKER-USER -p tcp -m conntrack --ctorigdst 192.168.1.20 --ctorigdstport 7090 ! -s 192.168.1.30 -j DROP"; iptables -C $R 2>/dev/null || iptables -I $R'
+  ExecStart=/bin/sh -c 'R="DOCKER-USER -p tcp -m conntrack --ctorigdst 192.168.1.20 --ctorigdstport 7090 --ctdir ORIGINAL ! -s 192.168.1.30 -j DROP"; iptables -C $R 2>/dev/null || iptables -I $R'
 
   [Install]
   WantedBy=multi-user.target
