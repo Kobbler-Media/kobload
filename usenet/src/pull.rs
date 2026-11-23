@@ -10,6 +10,7 @@ use usenet_proto::{EngineConfigResponse, UsenetServer};
 
 use crate::servers::engine_server;
 use crate::state::Configured;
+use crate::throttle::Throttle;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const FIRST_RETRY: Duration = Duration::from_secs(1);
@@ -35,6 +36,19 @@ pub enum PullError {
     Stored(#[from] serde_json::Error),
 }
 
+// kobload may be down or redeploying when the engine starts; the last config it applied
+// lets streams resume at once instead of waiting for the first pull, and resumed jobs must
+// see it before they start.
+pub fn stored_servers(data_dir: &Path) -> Result<Option<Vec<UsenetServer>>, PullError> {
+    let raw = match std::fs::read(data_dir.join(STORED)) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let config: EngineConfigResponse = serde_json::from_slice(&raw)?;
+    Ok(Some(config.servers))
+}
+
 pub struct ConfigPull {
     engine: Arc<Engine>,
     http: reqwest::Client,
@@ -43,22 +57,7 @@ pub struct ConfigPull {
     stored: PathBuf,
     configured: Configured,
     applied: Option<Vec<UsenetServer>>,
-    warned: WarnGate,
-}
-
-#[derive(Default)]
-struct WarnGate(Option<Instant>);
-
-impl WarnGate {
-    fn due(&mut self, now: Instant) -> bool {
-        let due = self
-            .0
-            .is_none_or(|last| now.duration_since(last) >= WARN_EVERY);
-        if due {
-            self.0 = Some(now);
-        }
-        due
-    }
+    warned: Throttle,
 }
 
 fn backoff(wait: Duration) -> Duration {
@@ -88,21 +87,13 @@ impl ConfigPull {
             stored: data_dir.join(STORED),
             configured,
             applied: None,
-            warned: WarnGate::default(),
+            warned: Throttle::new(WARN_EVERY),
         }
     }
 
-    // kobload may be down or redeploying when the engine starts; the last config it applied
-    // lets streams resume at once instead of waiting for the first pull.
-    pub fn restore(&mut self) -> Result<bool, PullError> {
-        let raw = match std::fs::read(&self.stored) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => return Err(e.into()),
-        };
-        let config: EngineConfigResponse = serde_json::from_slice(&raw)?;
-        self.apply(config.servers, false)?;
-        Ok(true)
+    pub fn adopt(&mut self, servers: Vec<UsenetServer>) {
+        self.configured.set();
+        self.applied = Some(servers);
     }
 
     pub async fn tick(&mut self) -> Result<Pulled, PullError> {
@@ -119,7 +110,7 @@ impl ConfigPull {
             return Ok(Pulled::Unchanged);
         }
         let count = config.servers.len();
-        self.apply(config.servers, true)?;
+        self.apply(config.servers)?;
         Ok(Pulled::Applied(count))
     }
 
@@ -156,15 +147,15 @@ impl ConfigPull {
         }
     }
 
-    fn failed(&mut self, error: &PullError, message: &str) {
-        if self.warned.due(Instant::now()) {
+    fn failed(&self, error: &PullError, message: &str) {
+        if self.warned.due(Instant::now()).is_some() {
             tracing::warn!(%error, "{message}");
         } else {
             tracing::debug!(%error, "{message}");
         }
     }
 
-    fn apply(&mut self, servers: Vec<UsenetServer>, persist: bool) -> Result<(), PullError> {
+    fn apply(&mut self, servers: Vec<UsenetServer>) -> Result<(), PullError> {
         self.engine
             .reconfigure(servers.iter().cloned().map(engine_server).collect())?;
         for server in &servers {
@@ -177,12 +168,14 @@ impl ConfigPull {
                 "usenet server applied"
             );
         }
-        if persist {
-            self.persist(&servers)?;
-        }
         self.configured.set();
         let engine = Arc::clone(&self.engine);
         tokio::spawn(async move { engine.prewarm().await });
+        // The engine already runs on this config; a failed write only costs the next
+        // restart its head start, so it must not keep the service unready.
+        if let Err(error) = self.persist(&servers) {
+            tracing::warn!(%error, "could not store the engine config for the next restart");
+        }
         self.applied = Some(servers);
         Ok(())
     }
@@ -221,16 +214,5 @@ mod tests {
             wait = backoff(wait);
         }
         assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30]);
-    }
-
-    #[test]
-    fn failures_warn_at_most_once_a_minute() {
-        let start = Instant::now();
-        let mut gate = WarnGate::default();
-        let due: Vec<bool> = [0, 1, 30, 59, 60, 61, 120]
-            .into_iter()
-            .map(|s| gate.due(start + Duration::from_secs(s)))
-            .collect();
-        assert_eq!(due, [true, false, false, false, true, false, true]);
     }
 }

@@ -22,7 +22,7 @@ pub async fn engine_config(State(state): State<AppState>, headers: HeaderMap) ->
     if !engine.accepts_control_key(token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match config::engine_config(&state.pool).await {
+    match config::engine_config(&state.pool, &state.http_client).await {
         Ok(config) => Json(config).into_response(),
         Err(e) => {
             warn!(error = %e, "Failed to load usenet servers for the engine");

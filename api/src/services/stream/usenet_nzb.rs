@@ -32,12 +32,9 @@ impl FetchError {
 
 /// The URL carries the indexer's API key, so neither it nor reqwest's error (which quotes
 /// it) is ever reported.
-pub async fn fetch(
-    http_client: &reqwest::Client,
-    download_url: &str,
-) -> Result<Vec<u8>, FetchError> {
+pub async fn fetch(download_url: &str) -> Result<Vec<u8>, FetchError> {
     let unreachable = |e: reqwest::Error| FetchError::Unreachable(e.without_url().to_string());
-    let mut resp = http_client
+    let mut resp = crate::http::payload_client()
         .get(download_url)
         .send()
         .await

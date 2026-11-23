@@ -75,14 +75,7 @@ async fn poll_result(job: &JobStatus) -> PollResult {
                 None => PollResult::completed_with_data(scan.files, data),
             }
         }
-        // `usenet::reconcile_jobs` runs before every poll and owns infrastructure failures:
-        // it releases the job and requeues the download, so the release is never excluded.
-        (JobState::Failed, Some(JobFailure::Infrastructure)) => {
-            let mut result = PollResult::downloading(progress);
-            result.client_data = Some(data);
-            result
-        }
-        (JobState::Failed, _) => {
+        (JobState::Failed, Some(JobFailure::Content)) => {
             let error = job
                 .error
                 .clone()
@@ -91,6 +84,9 @@ async fn poll_result(job: &JobStatus) -> PollResult {
             result.client_data = Some(data);
             result
         }
+        // `usenet::reconcile_jobs` runs before every poll and owns every failure not known to
+        // be the content's: it releases the job and requeues the download, so the release is
+        // never excluded on an unknown cause.
         _ => {
             let mut result = PollResult::downloading(progress);
             result.client_data = Some(data);

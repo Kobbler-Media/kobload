@@ -108,8 +108,14 @@ fn render(
     per_provider(
         "kobload_usenet_connect_failures_total",
         "counter",
-        "Failed connects.",
+        "Failed connects, logins refused by the provider included.",
         |p| p.connect_failures,
+    );
+    per_provider(
+        "kobload_usenet_provider_failing",
+        "gauge",
+        "1 while connects or logins fail with no connection open.",
+        |p| u64::from(p.connect_error.is_some()),
     );
     per_provider(
         "kobload_usenet_breaker_trips_total",

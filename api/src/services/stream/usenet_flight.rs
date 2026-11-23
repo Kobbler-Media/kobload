@@ -34,7 +34,8 @@ pub type Imported = Result<Arc<ImportResponse>, ImportFailure>;
 #[derive(Clone)]
 pub struct ImportJob {
     pub pool: PgPool,
-    pub http_client: reqwest::Client,
+    // NZBs go through the redirect-guarded payload client; the field goes once
+    // `usenet_resolve` stops setting it.
     pub provider_id: Uuid,
     pub handler: Arc<dyn DebridProvider>,
     pub nzb_ref: NzbRef,
@@ -42,7 +43,6 @@ pub struct ImportJob {
     pub name: String,
     pub known_key: Option<String>,
     pub fetch_failure: Option<String>,
-    /// Whether the indexer may be asked for the NZB when the engine has no copy.
     pub may_grab: bool,
     pub mode: ImportMode,
 }
@@ -129,7 +129,7 @@ async fn run(job: ImportJob) -> Imported {
             if let Some(remembered) = &job.fetch_failure {
                 return Err(failure(remembered.clone()));
             }
-            match usenet_nzb::fetch(&job.http_client, &job.download_url).await {
+            match usenet_nzb::fetch(&job.download_url).await {
                 Ok(nzb) => {
                     fetched = true;
                     request.nzb_base64 = Some(STANDARD.encode(nzb));

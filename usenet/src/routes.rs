@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{get, post};
 
-use crate::auth::{require_control_key, require_metrics_key};
+use crate::auth::{admit_upload, require_control_key, require_metrics_key};
 use crate::state::AppState;
 use crate::{health, import, jobs, metrics, stream};
 
@@ -15,15 +15,19 @@ pub fn router(state: AppState) -> Router {
     let control = Router::new()
         .route(
             "/v1/import",
-            post(import::import).layer(DefaultBodyLimit::max(IMPORT_LIMIT)),
+            post(import::import)
+                .layer(DefaultBodyLimit::max(IMPORT_LIMIT))
+                .layer(middleware::from_fn_with_state(state.clone(), admit_upload)),
         )
         .route("/v1/releases/{key}", get(import::release))
         .route("/v1/releases/{key}/health", post(health::health))
         .route(
             "/v1/jobs",
-            get(jobs::list)
-                .post(jobs::add)
-                .layer(DefaultBodyLimit::max(IMPORT_LIMIT)),
+            get(jobs::list).merge(
+                post(jobs::add)
+                    .layer(DefaultBodyLimit::max(IMPORT_LIMIT))
+                    .layer(middleware::from_fn_with_state(state.clone(), admit_upload)),
+            ),
         )
         .route("/v1/jobs/{id}", get(jobs::get).delete(jobs::remove))
         .route_layer(middleware::from_fn_with_state(

@@ -1,7 +1,7 @@
 mod body;
 mod range;
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -12,7 +12,7 @@ use usenet_proto::StreamClaims;
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use body::Pump;
+use body::{First, Pump};
 use range::{Span, span};
 
 pub async fn stream(
@@ -22,7 +22,10 @@ pub async fn stream(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let claims = usenet_proto::verify(&state.stream_secret, &token, now()).map_err(|error| {
-        tracing::debug!(%error, "stream token refused");
+        match state.refused_tokens.due(Instant::now()) {
+            Some(held_back) => tracing::warn!(%error, held_back, "stream token refused"),
+            None => tracing::debug!(%error, "stream token refused"),
+        }
         ApiError::new(StatusCode::FORBIDDEN, "forbidden")
     })?;
     let key: ReleaseKey = claims
@@ -40,36 +43,37 @@ pub async fn stream(
     let len = output.size;
     let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
-    let mut response = Response::builder().header(header::ACCEPT_RANGES, "bytes");
-    let (start, count) = match span(range, len) {
+    let (start, count, ranged) = match span(range, len) {
         Span::Unsatisfiable => {
-            return response
+            return Response::builder()
+                .header(header::ACCEPT_RANGES, "bytes")
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(header::CONTENT_RANGE, format!("bytes */{len}"))
                 .body(Body::empty())
                 .map_err(internal);
         }
-        Span::Full => {
-            response = response.status(StatusCode::OK);
-            (0, len)
-        }
-        Span::Partial { start, end } => {
-            response = response
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{len}"));
-            (start, end - start + 1)
-        }
+        Span::Full => (0, len, false),
+        Span::Partial { start, end } => (start, end - start + 1, true),
     };
     let content_type = mime_guess::from_path(&output.path).first_or_octet_stream();
-    response = response
-        .header(
-            header::CONTENT_TYPE,
-            HeaderValue::from_str(content_type.as_ref()).map_err(internal)?,
-        )
-        .header(header::CONTENT_LENGTH, count);
+    let content_type = HeaderValue::from_str(content_type.as_ref()).map_err(internal)?;
+    let reply = |count: u64| {
+        let builder = Response::builder()
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_TYPE, content_type.clone())
+            .header(header::CONTENT_LENGTH, count);
+        if ranged {
+            builder.status(StatusCode::PARTIAL_CONTENT).header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{}/{len}", start + count - 1),
+            )
+        } else {
+            builder.status(StatusCode::OK)
+        }
+    };
 
     if method == Method::HEAD || count == 0 {
-        return response.body(Body::empty()).map_err(internal);
+        return reply(count).body(Body::empty()).map_err(internal);
     }
     let mut reader = state.engine.open(&key, claims.output, purpose(&claims))?;
     reader.set_end(start + count);
@@ -83,11 +87,15 @@ pub async fn stream(
         damage: state.damage.clone(),
         sought: false,
     };
-    let first = pump
-        .first()
-        .await
-        .map_err(|failure| ApiError::new(failure.status(), failure.code()))?;
-    response.body(pump.into_body(first)).map_err(internal)
+    let First { bytes, failure } = pump.first().await;
+    match failure {
+        None => reply(count).body(pump.into_body(bytes)).map_err(internal),
+        // A shorter 206 is only legal for a Range request; the client re-requests from its end.
+        Some(_) if ranged && !bytes.is_empty() => reply(bytes.len() as u64)
+            .body(Body::from(bytes))
+            .map_err(internal),
+        Some(failure) => Err(ApiError::new(failure.status(), failure.code())),
+    }
 }
 
 const fn purpose(claims: &StreamClaims) -> kob_usenet::Purpose {

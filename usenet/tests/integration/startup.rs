@@ -8,8 +8,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use kob_usenet::EngineConfig;
 use kob_usenet::vendor::testkit::LoopbackServer;
-use kobload_usenet::{ConfigPull, Configured, Pulled};
+use kobload_usenet::{Booted, ConfigPull, Configured, Pulled, start_engine};
 use usenet_proto::{EngineConfigResponse, IpPreference, UsenetServer};
 
 use crate::support::{CONTROL, engine, warm_engine};
@@ -105,24 +106,11 @@ async fn a_restart_serves_the_last_applied_config_without_kobload() {
     let mode = std::fs::metadata(&stored).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "the stored config holds passwords");
 
-    let restarted = engine(dir.path(), Vec::new()).await;
-    let configured = Configured::default();
-    let mut pull = ConfigPull::new(
-        Arc::clone(&restarted),
-        "http://127.0.0.1:9",
-        CONTROL,
-        dir.path(),
-        configured.clone(),
-    );
-    assert!(pull.restore().unwrap());
-    assert!(configured.is_set());
-    assert_eq!(providers(&restarted), ["provider a"]);
-}
-
-#[tokio::test]
-async fn a_fresh_data_dir_restores_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let engine = engine(dir.path(), Vec::new()).await;
+    let Booted { engine, restored } =
+        start_engine(EngineConfig::new(dir.path().to_path_buf(), Vec::new()))
+            .await
+            .unwrap();
+    assert_eq!(providers(&engine), ["provider a"]);
     let configured = Configured::default();
     let mut pull = ConfigPull::new(
         engine,
@@ -131,8 +119,19 @@ async fn a_fresh_data_dir_restores_nothing() {
         dir.path(),
         configured.clone(),
     );
-    assert!(!pull.restore().unwrap());
-    assert!(!configured.is_set());
+    pull.adopt(restored.expect("a stored config"));
+    assert!(configured.is_set());
+}
+
+#[tokio::test]
+async fn a_fresh_data_dir_restores_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let Booted { engine, restored } =
+        start_engine(EngineConfig::new(dir.path().to_path_buf(), Vec::new()))
+            .await
+            .unwrap();
+    assert!(restored.is_none());
+    assert!(providers(&engine).is_empty());
 }
 
 #[tokio::test]

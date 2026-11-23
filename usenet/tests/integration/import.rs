@@ -4,6 +4,9 @@ use base64::engine::general_purpose::STANDARD;
 use kob_usenet::vendor::testkit::LoopbackServer;
 use usenet_proto::ImportResponse;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use crate::support::{Fixture, Harness, collect, import_body, json};
 
 #[tokio::test]
@@ -91,6 +94,30 @@ async fn import_failures_map_to_statuses() {
 }
 
 #[tokio::test]
+async fn a_release_with_nothing_importable_is_refused_not_an_engine_fault() {
+    let fixture = Fixture::sidecars_only();
+    let nntp = LoopbackServer::start(fixture.articles()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Harness::new(dir.path(), &nntp).await;
+
+    let response = harness
+        .control(
+            "POST",
+            "/v1/import",
+            Some(import_body(Some(&fixture), "idx:nfo")),
+        )
+        .await;
+    let status = response.status();
+    let body: serde_json::Value = json(response).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error"], "unimportable", "{body}");
+    assert!(
+        body["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn a_large_nzb_is_accepted() {
     let fixture = Fixture::season();
     let nntp = LoopbackServer::start(fixture.articles()).await.unwrap();
@@ -102,4 +129,52 @@ async fn a_large_nzb_is_accepted() {
     let response = harness.control("POST", "/v1/import", Some(body)).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(json::<ImportResponse>(response).await.outputs.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn imports_past_the_admission_cap_wait_for_a_slot() {
+    let fixture = Arc::new(Fixture::season());
+    let nntp = LoopbackServer::start(fixture.articles()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Arc::new(Harness::new(dir.path(), &nntp).await);
+    let (arrived, release) = nntp.hold_article(fixture.message_id(0, 0));
+
+    let held: Vec<_> = (0..4)
+        .map(|n| {
+            let harness = Arc::clone(&harness);
+            let fixture = Arc::clone(&fixture);
+            tokio::spawn(async move {
+                harness
+                    .control(
+                        "POST",
+                        "/v1/import",
+                        Some(import_body(Some(&fixture), &format!("idx:held-{n}"))),
+                    )
+                    .await
+                    .status()
+            })
+        })
+        .collect();
+    arrived.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut bad = import_body(None, "idx:bad");
+    bad["nzb_base64"] = "!!!".into();
+    let queued = {
+        let harness = Arc::clone(&harness);
+        tokio::spawn(async move {
+            harness
+                .control("POST", "/v1/import", Some(bad))
+                .await
+                .status()
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!queued.is_finished(), "a fifth import waits while four run");
+
+    drop(release);
+    for import in held {
+        assert_eq!(import.await.unwrap(), StatusCode::OK);
+    }
+    assert_eq!(queued.await.unwrap(), StatusCode::BAD_REQUEST);
 }

@@ -268,73 +268,67 @@ pub async fn submit_download(
         download_client.seed_time_minutes = Some(time);
     }
 
-    let (external_id, status, error, submission_error) = match fetch_release_payload(
-        ctx.http_client,
-        &download_url,
-        &protocol,
-        &input.url_context,
-    )
-    .await
-    {
-        Ok(release_payload) => {
-            let handler = ctx
-                .download_clients
-                .get(download_client.client_type.as_str())
-                .ok_or(DownloadClientError::UnsupportedClient);
+    let (external_id, status, error, submission_error) =
+        match fetch_release_payload(&download_url, &protocol, &input.url_context).await {
+            Ok(release_payload) => {
+                let handler = ctx
+                    .download_clients
+                    .get(download_client.client_type.as_str())
+                    .ok_or(DownloadClientError::UnsupportedClient);
 
-            let add_result = match handler {
-                Ok(handler) => match release_payload {
-                    ReleasePayload::Bytes(bytes) => {
-                        let download = NewDownload {
-                            id,
-                            title: &input.name,
-                            password: release_password(input.release_payload.as_ref()),
-                        };
-                        handler
-                            .add_bytes(ctx.http_client, &download_client, &bytes, &download)
-                            .await
-                    }
-                    ReleasePayload::Url(url) => {
-                        handler
-                            .add_url(ctx.http_client, &download_client, &url)
-                            .await
-                    }
-                },
-                Err(err) => Err(err),
-            };
+                let add_result = match handler {
+                    Ok(handler) => match release_payload {
+                        ReleasePayload::Bytes(bytes) => {
+                            let download = NewDownload {
+                                id,
+                                title: &input.name,
+                                password: release_password(input.release_payload.as_ref()),
+                            };
+                            handler
+                                .add_bytes(ctx.http_client, &download_client, &bytes, &download)
+                                .await
+                        }
+                        ReleasePayload::Url(url) => {
+                            handler
+                                .add_url(ctx.http_client, &download_client, &url)
+                                .await
+                        }
+                    },
+                    Err(err) => Err(err),
+                };
 
-            match add_result {
-                Ok(ext_id) => (Some(ext_id), "downloading".to_string(), None, None),
-                Err(err) => {
-                    // Transient errors (connection refused, timeout) -> pending_retry
-                    // Permanent errors (auth failure, invalid URL) -> failed
-                    if err.is_transient() {
-                        (
-                            None,
-                            "pending_retry".to_string(),
-                            None,
-                            Some(err.to_string()),
-                        )
-                    } else {
-                        (None, "failed".to_string(), Some(err.to_string()), None)
+                match add_result {
+                    Ok(ext_id) => (Some(ext_id), "downloading".to_string(), None, None),
+                    Err(err) => {
+                        // Transient errors (connection refused, timeout) -> pending_retry
+                        // Permanent errors (auth failure, invalid URL) -> failed
+                        if err.is_transient() {
+                            (
+                                None,
+                                "pending_retry".to_string(),
+                                None,
+                                Some(err.to_string()),
+                            )
+                        } else {
+                            (None, "failed".to_string(), Some(err.to_string()), None)
+                        }
                     }
                 }
             }
-        }
-        Err(err) => {
-            // Fetch errors are transient if they're connection errors
-            if err.is_transient() {
-                (
-                    None,
-                    "pending_retry".to_string(),
-                    None,
-                    Some(err.to_string()),
-                )
-            } else {
-                (None, "failed".to_string(), Some(err.to_string()), None)
+            Err(err) => {
+                // Fetch errors are transient if they're connection errors
+                if err.is_transient() {
+                    (
+                        None,
+                        "pending_retry".to_string(),
+                        None,
+                        Some(err.to_string()),
+                    )
+                } else {
+                    (None, "failed".to_string(), Some(err.to_string()), None)
+                }
             }
-        }
-    };
+        };
 
     let progress = if status == "failed" || status == "pending_retry" {
         None
@@ -650,7 +644,6 @@ enum ReleasePayload {
 }
 
 async fn fetch_release_payload(
-    http_client: &reqwest::Client,
     download_url: &str,
     protocol: &str,
     url_context: &DownloadUrlContext,
@@ -664,7 +657,7 @@ async fn fetch_release_payload(
         return Ok(ReleasePayload::Url(download_url.to_string()));
     }
 
-    let mut request = http_client
+    let mut request = crate::http::payload_client()
         .get(download_url)
         .header("User-Agent", "Kobload/1.0");
     if let Some((key, value)) = &url_context.auth_header {
@@ -702,7 +695,7 @@ pub async fn retry_submission(
     }
 
     // Fetch the payload (torrent file, NZB, etc.)
-    let request = http_client
+    let request = crate::http::payload_client()
         .get(&download.download_url)
         .header("User-Agent", "Kobload/1.0");
 

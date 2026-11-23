@@ -355,8 +355,7 @@ async fn test_warming_grabs_only_the_auto_play_pick_but_warms_imported_ones_free
     assert_eq!(status, StatusCode::OK, "{body}");
     let (play, cache) = purposes(&body);
     assert_purpose(&play, Purpose::Play);
-    // kobbler resumes a claimed prewarm's download from this URL, with no second resolve.
-    assert_purpose(&cache, Purpose::Cache);
+    assert_purpose(&cache, Purpose::Warm);
     assert_eq!(rig.nzbs.fetches("g-top"), 1);
     assert!(
         rig.engine

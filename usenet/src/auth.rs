@@ -36,3 +36,11 @@ pub async fn require_metrics_key(
 ) -> Response {
     gate(state.metrics_key.as_deref(), request, next).await
 }
+
+// Taken before the body is read, so a waiting upload is still in the socket, not in memory.
+pub async fn admit_upload(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let Ok(_permit) = state.uploads.acquire().await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    next.run(request).await
+}

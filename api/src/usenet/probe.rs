@@ -21,7 +21,7 @@ pub struct ProbeTarget<'a> {
     pub password: &'a str,
 }
 
-/// Connects, logs in and quits, the way the engine will. The reply never echoes credentials.
+// The reply reaches the admin UI, so it never echoes credentials.
 pub async fn probe(target: &ProbeTarget<'_>) -> Result<String, String> {
     tokio::time::timeout(TIMEOUT, run(target))
         .await

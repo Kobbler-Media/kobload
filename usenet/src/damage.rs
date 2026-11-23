@@ -60,7 +60,15 @@ impl ReadFailure {
         match error.kind() {
             io::ErrorKind::TimedOut => Self::Timeout,
             io::ErrorKind::InvalidData => Self::CorruptArticles,
-            _ if error.to_string().contains("unavailable") => Self::MissingArticles,
+            // kob-usenet raises its too-much-damage stop as a bare `Other`; the only other
+            // `Other` on the read path is a failed fetch task.
+            io::ErrorKind::Other
+                if !error
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<tokio::task::JoinError>()) =>
+            {
+                Self::MissingArticles
+            }
             _ => Self::ProvidersUnavailable,
         }
     }
@@ -78,5 +86,50 @@ impl Damage {
 
     pub fn count(&self, failure: ReadFailure) -> u64 {
         self.aborts[failure as usize].load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_failure_class_never_depends_on_the_message_text() {
+        let panicked = tokio::spawn(async { panic!("provider unavailable") })
+            .await
+            .unwrap_err();
+        let cases = [
+            (
+                io::Error::other(panicked),
+                ReadFailure::ProvidersUnavailable,
+            ),
+            (
+                io::Error::new(io::ErrorKind::ConnectionReset, "service unavailable"),
+                ReadFailure::ProvidersUnavailable,
+            ),
+            (
+                io::Error::other("3 segments in a row are gone"),
+                ReadFailure::MissingArticles,
+            ),
+            (
+                io::Error::other(Arc::new(nntp::Error::Unavailable)),
+                ReadFailure::ProvidersUnavailable,
+            ),
+            (
+                io::Error::other(Arc::new(nntp::Error::NotFound)),
+                ReadFailure::MissingArticles,
+            ),
+            (
+                io::Error::new(io::ErrorKind::TimedOut, "slow"),
+                ReadFailure::Timeout,
+            ),
+            (
+                io::Error::new(io::ErrorKind::InvalidData, "bad"),
+                ReadFailure::CorruptArticles,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(ReadFailure::of(&error), expected, "{error}");
+        }
     }
 }

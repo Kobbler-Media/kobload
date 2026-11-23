@@ -71,7 +71,6 @@ pub async fn resolve(
     let _session = lane.is_user().then(|| handler.gate().user_session());
     let job = ImportJob {
         pool: ctx.pool.clone(),
-        http_client: ctx.http_client.clone(),
         provider_id: request.debrid_provider_id,
         handler: Arc::new(handler),
         nzb_ref: nzb_ref.clone(),
@@ -117,7 +116,12 @@ pub async fn resolve(
             return Err(failed(message));
         }
     };
-    let response = response(&engine, &imported, output);
+    let behind = if lane.is_user() {
+        Purpose::Cache
+    } else {
+        Purpose::Warm
+    };
+    let response = response(&engine, &imported, output, behind);
     usenet_health::spawn(Sampled {
         pool: ctx.pool.clone(),
         engine,
@@ -180,13 +184,14 @@ fn response(
     engine: &UsenetEngine,
     imported: &ImportResponse,
     output: &OutputInfo,
+    behind: Purpose,
 ) -> StreamResolveResponse {
     let expires_at = OffsetDateTime::now_utc() + STREAM_TTL;
     let expiry = expires_at.unix_timestamp();
     let key = &imported.release_key;
     StreamResolveResponse {
         stream_url: engine.stream_url(key, output.index, Purpose::Play, expiry),
-        cache_url: Some(engine.stream_url(key, output.index, Purpose::Cache, expiry)),
+        cache_url: Some(engine.stream_url(key, output.index, behind, expiry)),
         filename: outputs::filename(output),
         filesize: i64::try_from(output.size).unwrap_or(i64::MAX),
         mime_type: None,

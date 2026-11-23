@@ -27,6 +27,9 @@ pub fn engine_refusal(code: &str) -> String {
         "unsupported" => {
             "Resolved release is not a video the engine can stream: its archive is compressed"
         }
+        "unimportable" => {
+            "Resolved release is not a video the engine can stream: nothing in it can be imported"
+        }
         "nested_nzb" => "Resolved release is not a video: the NZB holds another NZB",
         "providers_unavailable" => "No usenet provider can serve this right now",
         _ => "The usenet engine refused this release",

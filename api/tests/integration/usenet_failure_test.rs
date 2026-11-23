@@ -36,6 +36,7 @@ async fn test_engine_refusals_read_as_kobbler_classifies_them() {
         ("g-locked", 422, "password", "blocked"),
         ("g-rar", 422, "unsupported", "not a video"),
         ("g-nested", 422, "nested_nzb", "not a video"),
+        ("g-nfo", 422, "unimportable", "not a video"),
     ];
     for (guid, status, code, phrase) in cases {
         rig.engine
@@ -111,6 +112,48 @@ async fn test_an_indexer_refusal_is_remembered_so_taps_do_not_grab_again() {
         assert!(!text(&again).contains(INDEXER_KEY), "{again}");
         assert_eq!(rig.nzbs.fetches(guid), 1, "{guid} was grabbed again");
     }
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_an_unimportable_release_is_remembered_but_an_engine_fault_is_not() {
+    let rig = UsenetRig::start().await;
+    rig.engine
+        .refuse("g-nfo", EngineStatus::UNPROCESSABLE_ENTITY, "unimportable");
+    rig.engine
+        .refuse("g-fault", EngineStatus::INTERNAL_SERVER_ERROR, "internal");
+    rig.tv.indexer.set_search_results(vec![
+        rig.nzb("g-nfo", "Engine.Nfo.Show.S01E05.2160p.WEB-DL.x264-NZB"),
+        rig.nzb("g-fault", "Engine.Nfo.Show.S01E05.1080p.WEB-DL.x264-NZB"),
+    ]);
+    let options = rig.options("Engine Nfo Show", "5").await;
+    for guid in ["g-nfo", "g-fault"] {
+        let option = options
+            .iter()
+            .find(|o| o.nzb_ref == Some(rig.nzb_ref(guid)))
+            .unwrap();
+        let (status, body) = rig.resolve(json!({ "nzb_ref": option.nzb_ref })).await;
+        assert!(!status.is_success(), "{guid}: {body}");
+    }
+
+    let options = rig.options("Engine Nfo Show", "5").await;
+    let availability = |guid: &str| {
+        options
+            .iter()
+            .find(|o| o.nzb_ref == Some(rig.nzb_ref(guid)))
+            .unwrap()
+            .availability
+    };
+    assert_eq!(
+        availability("g-nfo"),
+        Some(StreamAvailability::Uncached),
+        "{options:?}"
+    );
+    assert_ne!(
+        availability("g-fault"),
+        Some(StreamAvailability::Uncached),
+        "{options:?}"
+    );
     rig.tv.server.cleanup().await;
 }
 

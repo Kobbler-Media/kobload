@@ -46,6 +46,12 @@ async fn range_requests_get_exact_bytes_and_headers() {
             &data[100..],
         ),
         case(
+            Some("BYTES=100-".into()),
+            StatusCode::PARTIAL_CONTENT,
+            Some(format!("bytes 100-{}/{len}", len - 1)),
+            &data[100..],
+        ),
+        case(
             Some("bytes=10-19".into()),
             StatusCode::PARTIAL_CONTENT,
             Some(format!("bytes 10-19/{len}")),

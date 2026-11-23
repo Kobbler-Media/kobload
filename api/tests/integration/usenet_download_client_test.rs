@@ -131,8 +131,8 @@ async fn a_failed_job_maps_to_a_content_or_an_infrastructure_outcome() {
         Case {
             failure: None,
             prior_attempts: 0,
-            status: "failed",
-            attempts: 0,
+            status: "pending_retry",
+            attempts: 1,
         },
         Case {
             failure: Some(JobFailure::Infrastructure),

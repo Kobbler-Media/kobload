@@ -46,12 +46,26 @@ fn to_wire(row: UsenetServerRow) -> UsenetServer {
     }
 }
 
-pub async fn engine_config(pool: &PgPool) -> Result<EngineConfigResponse, RepositoryError> {
-    let servers = usenet_servers::list(pool)
-        .await?
+// The engine pulls this every minute, so while SAB is enabled on the same account the engine
+// shrinks itself to what SAB leaves under the cap, and grows back once SAB is disabled.
+pub async fn engine_config(
+    pool: &PgPool,
+    http: &reqwest::Client,
+) -> Result<EngineConfigResponse, RepositoryError> {
+    let rows = usenet_servers::list(pool).await?;
+    if !rows.iter().any(|r| r.enabled) {
+        return Ok(EngineConfigResponse {
+            servers: Vec::new(),
+        });
+    }
+    let sab = sab_servers(pool, http).await;
+    let allowed = caps::engine_connections(&rows, &sab);
+    let servers = rows
         .into_iter()
-        .filter(|r| r.enabled)
-        .map(to_wire)
+        .filter_map(|mut row| {
+            row.connections = *allowed.get(&row.id)?;
+            Some(to_wire(row))
+        })
         .collect();
     Ok(EngineConfigResponse { servers })
 }
@@ -68,7 +82,10 @@ pub async fn warn_at_startup(pool: &PgPool) {
         return;
     }
     let sab = sab_servers(pool, &crate::http::new_client()).await;
-    for account in caps::accounts(&rows, &sab).iter().filter(|a| a.over_cap()) {
+    for account in caps::accounts(&rows, &sab)
+        .iter()
+        .filter(|a| a.over_cap_after_yielding())
+    {
         warn!(account = %account.describe(), "Usenet servers exceed the account's connection cap");
     }
 }

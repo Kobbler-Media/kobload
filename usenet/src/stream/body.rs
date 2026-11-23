@@ -13,6 +13,11 @@ use crate::damage::{Damage, ReadFailure};
 
 const CHUNK: usize = 256 * 1024;
 
+pub struct First {
+    pub bytes: Bytes,
+    pub failure: Option<ReadFailure>,
+}
+
 pub struct Pump {
     pub reader: OutputReader,
     pub at: u64,
@@ -25,19 +30,34 @@ pub struct Pump {
 
 impl Pump {
     // A failure before the headers can still change the status, so the first chunk is read
-    // up front and its failure answered with a code kobbler can act on.
-    pub async fn first(&mut self) -> Result<Bytes, ReadFailure> {
+    // up front. Bytes read before the failure are returned with it.
+    pub async fn first(&mut self) -> First {
         let deadline = Instant::now() + self.gap;
         let mut first = BytesMut::new();
         while first.len() < CHUNK && self.remaining > 0 {
             match timeout_at(deadline, self.next()).await {
                 Ok(Ok(bytes)) => first.extend_from_slice(&bytes),
-                Ok(Err(error)) => return Err(self.failed(&error, "stream refused")),
+                Ok(Err(error)) => {
+                    let failure = self.failed(&error, "stream refused");
+                    return First {
+                        bytes: first.freeze(),
+                        failure: Some(failure),
+                    };
+                }
                 Err(_) if !first.is_empty() => break,
-                Err(_) => return Err(self.failed(&self.silent(), "stream refused")),
+                Err(_) => {
+                    let failure = self.failed(&self.silent(), "stream refused");
+                    return First {
+                        bytes: Bytes::new(),
+                        failure: Some(failure),
+                    };
+                }
             }
         }
-        Ok(first.freeze())
+        First {
+            bytes: first.freeze(),
+            failure: None,
+        }
     }
 
     pub fn into_body(self, first: Bytes) -> Body {

@@ -226,8 +226,6 @@ fn database_error(e: impl std::fmt::Display) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
 }
 
-/// Every server of one login shares the provider's connection cap, so a save that would
-/// push the login over it is refused.
 async fn checked(
     state: &AppState,
     id: Uuid,

@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -13,6 +13,7 @@ use crate::auth::require_auth;
 use crate::repositories::clients as clients_repo;
 use crate::state::AppState;
 use crate::types::{DownloadClientConfig, DownloadClientType, TestConnectionResult};
+use crate::usenet::sab_client_refusal;
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadClientCreate {
@@ -161,6 +162,30 @@ async fn create_download_client(
         enabled,
     };
 
+    let now = time::OffsetDateTime::now_utc();
+    let candidate = DownloadClientConfig {
+        id: Uuid::nil(),
+        name: input.name.clone(),
+        client_type: input.client_type.clone(),
+        protocol: input.protocol.clone(),
+        base_url: input.base_url.clone(),
+        api_key: input.api_key.clone(),
+        username: input.username.clone(),
+        password: input.password.clone(),
+        category: input.category.clone(),
+        download_dir: input.download_dir.clone(),
+        is_default,
+        delete_after_import,
+        seed_ratio: input.seed_ratio,
+        seed_time_minutes: input.seed_time_minutes,
+        enabled,
+        created_at: now,
+        updated_at: now,
+    };
+    if let Some(refused) = sab_refusal(&state, &candidate).await {
+        return refused;
+    }
+
     match clients_repo::create_client(&state.pool, input).await {
         Ok(id) => {
             if is_default {
@@ -184,6 +209,25 @@ async fn update_download_client(
 ) -> impl IntoResponse {
     if require_auth(&state, &headers).await.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    match clients_repo::get_client_by_id(&state.pool, id).await {
+        Ok(Some(stored)) => {
+            let candidate = DownloadClientConfig {
+                base_url: payload.base_url.clone().unwrap_or(stored.base_url.clone()),
+                api_key: payload.api_key.clone().or(stored.api_key.clone()),
+                enabled: payload.enabled.unwrap_or(stored.enabled),
+                ..stored
+            };
+            if let Some(refused) = sab_refusal(&state, &candidate).await {
+                return refused;
+            }
+        }
+        Ok(None) => return (StatusCode::NOT_FOUND, "not found").into_response(),
+        Err(err) => {
+            warn!(error = %err, "Failed to load download client");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response();
+        }
     }
 
     let input = clients_repo::DownloadClientUpdate {
@@ -215,6 +259,18 @@ async fn update_download_client(
         Err(err) => {
             warn!(error = %err, "Failed to update download client");
             (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
+        }
+    }
+}
+
+// SAB's connections count against the usenet engine's account caps; see `usenet::caps`.
+async fn sab_refusal(state: &AppState, candidate: &DownloadClientConfig) -> Option<Response> {
+    match sab_client_refusal(&state.pool, &state.http_client, candidate).await {
+        Ok(None) => None,
+        Ok(Some(message)) => Some((StatusCode::BAD_REQUEST, message).into_response()),
+        Err(err) => {
+            warn!(error = %err, "Failed to load usenet servers for the connection cap check");
+            Some((StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response())
         }
     }
 }

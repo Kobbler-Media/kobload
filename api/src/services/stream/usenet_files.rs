@@ -33,7 +33,6 @@ fn cached(release_key: &str) -> Option<Arc<Vec<OutputInfo>>> {
         .map(|entry| entry.0.clone())
 }
 
-/// Every key is asked for at once, and whatever has answered by the deadline is listed.
 pub async fn lookup(
     provider: &dyn DebridProvider,
     release_keys: Vec<String>,

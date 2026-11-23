@@ -61,6 +61,12 @@ impl Fixture {
         }
     }
 
+    pub fn sidecars_only() -> Self {
+        Self {
+            files: vec![posted("Show.S01.nfo", "nfo", ARTICLE, 5)],
+        }
+    }
+
     pub fn articles(&self) -> Vec<Article> {
         self.files
             .iter()

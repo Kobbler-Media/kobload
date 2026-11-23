@@ -146,3 +146,28 @@ async fn a_leftover_partial_file_cannot_leave_the_stored_config_readable() {
         .mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
 }
+
+#[tokio::test]
+async fn a_config_that_cannot_be_stored_still_serves_and_is_not_reapplied() {
+    let nntp = LoopbackServer::start([]).await.unwrap();
+    let served: Served = Arc::new(Mutex::new(EngineConfigResponse {
+        servers: vec![usenet_server("a", &nntp, 0)],
+    }));
+    let url = kobload(served).await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("config.json.partial")).unwrap();
+    let engine = engine(dir.path(), Vec::new()).await;
+    let configured = Configured::default();
+    let mut pull = ConfigPull::new(
+        Arc::clone(&engine),
+        &url,
+        CONTROL,
+        dir.path(),
+        configured.clone(),
+    );
+
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(1));
+    assert!(configured.is_set());
+    assert_eq!(names(&engine), [("provider a".to_owned(), 0, 2)]);
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Unchanged);
+}

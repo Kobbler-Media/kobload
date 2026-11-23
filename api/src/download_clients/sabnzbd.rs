@@ -5,7 +5,6 @@ use super::storage::scan_storage_path;
 use crate::download_clients::{DownloadClientError, PollResult};
 use crate::types::{DownloadClientConfig, TestConnectionResult};
 
-/// Parse SABnzbd timeleft string (format: "H:MM:SS" or "0:02:35") to seconds.
 fn parse_timeleft_to_seconds(timeleft: &str) -> Option<i64> {
     let parts: Vec<&str> = timeleft.split(':').collect();
     match parts.len() {
@@ -131,41 +130,34 @@ pub async fn poll_sabnzbd(
             .and_then(|value| value.parse::<f64>().ok())
             .map(|value| (value / 100.0).clamp(0.0, 1.0));
 
-        // Parse timeleft string (format: "H:MM:SS" or "0:02:35") to seconds
         let eta_seconds = slot
             .get("timeleft")
             .and_then(|v| v.as_str())
             .and_then(parse_timeleft_to_seconds);
 
-        // Calculate eta_time as UTC timestamp (client can countdown without constant updates)
         let eta_time = eta_seconds.and_then(|secs| {
             let t = time::OffsetDateTime::now_utc() + time::Duration::seconds(secs);
             t.format(&time::format_description::well_known::Rfc3339)
                 .ok()
         });
 
-        // Parse download rate from kbpersec (KB/s -> bytes/s)
         let download_rate = slot
             .get("kbpersec")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<f64>().ok())
             .map(|kbps| (kbps * 1024.0) as i64);
 
-        // Parse total size from mb (MB -> bytes)
         let total_size = slot
             .get("mb")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<f64>().ok())
             .map(|mb| (mb * 1024.0 * 1024.0) as i64);
 
-        // Build client_data with normalized fields
         let client_data = serde_json::json!({
-            // Normalized fields (same name across all download clients)
             // eta_time is a UTC timestamp - client calculates countdown locally
             "eta_time": eta_time,
             "download_rate": download_rate,
             "total_size": total_size,
-            // SABnzbd-specific fields for debugging
             "nzo_id": nzo_id,
             "status": slot.get("status"),
             "timeleft": slot.get("timeleft"),
@@ -199,17 +191,12 @@ pub async fn poll_sabnzbd(
         .and_then(|v| v.as_str())
         .unwrap_or("Unknown");
 
-    // Parse total size from bytes field
     let total_size = slot.get("bytes").and_then(|v| v.as_i64());
 
-    // Capture client data with normalized fields for cross-client compatibility
     let client_data = serde_json::json!({
-        // Normalized fields (same name across all download clients)
-        // For completed items, eta_time and download_rate are not applicable
         "eta_time": None::<String>,
         "download_rate": None::<i64>,
         "total_size": total_size,
-        // SABnzbd-specific fields for debugging
         "nzo_id": nzo_id,
         "status": status_text,
         "storage": slot.get("storage"),
@@ -247,8 +234,6 @@ pub async fn poll_sabnzbd(
     Ok(PollResult::downloading(None))
 }
 
-/// Poll multiple SABnzbd sub-jobs (comma-separated nzo_ids from a split NZB).
-/// Fetches queue and history once, classifies each sub-job, and aggregates.
 async fn poll_sabnzbd_multi(
     http_client: &reqwest::Client,
     client: &DownloadClientConfig,
@@ -279,7 +264,6 @@ async fn poll_sabnzbd_multi(
     let mut not_found: Vec<&str> = Vec::new();
 
     for &nzo_id in &nzo_ids {
-        // Check queue first
         let in_q = queue_slots.and_then(|slots| {
             slots
                 .iter()
@@ -296,7 +280,6 @@ async fn poll_sabnzbd_multi(
             continue;
         }
 
-        // Check history
         let in_hist = history_slots.and_then(|slots| {
             slots
                 .iter()
@@ -348,7 +331,6 @@ async fn poll_sabnzbd_multi(
     }
 
     if in_queue_count > 0 {
-        // Average progress: completed sub-jobs count as 100%
         let completed_progress = completed_slots.len() as f64 * 100.0;
         let avg = (queue_progress_sum + completed_progress) / nzo_ids.len() as f64;
         let progress = Some((avg / 100.0).clamp(0.0, 1.0));
@@ -357,7 +339,6 @@ async fn poll_sabnzbd_multi(
         return Ok(result);
     }
 
-    // All completed — merge files from all storage paths
     let mut all_files = Vec::new();
     let mut scan_errors = Vec::new();
     for slot in &completed_slots {
@@ -435,7 +416,6 @@ pub async fn remove_sabnzbd(
     // A job lives in either the queue (still downloading/queued/paused) or the
     // history (post-processing done or failed). `history/delete` never touches
     // queue items, so send both — deleting an id a list doesn't hold is a no-op.
-    // Delete each sub-job individually (handles both single and multi-nzo).
     for id in nzo_id.split(',') {
         for mode in ["queue", "history"] {
             let mut query: Vec<(&str, &str)> = vec![

@@ -8,7 +8,7 @@ pub enum ImportMode {
     Download,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ImportRequest {
     pub cache_key: String,
     pub name: String,
@@ -17,6 +17,16 @@ pub struct ImportRequest {
     pub password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nzb_base64: Option<String>,
+}
+
+impl std::fmt::Debug for ImportRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportRequest")
+            .field("cache_key", &self.cache_key)
+            .field("name", &self.name)
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

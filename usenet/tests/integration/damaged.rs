@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use kob_usenet::vendor::testkit::LoopbackServer;
 use usenet_proto::Purpose;
 
@@ -82,4 +82,43 @@ async fn an_article_missing_mid_body_aborts_without_filler_and_is_counted() {
         StatusCode::BAD_GATEWAY,
         "a resume at the damage gets the code before any byte"
     );
+}
+
+#[tokio::test]
+async fn damage_inside_the_first_chunk_of_a_range_serves_the_good_bytes_before_it() {
+    let fixture = Fixture::season();
+    let gone = 5;
+    let nntp = LoopbackServer::start(fixture.without(0, gone))
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Harness::new(dir.path(), &nntp).await;
+    let release = harness.import(&fixture, "idx:guid").await;
+    let index = output(&release, "Show.S01E01.mkv");
+    let token = token(&release.release_key, index, Purpose::Play);
+    let len = fixture.data(0).len();
+
+    let response = harness.stream("GET", &token, Some("bytes=100-")).await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    let good = gone * ARTICLE;
+    assert_eq!(
+        response.headers()[header::CONTENT_RANGE],
+        format!("bytes 100-{}/{len}", good - 1).as_str()
+    );
+    assert_eq!(
+        response.headers()[header::CONTENT_LENGTH],
+        (good - 100).to_string().as_str()
+    );
+    let (body, error) = collect(response).await;
+    assert_eq!(error, None);
+    assert!(body == fixture.data(0)[100..good], "only the good bytes");
+    let metrics = harness.metrics().await;
+    assert_eq!(metric(&metrics, FAILURES, &["missing_articles"]), 1);
+
+    let at_damage = harness
+        .stream("GET", &token, Some(&format!("bytes={good}-")))
+        .await;
+    assert_eq!(at_damage.status(), StatusCode::BAD_GATEWAY);
+    let body: serde_json::Value = json(at_damage).await;
+    assert_eq!(body["error"], "missing_articles", "{body}");
 }

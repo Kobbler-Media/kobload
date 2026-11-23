@@ -32,7 +32,10 @@ pub fn span(header: Option<&str>, len: u64) -> Span {
 }
 
 fn parse(header: &str) -> Option<Spec> {
-    let spec = header.strip_prefix("bytes=")?;
+    let spec = header
+        .get(..6)
+        .filter(|unit| unit.eq_ignore_ascii_case("bytes="))
+        .map(|_| &header[6..])?;
     if spec.contains(',') {
         return None;
     }

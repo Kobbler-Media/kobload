@@ -48,7 +48,10 @@ impl From<kob_usenet::Error> for ApiError {
             E::Import(import::Error::Retry(_)) | E::Server { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, "providers_unavailable")
             }
-            E::Import(_) | E::Stored(_) | E::Reader(_) | E::Io(_) => {
+            E::Import(import::Error::Failed(_) | import::Error::Limit(_)) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "unimportable")
+            }
+            E::Stored(_) | E::Reader(_) | E::Io(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
             }
         };

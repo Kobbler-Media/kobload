@@ -1,13 +1,22 @@
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
 use sqlx::PgPool;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::repositories::clients;
 use crate::types::DownloadClientConfig;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+
+type LastSeen = HashMap<(Uuid, String), Vec<SabServer>>;
+
+// A SAB whose API stops answering may still hold its connections, so the engine must not
+// grow back into its share until SAB is disabled.
+static LAST_SEEN: LazyLock<Mutex<LastSeen>> = LazyLock::new(Default::default);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SabServer {
@@ -48,11 +57,16 @@ fn number(value: &serde_json::Value) -> Option<i64> {
     }
 }
 
-/// SAB's per-server connections on the same accounts, so the engine's plus SAB's stay
-/// within each provider cap. Only host, username and connection count are read. An
-/// unreachable SAB counts as nothing rather than blocking edits: it may be the very thing
-/// being fixed, and its connections are logged as unknown.
+// An unreachable SAB never blocks an edit: it may be the very thing being fixed.
 pub async fn sab_servers(pool: &PgPool, http: &reqwest::Client) -> Vec<SabServer> {
+    enabled_sab_servers(pool, http, None).await
+}
+
+pub async fn enabled_sab_servers(
+    pool: &PgPool,
+    http: &reqwest::Client,
+    except: Option<Uuid>,
+) -> Vec<SabServer> {
     let sabs = match clients::list_clients(pool).await {
         Ok(cs) => cs,
         Err(e) => {
@@ -63,18 +77,32 @@ pub async fn sab_servers(pool: &PgPool, http: &reqwest::Client) -> Vec<SabServer
     let mut servers = Vec::new();
     for sab in sabs
         .iter()
-        .filter(|c| c.enabled && c.client_type == "sabnzbd")
+        .filter(|c| c.enabled && c.client_type == "sabnzbd" && Some(c.id) != except)
     {
-        match fetch(http, sab).await {
-            Ok(found) => servers.extend(found),
-            Err(reason) => warn!(
-                client = %sab.name,
-                reason,
-                "Could not read SABnzbd's servers; its connections are left out of the usenet cap check"
-            ),
-        }
+        servers.extend(client_servers(http, sab).await);
     }
     servers
+}
+
+pub async fn client_servers(http: &reqwest::Client, sab: &DownloadClientConfig) -> Vec<SabServer> {
+    let key = (sab.id, sab.base_url.clone());
+    let seen = || LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    match fetch(http, sab).await {
+        Ok(found) => {
+            seen().insert(key, found.clone());
+            found
+        }
+        Err(reason) => {
+            let last = seen().get(&key).cloned().unwrap_or_default();
+            warn!(
+                client = %sab.name,
+                reason,
+                remembered_servers = last.len(),
+                "Could not read SABnzbd's servers; the usenet cap check uses its last known share"
+            );
+            last
+        }
+    }
 }
 
 async fn fetch(

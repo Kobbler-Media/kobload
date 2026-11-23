@@ -26,6 +26,7 @@ pub mod polling;
 pub mod prowlarr;
 pub mod quality;
 pub mod rate_limit;
+pub mod redirect_guard;
 pub mod repositories;
 pub mod review;
 pub mod routes;

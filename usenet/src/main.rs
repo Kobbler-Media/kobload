@@ -3,10 +3,13 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kob_usenet::{Engine, EngineConfig};
-use kobload_usenet::{AppState, ConfigPull, Settings, init_logging, router};
+use kob_usenet::EngineConfig;
+use kobload_usenet::{
+    AppState, Booted, ConfigPull, Settings, init_logging, router, start_engine, watch_providers,
+};
 
 const PULL_EVERY: Duration = Duration::from_secs(60);
+const WATCH_EVERY: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -26,7 +29,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     config.min_connections = settings.min_connections;
     config.download.free_space_floor = settings.free_space_floor;
     config.download.active_jobs = settings.active_jobs;
-    let engine = Arc::new(Engine::new(config).await?);
+    let Booted { engine, restored } = start_engine(config).await?;
     let state = AppState::new(
         Arc::clone(&engine),
         &settings.control_key,
@@ -35,18 +38,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .with_metrics_key(settings.metrics_key.as_deref())
     .with_download_dir(&settings.download_dir);
     let mut pull = ConfigPull::new(
-        engine,
+        Arc::clone(&engine),
         &settings.kobload_url,
         &settings.control_key,
         &settings.data_dir,
         state.configured(),
     );
-    match pull.restore() {
-        Ok(true) => tracing::info!("serving the last applied engine config until kobload answers"),
-        Ok(false) => {}
-        Err(error) => tracing::warn!(%error, "could not restore the last engine config"),
+    if let Some(servers) = restored {
+        pull.adopt(servers);
     }
     tokio::spawn(pull.run(PULL_EVERY));
+    tokio::spawn(watch_providers(engine, WATCH_EVERY));
     let app = router(state);
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, settings.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;

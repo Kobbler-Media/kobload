@@ -42,8 +42,7 @@ pub async fn reconcile_jobs(state: &AppState) {
         match jobs.iter().find(|j| j.id == row.external_id) {
             None => requeue(state, row, Requeue::Lost, "the usenet engine lost the job").await,
             Some(job)
-                if job.state == JobState::Failed
-                    && job.failure == Some(JobFailure::Infrastructure) =>
+                if job.state == JobState::Failed && job.failure != Some(JobFailure::Content) =>
             {
                 if let Err(e) = engine.delete_job(&job.id, true).await {
                     warn!(job = %job.id, error = %e, "Could not release a failed usenet engine job");

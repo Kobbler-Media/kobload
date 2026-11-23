@@ -1,4 +1,5 @@
 mod auth;
+mod boot;
 mod damage;
 mod error;
 mod health;
@@ -12,9 +13,13 @@ mod servers;
 mod settings;
 mod state;
 mod stream;
+mod throttle;
+mod watch;
 
+pub use boot::{Booted, start_engine};
 pub use logging::init_logging;
 pub use pull::{ConfigPull, PullError, Pulled};
 pub use routes::router;
 pub use settings::{Settings, SettingsError};
 pub use state::{AppState, BYTE_GAP, Configured, DEFAULT_DOWNLOAD_DIR};
+pub use watch::watch_providers;

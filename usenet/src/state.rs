@@ -4,11 +4,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kob_usenet::Engine;
+use tokio::sync::Semaphore;
 
 use crate::damage::Damage;
+use crate::throttle::Throttle;
 
 pub const BYTE_GAP: Duration = Duration::from_secs(7);
 pub const DEFAULT_DOWNLOAD_DIR: &str = "/downloads";
+// Each import buffers its NZB about three times over, up to the 128 MB body limit.
+const IMPORTS_AT_ONCE: usize = 4;
+const REFUSAL_WARN_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Default)]
 pub struct Configured(Arc<AtomicBool>);
@@ -34,6 +39,8 @@ pub struct AppState {
     pub(crate) configured: Configured,
     pub(crate) damage: Arc<Damage>,
     pub(crate) download_dir: Arc<Path>,
+    pub(crate) refused_tokens: Arc<Throttle>,
+    pub(crate) uploads: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -48,6 +55,8 @@ impl AppState {
             configured: Configured::default(),
             damage: Arc::default(),
             download_dir: PathBuf::from(DEFAULT_DOWNLOAD_DIR).into(),
+            refused_tokens: Arc::new(Throttle::new(REFUSAL_WARN_EVERY)),
+            uploads: Arc::new(Semaphore::new(IMPORTS_AT_ONCE)),
         }
     }
 
