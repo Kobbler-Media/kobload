@@ -157,7 +157,7 @@ impl TvWatch {
         let ctx = StreamSearchContext {
             pool,
             http_client: &state.http_client,
-            indexers: state.indexers.as_ref(),
+            indexers: state.indexers.clone(),
             debrid_providers: state.debrid_providers.as_ref(),
             definitions: &state.definitions,
             xem_cache: state.xem_cache.as_ref(),

@@ -232,6 +232,7 @@ async fn search_releases(
             per_source_timeout: None,
             season: None,
             episode: None,
+            source_filter: None,
         })
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;

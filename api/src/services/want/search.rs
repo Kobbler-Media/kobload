@@ -885,6 +885,7 @@ mod tests {
             per_source_timeout: None,
             season: None,
             episode: None,
+            source_filter: None,
         })
         .await;
 

@@ -14,6 +14,8 @@ use crate::repositories::watch::{self as watch_repo, SearchContext};
 use crate::services::search::search_type_from_media_want;
 use crate::watch::{ExternalId, ExternalIdSource, Release};
 
+pub type SourceFilter = fn(&watch_repo::IndexerSourceRow) -> bool;
+
 pub struct SearchIndexersParams<'a> {
     pub ctx: &'a IndexerContext<'a>,
     pub indexers: &'a dyn IndexerResolver,
@@ -30,6 +32,7 @@ pub struct SearchIndexersParams<'a> {
     pub season: Option<String>,
     /// Episode for structured TV search (Newznab/Cardigann `ep` param).
     pub episode: Option<String>,
+    pub source_filter: Option<SourceFilter>,
 }
 
 pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Release>, String> {
@@ -69,6 +72,9 @@ pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Re
     let mut releases = Vec::new();
 
     for source in &searchable_sources {
+        if params.source_filter.is_some_and(|keep| !keep(source)) {
+            continue;
+        }
         if watch_repo::should_skip_source(source) {
             warn!(source = %source.name, "Skipping source due to rate limit or backoff");
             continue;

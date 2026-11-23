@@ -1,9 +1,8 @@
 //! Stream search service — searches indexers, scores releases, checks debrid availability.
 
-use std::sync::LazyLock;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dashmap::DashMap;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -12,13 +11,13 @@ use super::availability::known_availability;
 use super::ranking::{
     KnownAvailability, RankCandidate, RankPreferences, RankProvider, rank_options,
 };
-use super::usenet_listing;
+use super::{indexer_search, usenet_listing, usenet_search};
 use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::decision_log::types::{LogProviderCall, LogRelease};
 use crate::decision_log::{self, DecisionCollector};
 use crate::hash_sources::{EztvClient, TorrentioClient, ZileanClient};
+use crate::indexers::IndexerResolver;
 use crate::indexers::cardigann::DefinitionCache;
-use crate::indexers::{IndexerContext, IndexerResolver};
 use crate::parsing::parse_release;
 use crate::repositories::app_settings;
 use crate::repositories::hash_index::{self, HashFileEntry, HashIndexEntry, HashIndexRow};
@@ -26,7 +25,7 @@ use crate::repositories::quality_profiles;
 use crate::repositories::watch as watch_repo;
 use crate::scene_mappings::SceneMappingCache;
 use crate::scene_titles::TvNaming;
-use crate::services::search::{SearchIndexersParams, search_indexers};
+use crate::services::search::SourceFilter;
 use crate::services::want::scoring::SearchContext;
 use crate::trash_filters::TrashFilterCache;
 use crate::usenet::outputs::Target;
@@ -49,33 +48,11 @@ const TORRENTIO_GRACE: Duration = Duration::from_millis(1200);
 /// that runs longer still serves the next search, which finds it cached.
 const ACCOUNT_LISTING_WAIT: Duration = Duration::from_secs(2);
 
-/// TTL for the indexer result cache.
-const INDEXER_CACHE_TTL: Duration = Duration::from_secs(900); // 15 minutes
-
-/// In-memory cache for indexer search results keyed by query + media_want.
-/// Value is (scored results, original releases, insertion time).
-type IndexerCacheEntry = (Vec<crate::watch::ProcessedRelease>, Vec<Release>, Instant);
-
-static INDEXER_RESULT_CACHE: LazyLock<DashMap<String, IndexerCacheEntry>> =
-    LazyLock::new(DashMap::new);
-
-/// Build a cache key from the search request's query and media_want.
-fn indexer_cache_key(request: &StreamSearchRequest) -> String {
-    // Use serde_json serialization for a stable, deterministic key.
-    // media_want encodes title, year, identifiers — everything that affects search.
-    let mw_part = request
-        .media_want
-        .as_ref()
-        .and_then(|mw| serde_json::to_string(mw).ok())
-        .unwrap_or_default();
-    format!("{}|{}", request.query, mw_part)
-}
-
 /// Context dependencies for stream search.
 pub struct StreamSearchContext<'a> {
     pub pool: &'a PgPool,
     pub http_client: &'a reqwest::Client,
-    pub indexers: &'a dyn IndexerResolver,
+    pub indexers: Arc<dyn IndexerResolver>,
     pub debrid_providers: &'a dyn DebridProviderResolver,
     pub definitions: &'a DefinitionCache,
     pub xem_cache: &'a XemCache,
@@ -135,6 +112,9 @@ struct StreamSearchTimings {
     tier2_ran: bool,
     cardigann_ms: u64,
     cardigann_ran: bool,
+    usenet_status: &'static str,
+    usenet_ms: u64,
+    usenet_count: usize,
     dead_hashes_ms: u64,
     dead_hashes_supplementary_count: usize,
     options_build_ms: u64,
@@ -153,6 +133,9 @@ impl StreamSearchTimings {
             tier2_ms = self.tier2_ms,
             cardigann_ran = self.cardigann_ran,
             cardigann_ms = self.cardigann_ms,
+            usenet_status = self.usenet_status,
+            usenet_ms = self.usenet_ms,
+            usenet_count = self.usenet_count,
             dead_hashes_ms = self.dead_hashes_ms,
             dead_hashes_supplementary = self.dead_hashes_supplementary_count,
             options_build_ms = self.options_build_ms,
@@ -271,6 +254,7 @@ pub async fn stream_search(
 
     let search_start = Instant::now();
     let mut timings = StreamSearchTimings::default();
+    let usenet_search = (!usenet_providers.is_empty()).then(|| usenet_search::start(ctx, request));
 
     // Fire hash index + all external APIs concurrently
     let hash_index_start = Instant::now();
@@ -612,32 +596,39 @@ pub async fn stream_search(
     if !has_candidate(&scored) {
         timings.cardigann_ran = true;
         info!("No fast source results — falling back to Cardigann live search");
-        let cache_key = indexer_cache_key(request);
-        let cached_result = INDEXER_RESULT_CACHE.get(&cache_key).and_then(|entry| {
-            let (ref s, ref r, inserted_at) = *entry;
-            if inserted_at.elapsed() < INDEXER_CACHE_TTL {
-                Some((s.clone(), r.clone()))
-            } else {
-                None
+        let (scope, source_filter) = match usenet_search {
+            Some(_) => (
+                "fallback-no-usenet",
+                Some(indexer_search::is_not_usenet_source as SourceFilter),
+            ),
+            None => ("fallback", None),
+        };
+        let cache_key = indexer_search::cache_key(request, scope);
+        let cg_releases = match indexer_search::cached(&cache_key) {
+            Some(cached) => {
+                info!("Indexer result cache hit");
+                cached
             }
-        });
-        if cached_result.is_none() {
-            INDEXER_RESULT_CACHE.remove(&cache_key);
-        }
-        let (cg_scored, cg_releases) = if let Some(cached) = cached_result {
-            info!("Indexer result cache hit");
-            cached
-        } else {
-            match search_and_score_indexers(ctx, request, &debrid_sources, &cache_key, &naming)
-                .await
+            None => match indexer_search::search(
+                ctx.pool,
+                ctx.http_client,
+                ctx.indexers.as_ref(),
+                request,
+                source_filter,
+            )
+            .await
             {
-                Ok(result) => result,
+                Ok(found) => {
+                    indexer_search::remember(&cache_key, &found);
+                    found
+                }
                 Err(e) => {
                     warn!(error = %e, "Cardigann fallback search failed");
-                    (Vec::new(), Vec::new())
+                    Vec::new()
                 }
-            }
+            },
         };
+        let cg_scored = indexer_search::score(ctx.pool, request, &cg_releases, &naming).await;
         if let Some(ref log) = collector {
             log.record_provider_call(LogProviderCall {
                 id: Uuid::new_v4(),
@@ -660,6 +651,37 @@ pub async fn stream_search(
     }
     if timings.cardigann_ran {
         timings.cardigann_ms = cardigann_start.elapsed().as_millis() as u64;
+    }
+
+    if let Some(search) = usenet_search {
+        let usenet_start = Instant::now();
+        // With torrents to offer, usenet must not hold the search up; without them it is
+        // all there is, so it gets the indexers' own timeout like the fallback did.
+        let wait = (!timings.cardigann_ran)
+            .then(|| usenet_search::DEADLINE.saturating_sub(search_start.elapsed()));
+        let collected = search.collect(wait).await;
+        timings.usenet_status = collected.status;
+        timings.usenet_ms = usenet_start.elapsed().as_millis() as u64;
+        timings.usenet_count = collected.releases.len();
+        if let Some(ref log) = collector {
+            log.record_provider_call(LogProviderCall {
+                id: Uuid::new_v4(),
+                indexer_source_id: None,
+                source_name: "Usenet indexers".to_string(),
+                handler_type: "newznab".to_string(),
+                search_type: Some("usenet".to_string()),
+                query: Some(build_search_query(request)),
+                categories: None,
+                external_ids: None,
+                results_count: collected.releases.len() as i32,
+                results_after_dedup: collected.releases.len() as i32,
+                status: collected.status.to_string(),
+                error_message: None,
+                duration_ms: Some(timings.usenet_ms as i32),
+            });
+        }
+        scored.extend(indexer_search::score(ctx.pool, request, &collected.releases, &naming).await);
+        releases.extend(collected.releases);
     }
 
     // Record ALL evaluated releases in the decision log for debugging.
@@ -1053,123 +1075,9 @@ async fn account_held(
     .collect()
 }
 
-async fn search_and_score_indexers(
-    ctx: &StreamSearchContext<'_>,
-    request: &StreamSearchRequest,
-    debrid_sources: &[watch_repo::IndexerSourceRow],
-    cache_key: &str,
-    naming: &TvNaming,
-) -> Result<(Vec<crate::watch::ProcessedRelease>, Vec<Release>), StreamSearchError> {
-    let query = build_search_query(request);
-    let indexer_ctx = IndexerContext {
-        pool: ctx.pool,
-        http_client: ctx.http_client,
-    };
-
-    let releases = search_debrid_sources(
-        &indexer_ctx,
-        ctx.indexers,
-        ctx.pool,
-        debrid_sources,
-        &query,
-        request,
-    )
-    .await;
-
-    let releases = match releases {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(StreamSearchError::SearchFailed(e));
-        }
-    };
-
-    if releases.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-
-    info!(
-        release_count = releases.len(),
-        "Indexer search returned releases"
-    );
-
-    // Log sample of releases for debugging
-    for r in releases.iter().take(3) {
-        info!(
-            title = %r.title,
-            protocol = %r.protocol,
-            info_hash = ?r.info_hash,
-            magnet = r.magnet_url.is_some(),
-            "Sample release"
-        );
-    }
-
-    let patterns = build_patterns(request, naming);
-    info!(patterns = ?patterns, "Scoring patterns");
-
-    // Use explicit quality_profile_id if provided, otherwise fall back to
-    // the default profile for the media kind (same as the Want flow).
-    let quality_profile = if let Some(qp_id) = request.quality_profile_id {
-        quality_profiles::get_quality_profile_by_id(ctx.pool, qp_id)
-            .await
-            .ok()
-            .flatten()
-    } else {
-        // Determine media kind from request
-        let kind = match request.media_type.as_deref().unwrap_or("movie") {
-            "tv" => "tv",
-            _ => "movie",
-        };
-        quality_profiles::get_default_for_media_kind(ctx.pool, kind)
-            .await
-            .ok()
-            .flatten()
-    };
-    if let Some(ref qp) = quality_profile {
-        info!(profile = %qp.name, max_res = ?qp.max_resolution, "Using quality profile");
-    } else {
-        info!("No quality profile found — scoring without resolution limits");
-    }
-    // Stream search uses lenient scoring: TRaSH filters disabled because public
-    // trackers commonly have unnamed groups and x265 at HD which TRaSH rejects.
-    // Quality scoring (resolution, codec, audio) still applies for ranking.
-    let config = scoring_config(request, &patterns, quality_profile.as_ref(), None, naming);
-    // Return the FULL scored set (candidates + rejects). Downstream filters
-    // via `is_candidate()` where it needs candidates only; rejects are used
-    // by the decision log so we don't have to re-score them.
-    let scored = crate::services::want::scoring::score_batch(&releases, &config);
-
-    let candidate_count = scored.iter().filter(|pr| pr.is_candidate()).count();
-    info!(
-        scored_count = scored.len(),
-        candidate_count, "Scoring complete"
-    );
-
-    // Debug: if scoring returned 0 candidates, log why each release was rejected
-    if candidate_count == 0 && !releases.is_empty() {
-        warn!(
-            release_count = releases.len(),
-            "All releases rejected during scoring — check patterns and quality profile"
-        );
-    }
-
-    // Store in cache
-    INDEXER_RESULT_CACHE.insert(
-        cache_key.to_string(),
-        (scored.clone(), releases.clone(), Instant::now()),
-    );
-
-    // Evict expired entries periodically (simple inline eviction)
-    if INDEXER_RESULT_CACHE.len() > 100 {
-        INDEXER_RESULT_CACHE
-            .retain(|_, (_, _, inserted_at)| inserted_at.elapsed() < INDEXER_CACHE_TTL);
-    }
-
-    Ok((scored, releases))
-}
-
 /// Streams rank everything by total score, so nothing is cut by a minimum
 /// match score.
-fn scoring_config<'a>(
+pub(super) fn scoring_config<'a>(
     request: &'a StreamSearchRequest,
     patterns: &'a [String],
     quality_profile: Option<&'a crate::repositories::quality_profiles::QualityProfileRow>,
@@ -1235,7 +1143,7 @@ fn media_want_title(mw: &nats_jobs::MediaWant) -> String {
 }
 
 /// Extract external IDs from a MediaWant as (source_name, id_value) pairs.
-fn media_want_external_ids(mw: &nats_jobs::MediaWant) -> Vec<(String, String)> {
+pub(super) fn media_want_external_ids(mw: &nats_jobs::MediaWant) -> Vec<(String, String)> {
     let mut ids = Vec::new();
     match mw {
         nats_jobs::MediaWant::TvEpisode { identifiers, .. }
@@ -1269,7 +1177,7 @@ fn media_want_external_ids(mw: &nats_jobs::MediaWant) -> Vec<(String, String)> {
 }
 
 /// Build search query from request.
-fn build_search_query(request: &StreamSearchRequest) -> String {
+pub(super) fn build_search_query(request: &StreamSearchRequest) -> String {
     if let Some(ref mw) = request.media_want {
         media_want_title(mw)
     } else {
@@ -1279,7 +1187,7 @@ fn build_search_query(request: &StreamSearchRequest) -> String {
 
 /// Build patterns for scoring from request. Stream scoring matches by
 /// substring, so every name the show goes by is a pattern.
-fn build_patterns(request: &StreamSearchRequest, naming: &TvNaming) -> Vec<String> {
+pub(super) fn build_patterns(request: &StreamSearchRequest, naming: &TvNaming) -> Vec<String> {
     if let Some(ref mw) = request.media_want {
         std::iter::once(media_want_title(mw))
             .chain(naming.show_aliases.iter().cloned())
@@ -1348,7 +1256,7 @@ fn extract_hash_from_magnet(magnet: &str) -> Option<String> {
 }
 
 /// Load quality profile for stream search scoring.
-async fn load_quality_profile(
+pub(super) async fn load_quality_profile(
     pool: &PgPool,
     request: &StreamSearchRequest,
 ) -> Option<crate::repositories::quality_profiles::QualityProfileRow> {
@@ -1367,60 +1275,6 @@ async fn load_quality_profile(
             .ok()
             .flatten()
     }
-}
-
-/// Search debrid-eligible sources using the indexer infrastructure.
-async fn search_debrid_sources(
-    indexer_ctx: &IndexerContext<'_>,
-    indexers: &dyn IndexerResolver,
-    pool: &PgPool,
-    _sources: &[watch_repo::IndexerSourceRow],
-    query: &str,
-    request: &StreamSearchRequest,
-) -> Result<Vec<Release>, String> {
-    // Build external IDs from media_want if available
-    let external_ids = if let Some(ref mw) = request.media_want {
-        media_want_external_ids(mw)
-            .into_iter()
-            .filter_map(|(source, id)| {
-                let source = match source.as_str() {
-                    "imdb" => crate::watch::ExternalIdSource::Imdb,
-                    "tmdb" => crate::watch::ExternalIdSource::Tmdb,
-                    "tvdb" => crate::watch::ExternalIdSource::Tvdb,
-                    "tvmaze" => crate::watch::ExternalIdSource::TvMaze,
-                    _ => return None,
-                };
-                Some(crate::watch::ExternalId { source, id })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    let (season, episode) = match request.media_want.as_ref() {
-        Some(nats_jobs::MediaWant::TvEpisode {
-            season, episode, ..
-        }) => (Some(season.clone()), Some(episode.clone())),
-        _ => (None, None),
-    };
-
-    let params = SearchIndexersParams {
-        ctx: indexer_ctx,
-        indexers,
-        pool,
-        query,
-        limit: 100,
-        external_ids: &external_ids,
-        media_want: request.media_want.as_ref(),
-        media_type_id: None,
-        // 30s allows FlareSolverr time to solve Cloudflare challenges (~10-20s).
-        // Non-Cloudflare sources respond in 1-2s so this doesn't slow them down.
-        per_source_timeout: Some(Duration::from_secs(30)),
-        season,
-        episode,
-    };
-
-    search_indexers(&params).await
 }
 
 /// Load enabled debrid providers from the database.

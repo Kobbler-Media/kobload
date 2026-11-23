@@ -74,6 +74,7 @@ mod usenet_failure_test;
 mod usenet_health_test;
 mod usenet_job_recovery_test;
 mod usenet_servers_test;
+mod usenet_stream_search_test;
 mod usenet_stream_test;
 mod watch_directories_test;
 mod watch_directory_notify_test;

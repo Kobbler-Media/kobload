@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use kobload_api::download_clients::{
@@ -128,6 +130,8 @@ impl DownloadClientHandler for MockDownloadClient {
 pub struct MockIndexer {
     pub search_results: Mutex<Vec<Release>>,
     pub rss_results: Mutex<Vec<Release>>,
+    search_delay: Mutex<Duration>,
+    searches: AtomicUsize,
 }
 
 impl MockIndexer {
@@ -135,7 +139,17 @@ impl MockIndexer {
         Self {
             search_results: Mutex::new(Vec::new()),
             rss_results: Mutex::new(Vec::new()),
+            search_delay: Mutex::new(Duration::ZERO),
+            searches: AtomicUsize::new(0),
         }
+    }
+
+    pub fn set_search_delay(&self, delay: Duration) {
+        *self.search_delay.lock().unwrap() = delay;
+    }
+
+    pub fn searches(&self) -> usize {
+        self.searches.load(Ordering::SeqCst)
     }
 
     /// Set the releases that will be returned by `search`.
@@ -168,6 +182,9 @@ impl IndexerHandler for MockIndexer {
         _source: Option<&watch_repo::IndexerSourceRow>,
         _request: IndexerSearchRequest,
     ) -> Result<Vec<Release>, IndexerError> {
+        self.searches.fetch_add(1, Ordering::SeqCst);
+        let delay = *self.search_delay.lock().unwrap();
+        tokio::time::sleep(delay).await;
         Ok(self.search_results.lock().unwrap().clone())
     }
 
