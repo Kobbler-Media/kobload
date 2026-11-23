@@ -205,3 +205,44 @@ async fn test_the_pack_survives_a_full_page_of_single_episodes() {
     );
     rig.tv.server.cleanup().await;
 }
+
+#[tokio::test]
+async fn test_an_episode_search_also_asks_the_indexer_for_the_season() {
+    let show = "Usenet Episode Scoped Show";
+    let rig = UsenetRig::start().await;
+    rig.tv.indexer.set_search_results(vec![rig.nzb(
+        "g-single-episode",
+        &format!("{}.S02E03.1080p.WEB-DL.x264-NZB", show.replace(' ', ".")),
+    )]);
+    rig.tv.indexer.set_season_only_results(vec![
+        rig.nzb("g-season-pack", &pack_title(show)),
+        rig.nzb(
+            "g-single-episode",
+            &format!("{}.S02E03.1080p.WEB-DL.x264-NZB", show.replace(' ', ".")),
+        ),
+    ]);
+
+    let options = episode_options(&rig, show).await;
+    let refs: Vec<_> = of_type(&options, StreamSourceType::Usenet)
+        .iter()
+        .map(|o| o.nzb_ref.clone())
+        .collect();
+    assert_eq!(
+        refs,
+        vec![
+            Some(rig.nzb_ref("g-single-episode")),
+            Some(rig.nzb_ref("g-season-pack"))
+        ],
+        "{options:?}"
+    );
+    assert_eq!(rig.tv.indexer.searches(), 2);
+
+    let cached = episode_options(&rig, show).await;
+    assert_eq!(
+        of_type(&cached, StreamSourceType::Usenet).len(),
+        2,
+        "{cached:?}"
+    );
+    assert_eq!(rig.tv.indexer.searches(), 2);
+    rig.tv.server.cleanup().await;
+}

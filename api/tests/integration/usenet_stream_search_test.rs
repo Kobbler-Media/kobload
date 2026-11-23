@@ -44,7 +44,11 @@ async fn test_usenet_options_are_listed_beside_fast_torrent_candidates() {
     assert_eq!(usenet.len(), 1, "{options:?}");
     assert_eq!(usenet[0].debrid_provider_id, rig.provider);
     assert_eq!(usenet[0].nzb_ref, Some(rig.nzb_ref("g-usenet")));
-    assert_eq!(rig.tv.indexer.searches(), 1);
+    assert_eq!(
+        rig.tv.indexer.searches(),
+        2,
+        "the episode query and one season query"
+    );
     rig.tv.server.cleanup().await;
 }
 
@@ -106,6 +110,10 @@ async fn test_slow_usenet_indexer_is_cut_at_the_deadline_and_cached_for_the_next
         1,
         "the late results serve the next search: {second:?}"
     );
-    assert_eq!(rig.tv.indexer.searches(), 1);
+    assert_eq!(
+        rig.tv.indexer.searches(),
+        2,
+        "the episode query and one season query"
+    );
     rig.tv.server.cleanup().await;
 }

@@ -130,6 +130,7 @@ impl DownloadClientHandler for MockDownloadClient {
 pub struct MockIndexer {
     pub search_results: Mutex<Vec<Release>>,
     pub rss_results: Mutex<Vec<Release>>,
+    season_only_results: Mutex<Option<Vec<Release>>>,
     search_delay: Mutex<Duration>,
     searches: AtomicUsize,
 }
@@ -139,6 +140,7 @@ impl MockIndexer {
         Self {
             search_results: Mutex::new(Vec::new()),
             rss_results: Mutex::new(Vec::new()),
+            season_only_results: Mutex::new(None),
             search_delay: Mutex::new(Duration::ZERO),
             searches: AtomicUsize::new(0),
         }
@@ -155,6 +157,11 @@ impl MockIndexer {
     /// Set the releases that will be returned by `search`.
     pub fn set_search_results(&self, results: Vec<Release>) {
         *self.search_results.lock().unwrap() = results;
+    }
+
+    /// A newznab `ep` search never lists season packs; only a season-only search does.
+    pub fn set_season_only_results(&self, results: Vec<Release>) {
+        *self.season_only_results.lock().unwrap() = Some(results);
     }
 
     /// Set the releases that will be returned by `rss`.
@@ -180,11 +187,16 @@ impl IndexerHandler for MockIndexer {
         &self,
         _ctx: &IndexerContext<'_>,
         _source: Option<&watch_repo::IndexerSourceRow>,
-        _request: IndexerSearchRequest,
+        request: IndexerSearchRequest,
     ) -> Result<Vec<Release>, IndexerError> {
         self.searches.fetch_add(1, Ordering::SeqCst);
         let delay = *self.search_delay.lock().unwrap();
         tokio::time::sleep(delay).await;
+        if request.episode.is_none()
+            && let Some(season_only) = self.season_only_results.lock().unwrap().clone()
+        {
+            return Ok(season_only);
+        }
         Ok(self.search_results.lock().unwrap().clone())
     }
 

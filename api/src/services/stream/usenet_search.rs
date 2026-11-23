@@ -1,10 +1,14 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
+use sqlx::PgPool;
 use tokio::task::JoinHandle;
 use tracing::warn;
+use uuid::Uuid;
 
-use super::indexer_search::{self, is_usenet_source};
+use super::indexer_search::{self, TvScope, is_episode_want, is_usenet_source};
 use super::service::StreamSearchContext;
+use crate::indexers::IndexerResolver;
 use crate::watch::Release;
 use nats_jobs::types::StreamSearchRequest;
 
@@ -32,24 +36,60 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
     // Detached rather than a job: a search cut at the deadline still finishes here and
     // fills the cache, so the next search for the same want lists its releases.
     UsenetSearch::Running(tokio::spawn(async move {
-        let releases: Vec<Release> = match indexer_search::search(
+        let wanted = search(
             &pool,
             &http_client,
             indexers.as_ref(),
             &request,
-            Some(is_usenet_source),
-        )
-        .await
-        {
-            Ok(found) => found,
-            Err(e) => {
-                warn!(error = %e, "Usenet indexer search failed");
+            TvScope::AsWanted,
+        );
+        // A newznab `ep` search lists only that episode's posts, never its season pack.
+        let season = async {
+            if is_episode_want(&request) {
+                search(
+                    &pool,
+                    &http_client,
+                    indexers.as_ref(),
+                    &request,
+                    TvScope::Season,
+                )
+                .await
+            } else {
                 Vec::new()
             }
         };
+        let (mut releases, season) = tokio::join!(wanted, season);
+        let mut seen: HashSet<_> = releases.iter().map(listing_id).collect();
+        releases.extend(season.into_iter().filter(|r| seen.insert(listing_id(r))));
         indexer_search::remember(&key, &releases);
         releases
     }))
+}
+
+fn listing_id(release: &Release) -> (Option<Uuid>, String) {
+    (release.indexer_source_id, release.guid.clone())
+}
+
+async fn search(
+    pool: &PgPool,
+    http_client: &reqwest::Client,
+    indexers: &dyn IndexerResolver,
+    request: &StreamSearchRequest,
+    scope: TvScope,
+) -> Vec<Release> {
+    indexer_search::search(
+        pool,
+        http_client,
+        indexers,
+        request,
+        Some(is_usenet_source),
+        scope,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        warn!(error = %e, "Usenet indexer search failed");
+        Vec::new()
+    })
 }
 
 impl UsenetSearch {

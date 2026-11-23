@@ -615,6 +615,7 @@ pub async fn stream_search(
                 ctx.indexers.as_ref(),
                 request,
                 source_filter,
+                indexer_search::TvScope::AsWanted,
             )
             .await
             {

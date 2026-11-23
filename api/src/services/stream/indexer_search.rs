@@ -22,6 +22,19 @@ const CACHE_SWEEP_ABOVE: usize = 100;
 static RESULT_CACHE: LazyLock<DashMap<String, (Vec<Release>, Instant)>> =
     LazyLock::new(DashMap::new);
 
+#[derive(Clone, Copy)]
+pub enum TvScope {
+    AsWanted,
+    Season,
+}
+
+pub fn is_episode_want(request: &StreamSearchRequest) -> bool {
+    matches!(
+        request.media_want,
+        Some(nats_jobs::MediaWant::TvEpisode { .. })
+    )
+}
+
 pub fn is_usenet_source(source: &IndexerSourceRow) -> bool {
     source.handler_type == "newznab"
 }
@@ -66,6 +79,7 @@ pub async fn search(
     indexers: &dyn IndexerResolver,
     request: &StreamSearchRequest,
     source_filter: Option<SourceFilter>,
+    scope: TvScope,
 ) -> Result<Vec<Release>, String> {
     let external_ids: Vec<ExternalId> = request
         .media_want
@@ -88,7 +102,10 @@ pub async fn search(
     let (season, episode) = match request.media_want.as_ref() {
         Some(nats_jobs::MediaWant::TvEpisode {
             season, episode, ..
-        }) => (Some(season.clone()), Some(episode.clone())),
+        }) => (
+            Some(season.clone()),
+            matches!(scope, TvScope::AsWanted).then(|| episode.clone()),
+        ),
         _ => (None, None),
     };
 
