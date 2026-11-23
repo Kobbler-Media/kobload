@@ -286,13 +286,16 @@ pub async fn search(
         // text search has no TVDB ID filtering and can match the wrong show.
         let text_fallback_blocked = request.media_want.as_ref().is_some_and(|mw| {
             let today = time::OffsetDateTime::now_utc().date();
-            let leniency =
-                time::Duration::days(crate::services::want::scoring::AIR_DATE_LENIENCY_DAYS);
             match mw {
                 nats_jobs::MediaWant::TvEpisode {
-                    air_date: Some(ad), ..
-                } => crate::services::want::scoring::parse_iso_date(ad)
-                    .is_some_and(|d| d - leniency > today),
+                    air_date,
+                    season_premiere,
+                    ..
+                } => crate::services::want::scoring::episode_held_back(
+                    air_date.as_deref(),
+                    season_premiere.as_deref(),
+                    today,
+                ),
                 _ => false,
             }
         });

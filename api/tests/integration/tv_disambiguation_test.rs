@@ -145,6 +145,7 @@ async fn create_tv_episode_pattern(
         identifiers: None,
         alternate_titles: None,
         episode_title: episode_title.map(String::from),
+        season_premiere: None,
         quality_profile_id: None,
         quality_overrides: None,
     };
@@ -656,6 +657,7 @@ async fn test_year_match_release_scores_higher() {
         identifiers: None,
         alternate_titles: None,
         episode_title: None,
+        season_premiere: None,
         quality_profile_id: None,
         quality_overrides: None,
     };
@@ -989,6 +991,7 @@ async fn test_episode_title_boosts_score() {
         identifiers: None,
         alternate_titles: None,
         episode_title: Some("My First Day".to_string()),
+        season_premiere: None,
         quality_profile_id: None,
         quality_overrides: None,
     };

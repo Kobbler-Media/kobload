@@ -144,16 +144,43 @@ impl UsenetEngine {
         percent: u8,
         output: usize,
     ) -> Result<HealthSample, EngineError> {
+        self.release_health(
+            release_key,
+            ("percent", usize::from(percent)),
+            output,
+            HEALTH_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn quick_health(
+        &self,
+        release_key: &str,
+        articles: usize,
+        output: usize,
+        budget: Duration,
+    ) -> Result<HealthSample, EngineError> {
+        self.release_health(release_key, ("articles", articles), output, budget)
+            .await
+    }
+
+    async fn release_health(
+        &self,
+        release_key: &str,
+        amount: (&str, usize),
+        output: usize,
+        timeout: Duration,
+    ) -> Result<HealthSample, EngineError> {
         let resp = self
             .http
             .post(format!(
                 "{}/v1/releases/{release_key}/health",
                 self.settings.engine_url
             ))
-            .query(&[("percent", percent)])
+            .query(&[amount])
             .query(&[("output", output)])
             .bearer_auth(&self.settings.control_key)
-            .timeout(HEALTH_TIMEOUT)
+            .timeout(timeout)
             .send()
             .await?;
         decode(resp).await

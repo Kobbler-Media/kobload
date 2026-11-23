@@ -80,28 +80,7 @@ pub async fn grab_alone(
             process_expired_holds(state).await;
             pattern.id
         }
-        Grabber::WantRoute => {
-            let response = tv
-                .server
-                .admin_client()
-                .post_json(
-                    "/api/v1/want",
-                    &json!({
-                        "source_system": "kobbler",
-                        "source_id": Uuid::now_v7().to_string(),
-                        "callback_url": "http://localhost:1111/callback",
-                        "patterns": kobload_api::media::search_terms_from_media_want(want),
-                        "media_want": want,
-                        "media_type": "tv",
-                        "auto_download": true,
-                        "min_score": 0.75,
-                    }),
-                )
-                .await;
-            response.assert_ok();
-            let body: Value = response.json();
-            body["watch_pattern_id"].as_str().unwrap().parse().unwrap()
-        }
+        Grabber::WantRoute => post_want(tv, want).await,
     };
     let grabbed = tv
         .grabbed(pattern_id)
@@ -116,6 +95,29 @@ pub async fn grab_alone(
         .await
         .unwrap();
     grabbed
+}
+
+pub async fn post_want(tv: &TvWatch, want: &nats_jobs::MediaWant) -> Uuid {
+    let response = tv
+        .server
+        .admin_client()
+        .post_json(
+            "/api/v1/want",
+            &json!({
+                "source_system": "kobbler",
+                "source_id": Uuid::now_v7().to_string(),
+                "callback_url": "http://localhost:1111/callback",
+                "patterns": kobload_api::media::search_terms_from_media_want(want),
+                "media_want": want,
+                "media_type": "tv",
+                "auto_download": true,
+                "min_score": 0.75,
+            }),
+        )
+        .await;
+    response.assert_ok();
+    let body: Value = response.json();
+    body["watch_pattern_id"].as_str().unwrap().parse().unwrap()
 }
 
 /// A hold whose final search finds nothing better grabs the held release

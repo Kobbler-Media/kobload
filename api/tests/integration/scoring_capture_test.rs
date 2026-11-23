@@ -211,7 +211,7 @@ fn replay_is_pinned_to_capture_time() {
     let replay = replay_scoring(&prepared, &releases, SOURCE_ID, None, captured_at());
     // Published at the capture time, so zero days old: the full freshness
     // bonus, whatever today's date is.
-    assert_eq!(replay.matched[0]["freshness_bonus"], json!(0.08));
+    assert_eq!(replay.matched[0]["freshness_bonus"], json!(0.02));
 
     let again = replay_scoring(&prepared, &releases, SOURCE_ID, None, captured_at());
     assert_eq!(

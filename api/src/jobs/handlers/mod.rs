@@ -23,7 +23,7 @@ mod watch_directory_scan_check;
 mod watch_pattern;
 
 pub use backlog_search::BacklogSearchHandler;
-pub use backlog_search::{SearchGates, backlog_search_pattern};
+pub use backlog_search::{SearchGates, backlog_search_pattern, get_patterns_due_for_backlog};
 pub use bitmagnet_sync::BitmagnetSyncHandler;
 pub use cache_cleanup::CacheCleanupHandler;
 pub use definition_update::DefinitionUpdateHandler;

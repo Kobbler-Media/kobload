@@ -6,6 +6,8 @@ use crate::debrid::DebridError;
 /// client after a body abort; it means the copy itself is bad.
 pub const DAMAGE_REASONS: &[&str] = &["missing_articles", "corrupt_articles"];
 
+pub const NO_VIDEO: &str = "no_video";
+
 pub fn is_damage(reason: &str) -> bool {
     DAMAGE_REASONS.contains(&reason.trim().to_ascii_lowercase().as_str())
 }
@@ -35,6 +37,13 @@ pub fn engine_refusal(code: &str) -> String {
         _ => "The usenet engine refused this release",
     };
     format!("{text} ({code})")
+}
+
+pub fn quick_check_failed(checked: usize, missing: usize) -> String {
+    format!(
+        "Usenet release is not cached: a quick check found {missing} of {checked} articles \
+         missing (missing_articles)"
+    )
 }
 
 pub fn import_failed(error: &DebridError) -> String {

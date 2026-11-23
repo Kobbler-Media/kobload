@@ -49,6 +49,26 @@ pub fn option(provider: &RankProvider, release_key: &str, title: &str, score: f6
     }
 }
 
+pub fn usenet_option(
+    provider: &RankProvider,
+    guid: &str,
+    title: &str,
+    score: f64,
+    publish_date: Option<&str>,
+) -> StreamOption {
+    let mut usenet = option(provider, guid, title, score);
+    usenet.id = format!("usenet_{guid}_{}", provider.id);
+    usenet.release_key = None;
+    usenet.nzb_ref = Some(nats_jobs::NzbRef {
+        indexer_id: "idx".to_string(),
+        guid: guid.to_string(),
+    });
+    usenet.debrid_provider = "usenet".to_string();
+    usenet.source_type = StreamSourceType::Usenet;
+    usenet.publish_date = publish_date.map(str::to_string);
+    usenet
+}
+
 pub fn with_file(mut option: StreamOption, file_id: i32) -> StreamOption {
     option.id = format!("{}_f{file_id}", option.id);
     option.files = vec![StreamFile {

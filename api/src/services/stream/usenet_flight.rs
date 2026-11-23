@@ -203,6 +203,7 @@ async fn run(job: ImportJob) -> Imported {
         nzb_base64: None,
     };
     let mut fetched = false;
+    let mut indexer_sent_nzb = true;
     let result = match job.handler.usenet_import(&request).await {
         Err(DebridError::NotFound) => {
             if !job.may_grab {
@@ -214,6 +215,7 @@ async fn run(job: ImportJob) -> Imported {
             match grab(&job).await {
                 Ok(nzb) => {
                     fetched = true;
+                    indexer_sent_nzb = usenet_nzb::is_nzb_document(&nzb);
                     request.nzb_base64 = Some(STANDARD.encode(nzb.as_slice()));
                     job.handler.usenet_import(&request).await
                 }
@@ -231,6 +233,9 @@ async fn run(job: ImportJob) -> Imported {
             let message = import_failed(&e);
             if invalid_nzb(&e) {
                 remember_fetch_failure(&job, &message).await;
+                if indexer_sent_nzb {
+                    remember_refusal(&job, &message).await;
+                }
             } else if refused(&e) {
                 remember_refusal(&job, &message).await;
             }
@@ -253,6 +258,9 @@ async fn fetch_failed(job: &ImportJob, error: &FetchError) -> String {
     let message = error.message();
     if error.remembered() {
         remember_fetch_failure(job, &message).await;
+    }
+    if error.condemns_release() {
+        remember_refusal(job, &message).await;
     }
     message
 }

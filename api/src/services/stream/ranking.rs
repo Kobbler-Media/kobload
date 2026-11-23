@@ -8,6 +8,7 @@ use uuid::Uuid;
 use super::binge;
 use super::continuity::{self, Continuity};
 use super::outcomes;
+use super::rank_key::{RankFacts, RankKey};
 use super::release_fit;
 use super::trait_risk::{self, TraitRisk};
 use crate::language::{self, LanguageFit};
@@ -80,22 +81,9 @@ pub struct RankPreferences<'a> {
     pub audio_languages: &'a [String],
 }
 
-/// (cannot start now, hardcoded subtitles, group, wrong language, suspect fake, continuity,
-/// risk bucket, not RD+)
-type RankKey = (
-    bool,
-    bool,
-    StreamGroup,
-    bool,
-    bool,
-    continuity::Rank,
-    u8,
-    bool,
-);
-
 /// A release that played starts again; its availability only matters once a probe says
-/// it is gone. Below the played and on-account releases the rest run by quality, with
-/// whatever already failed for us at the bottom.
+/// it is gone. Copies on the account share a section with the hints they compete with on
+/// score, and whatever already failed for us is at the bottom.
 fn group(availability: KnownAvailability, played: bool, playback_failed: bool) -> StreamGroup {
     use KnownAvailability as A;
     match availability {
@@ -103,9 +91,7 @@ fn group(availability: KnownAvailability, played: bool, playback_failed: bool) -
         A::Dead | A::Blocked => StreamGroup::Failed,
         A::LikelyDead | A::LikelyRefused => StreamGroup::Uncached,
         _ if played => StreamGroup::Played,
-        // A probe that found it ready keeps the torrent for playback, so it is on the account.
-        A::InAccount | A::Available => StreamGroup::Account,
-        A::LikelyAvailable | A::Unknown => StreamGroup::Available,
+        A::InAccount | A::Available | A::LikelyAvailable | A::Unknown => StreamGroup::Available,
     }
 }
 
@@ -122,11 +108,11 @@ fn exposed(availability: KnownAvailability, played: bool) -> StreamAvailability 
 
 /// Order is: releases that can start now; then hardcoded subtitles sink, ahead of the group,
 /// as a picture with burned-in subtitles is no use however readily it plays; then the
-/// group; then releases without a preferred audio language sink; then fakes
-/// sink; then continuity with what the caller played before; then learned name risk; then
-/// Torrentio's RD+ ahead of releases nobody has vouched for; then
-/// score, discounted for releases many devices cannot play, whose default audio track is
-/// not the preferred language, or that look different from the previous episode.
+/// group. Among available releases, cached ones (on the account, probed ready, RD+ or our
+/// usenet engine) rank above unvouched ones and compete on score, with a small edge for a
+/// copy certain to start; see `RankKey` for how language, fakes, continuity and learned risk
+/// fit in. Score is discounted for releases many devices cannot play, whose default audio
+/// track is not the preferred language, or that look different from the previous episode.
 /// The pack the previous episode played from ranks as played: the next episode in it was
 /// selected along with that one.
 /// The group is a hard tier rather than a score bonus: score ranges shift per quality
@@ -264,17 +250,21 @@ pub async fn rank_options(
                 option.playback == Some(StreamPlayback::Failed),
             );
             option.group = Some(group);
-            let key = (
-                group >= StreamGroup::Uncached,
-                quality.is_hardcoded_subs,
+            let facts = RankFacts {
                 group,
-                language_fit == LanguageFit::Missing,
-                fit.suspect,
-                continuity_rank,
-                risk.bucket(),
-                availability != KnownAvailability::LikelyAvailable,
-            );
-            (key, fit.sort_score - penalty * fit.sort_score.abs(), option)
+                hardcoded: quality.is_hardcoded_subs,
+                language_missing: language_fit == LanguageFit::Missing,
+                suspect: fit.suspect,
+                continuity: continuity_rank,
+                risk: risk.bucket(),
+                ready: matches!(
+                    availability,
+                    KnownAvailability::InAccount | KnownAvailability::Available
+                ),
+                likely: availability == KnownAvailability::LikelyAvailable,
+            };
+            let score = fit.sort_score - penalty * fit.sort_score.abs() + facts.score_edge();
+            (facts.key(), score, option)
         })
         .collect();
     keyed.sort_by(|(ka, sa, _), (kb, sb, _)| ka.cmp(kb).then(sb.total_cmp(sa)));

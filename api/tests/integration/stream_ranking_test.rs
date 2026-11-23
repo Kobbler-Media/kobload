@@ -1,12 +1,12 @@
 use crate::common;
 
 use common::TestServer;
-use common::stream_fixtures::{create_provider, hash, option, unknown};
+use common::stream_fixtures::{create_provider, hash, option, unknown, usenet_option};
 use kobload_api::services::stream::warm_cache::UnavailableReason;
 use kobload_api::services::stream::{
     KnownAvailability, RankCandidate, RankPreferences, RankProvider, outcomes, rank_options,
 };
-use nats_jobs::types::{StreamAvailability, StreamGroup, StreamOption};
+use nats_jobs::types::{StreamAvailability, StreamGroup, StreamOption, StreamPreference};
 use reqwest::StatusCode;
 use serde_json::json;
 
@@ -36,7 +36,7 @@ fn with(option: StreamOption, availability: KnownAvailability) -> RankCandidate 
 }
 
 #[tokio::test]
-async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
+async fn test_groups_run_played_cached_unknown_uncached_then_failed() {
     let server = TestServer::start().await;
     let p = create_provider(&server.pool, "real_debrid").await;
     let played = "Movie.2024.720p.BluRay.x264-GGG";
@@ -109,9 +109,9 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
         titles(&out),
         vec![
             played,
+            "Movie.2024.1080p.BluRay.x264-EEE",
             "Movie.2024.1080p.BluRay.x264-FFF",
             "Movie.2024.720p.BluRay.x264-III",
-            "Movie.2024.1080p.BluRay.x264-EEE",
             "Movie.2024.1080p.BluRay.x264-DDD",
             "Movie.2024.1080p.ZQX.x264-CCC",
             "Movie.2024.2160p.BluRay.x265-JJJ",
@@ -119,16 +119,16 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
             "Movie.2024.1080p.BluRay.x264-HHH",
             "Movie.2024.1080p.BluRay.x264-BBB",
         ],
-        "played > on account (held or probed ready) > learned refusal risk, then Torrentio RD+ \
-         over unknown > uncached, likely refused included > failed"
+        "played > cached (on account, probed ready and RD+) by score > learned refusal risk, \
+         then unknown > uncached, likely refused included > failed"
     );
     use StreamGroup as G;
     assert_eq!(
         out.iter().map(|o| o.group).collect::<Vec<_>>(),
         [
             G::Played,
-            G::Account,
-            G::Account,
+            G::Available,
+            G::Available,
             G::Available,
             G::Available,
             G::Available,
@@ -144,9 +144,9 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
         out.iter().map(|o| o.availability).collect::<Vec<_>>(),
         vec![
             Some(Likely),
-            Some(Ready),
-            Some(Ready),
             Some(Likely),
+            Some(Ready),
+            Some(Ready),
             Some(Unknown),
             Some(Likely),
             Some(Uncached),
@@ -161,6 +161,183 @@ async fn test_groups_run_played_account_by_quality_uncached_then_failed() {
             .map(|o| o.availability == Some(Ready))
             .collect::<Vec<_>>(),
         "cached means ready, nothing weaker"
+    );
+    server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_the_best_scored_cached_copy_wins() {
+    use KnownAvailability::{Available, InAccount, LikelyAvailable, Unknown};
+    let server = TestServer::start().await;
+    let p = create_provider(&server.pool, "real_debrid").await;
+    const HELD: &str = "Movie.2023.1080p.BluRay.x264-YTS";
+    const MARKED: &str = "Movie.2023.2160p.BluRay.REPACK.x265-RDPLUS";
+    let cases = [
+        (
+            "Oppenheimer: a clearly better RD+",
+            InAccount,
+            1.71,
+            LikelyAvailable,
+            2.33,
+            MARKED,
+        ),
+        (
+            "Top Gun: a clearly better RD+",
+            InAccount,
+            1.76,
+            LikelyAvailable,
+            2.17,
+            MARKED,
+        ),
+        (
+            "Dune: the held copy wins a close call",
+            InAccount,
+            2.05,
+            LikelyAvailable,
+            2.07,
+            HELD,
+        ),
+        (
+            "a probe's ready copy has the same edge",
+            Available,
+            2.05,
+            LikelyAvailable,
+            2.07,
+            HELD,
+        ),
+        (
+            "past the edge the better copy wins",
+            Available,
+            2.05,
+            LikelyAvailable,
+            2.16,
+            MARKED,
+        ),
+        (
+            "cached beats any unmarked score",
+            InAccount,
+            1.0,
+            Unknown,
+            9.0,
+            HELD,
+        ),
+        (
+            "RD+ beats any unmarked score",
+            LikelyAvailable,
+            1.0,
+            Unknown,
+            9.0,
+            HELD,
+        ),
+    ];
+    for (label, first, first_score, second, second_score, want) in cases {
+        let candidates = vec![
+            with(option(&p, &hash('a'), HELD, first_score), first),
+            with(option(&p, &hash('b'), MARKED, second_score), second),
+        ];
+        let out = ranked(&server, &p, candidates).await;
+        assert_eq!(out[0].release_title, want, "{label}");
+        assert!(
+            out.iter().all(|o| o.group == Some(StreamGroup::Available)),
+            "{label}: one section"
+        );
+        let label_of = |title: &str| {
+            out.iter()
+                .find(|o| o.release_title == title)
+                .and_then(|o| o.availability)
+        };
+        let truthful = |a: KnownAvailability| match a {
+            InAccount | Available => StreamAvailability::Ready,
+            LikelyAvailable => StreamAvailability::Likely,
+            _ => StreamAvailability::Unknown,
+        };
+        assert_eq!(label_of(HELD), Some(truthful(first)), "{label}");
+        assert_eq!(label_of(MARKED), Some(truthful(second)), "{label}");
+    }
+    server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_a_held_copy_competes_with_engine_usenet_on_score() {
+    let server = TestServer::start().await;
+    let p = create_provider(&server.pool, "real_debrid").await;
+    const HELD: &str = "Movie.2023.1080p.BluRay.x264-YTS";
+    const NZB: &str = "Movie.2023.2160p.BluRay.x265-NZB";
+    let candidates = vec![
+        with(
+            option(&p, &hash('a'), HELD, 1.71),
+            KnownAvailability::InAccount,
+        ),
+        with(
+            usenet_option(&p, "g-nzb", NZB, 2.33, None),
+            KnownAvailability::LikelyAvailable,
+        ),
+    ];
+    assert_eq!(titles(&ranked(&server, &p, candidates).await), [NZB, HELD]);
+    server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_cached_tier_keeps_language_and_outranks_continuity() {
+    let server = TestServer::start().await;
+    let p = create_provider(&server.pool, "real_debrid").await;
+    const HELD_ITA: &str = "Show.S01E02.ITA.1080p.WEB-HELD";
+    const MARKED: &str = "Show.S01E02.1080p.WEB-MARKED";
+    const SAME_GROUP: &str = "Show.S01E02.1080p.WEB-AAA";
+    let languages = ["eng".to_string()];
+    let out = rank_options(
+        &server.pool,
+        &p,
+        vec![
+            with(
+                option(&p, &hash('a'), HELD_ITA, 9.0),
+                KnownAvailability::InAccount,
+            ),
+            with(
+                option(&p, &hash('b'), MARKED, 1.0),
+                KnownAvailability::LikelyAvailable,
+            ),
+        ],
+        &RankPreferences {
+            prefer: None,
+            audio_languages: &languages,
+        },
+    )
+    .await;
+    assert_eq!(
+        titles(&out),
+        [MARKED, HELD_ITA],
+        "a held copy in the wrong language"
+    );
+
+    let prefer = StreamPreference {
+        release_key: hash('e'),
+        file_id: None,
+        release_title: Some("Show.S01E01.1080p.WEB-AAA".to_string()),
+    };
+    let out = rank_options(
+        &server.pool,
+        &p,
+        vec![
+            with(
+                option(&p, &hash('c'), SAME_GROUP, 9.0),
+                KnownAvailability::Unknown,
+            ),
+            with(
+                option(&p, &hash('d'), MARKED, 1.0),
+                KnownAvailability::LikelyAvailable,
+            ),
+        ],
+        &RankPreferences {
+            prefer: Some(&prefer),
+            audio_languages: &[],
+        },
+    )
+    .await;
+    assert_eq!(
+        titles(&out),
+        [MARKED, SAME_GROUP],
+        "cached beats an unvouched same group"
     );
     server.cleanup().await;
 }

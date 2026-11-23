@@ -6,6 +6,7 @@ use crate::redirect_guard::Origin;
 
 /// Season-pack NZBs run to tens of MB; anything past this is not an NZB worth importing.
 pub const MAX_NZB_BYTES: usize = 128 << 20;
+const NZB_ROOT_WINDOW: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub enum FetchError {
@@ -30,6 +31,25 @@ impl FetchError {
     pub fn remembered(&self) -> bool {
         !matches!(self, Self::Unreachable(_))
     }
+
+    /// Whether the answer is about this release. Auth failures, rate limits and outages
+    /// would otherwise demote every release the indexer is asked for.
+    pub fn condemns_release(&self) -> bool {
+        match self {
+            Self::Refused(status) => matches!(status.as_u16(), 404 | 410),
+            Self::TooLarge => true,
+            Self::Unreachable(_) => false,
+        }
+    }
+}
+
+// Indexers report API limits as an XML error with a 200, which the engine can only call an
+// invalid NZB.
+pub fn is_nzb_document(body: &[u8]) -> bool {
+    body[..body.len().min(NZB_ROOT_WINDOW)]
+        .to_ascii_lowercase()
+        .windows(4)
+        .any(|w| w == b"<nzb")
 }
 
 /// The URL carries the indexer's API key, so neither it nor reqwest's error (which quotes

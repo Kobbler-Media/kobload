@@ -41,6 +41,7 @@ async fn serve(app: Router) -> String {
 pub struct HealthCall {
     pub guid: String,
     pub percent: Option<u8>,
+    pub articles: Option<usize>,
     pub output: Option<usize>,
 }
 
@@ -57,6 +58,8 @@ struct EngineState {
     health: HashMap<(String, Option<usize>), HealthSample>,
     health_calls: Vec<HealthCall>,
     health_delay: Duration,
+    quick_delay: Duration,
+    quick_status: Option<StatusCode>,
     config_refreshes: usize,
 }
 
@@ -157,18 +160,27 @@ async fn health(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let percent = query.get("percent").and_then(|p| p.parse().ok());
+    let articles: Option<usize> = query.get("articles").and_then(|p| p.parse().ok());
     let output = query.get("output").and_then(|p| p.parse().ok());
-    let delay = {
+    let (delay, refused) = {
         let mut s = state.lock().unwrap();
         let guid = s.guid_of.get(&key).cloned().unwrap_or_default();
         s.health_calls.push(HealthCall {
             guid,
             percent,
+            articles,
             output,
         });
-        s.health_delay
+        if articles.is_some() {
+            (s.quick_delay, s.quick_status)
+        } else {
+            (s.health_delay, None)
+        }
     };
     tokio::time::sleep(delay).await;
+    if let Some(status) = refused {
+        return (status, Json(json!({ "error": "internal" }))).into_response();
+    }
     let s = state.lock().unwrap();
     if !s.by_release_key.contains_key(&key) {
         return (
@@ -295,6 +307,21 @@ impl MockEngine {
         self.state.lock().unwrap().health_delay = delay;
     }
 
+    pub fn quick_check_delay(&self, delay: Duration) {
+        self.state.lock().unwrap().quick_delay = delay;
+    }
+
+    pub fn quick_check_status(&self, status: StatusCode) {
+        self.state.lock().unwrap().quick_status = Some(status);
+    }
+
+    pub fn quick_checks(&self) -> Vec<HealthCall> {
+        self.health_calls()
+            .into_iter()
+            .filter(|c| c.articles.is_some())
+            .collect()
+    }
+
     pub fn health_calls(&self) -> Vec<HealthCall> {
         self.state.lock().unwrap().health_calls.clone()
     }
@@ -332,6 +359,7 @@ impl MockEngine {
 pub enum Served {
     Status(StatusCode),
     Huge,
+    Body(&'static str),
 }
 
 #[derive(Default)]
@@ -361,6 +389,7 @@ async fn nzb(
     };
     match served {
         Some(Served::Status(status)) => status.into_response(),
+        Some(Served::Body(body)) => body.into_response(),
         Some(Served::Huge) => {
             let chunk = axum::body::Bytes::from(vec![b' '; 1 << 20]);
             let body = futures::stream::iter(

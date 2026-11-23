@@ -9,10 +9,13 @@ use uuid::Uuid;
 use super::outcomes::record_report;
 use crate::usenet::UsenetEngine;
 use nats_jobs::types::StreamOutcomeReport;
+use usenet_proto::HealthSample;
 
 const SAMPLE_PERCENT: u8 = 5;
 const RESAMPLE_AFTER: Duration = Duration::from_secs(6 * 3600);
 const MISSING: &str = "missing_articles";
+const QUICK_ARTICLES: usize = 64;
+const QUICK_BUDGET: Duration = Duration::from_secs(2);
 
 type SampleKey = (Uuid, String, usize);
 
@@ -78,9 +81,38 @@ async fn sample(s: &Sampled) -> bool {
         missing = sample.missing,
         "Usenet health sampled"
     );
+    sample.missing == 0 || demote(s).await
+}
+
+/// Answers with the damage it found. A check that cannot answer says nothing about the
+/// release, so it never costs the release its warm.
+pub async fn quick_check(s: &Sampled) -> Option<HealthSample> {
+    let sample = match s
+        .engine
+        .quick_health(&s.release_key, QUICK_ARTICLES, s.output, QUICK_BUDGET)
+        .await
+    {
+        Ok(sample) => sample,
+        Err(e) => {
+            warn!(release_key = %s.release_key, output = s.output, error = %e, "Usenet quick article check failed");
+            return None;
+        }
+    };
     if sample.missing == 0 {
-        return true;
+        return None;
     }
+    info!(
+        release_key = %s.release_key,
+        output = s.output,
+        checked = sample.checked,
+        missing = sample.missing,
+        "Usenet quick article check found damage"
+    );
+    demote(s).await;
+    Some(sample)
+}
+
+async fn demote(s: &Sampled) -> bool {
     let report = StreamOutcomeReport {
         debrid_provider_id: Some(s.provider_id),
         release_key: s.release_key.clone(),

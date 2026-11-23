@@ -131,6 +131,7 @@ pub struct MockIndexer {
     pub search_results: Mutex<Vec<Release>>,
     pub rss_results: Mutex<Vec<Release>>,
     season_only_results: Mutex<Option<Vec<Release>>>,
+    per_episode_results: Mutex<Option<Vec<Release>>>,
     search_delay: Mutex<Duration>,
     searches: AtomicUsize,
 }
@@ -141,6 +142,7 @@ impl MockIndexer {
             search_results: Mutex::new(Vec::new()),
             rss_results: Mutex::new(Vec::new()),
             season_only_results: Mutex::new(None),
+            per_episode_results: Mutex::new(None),
             search_delay: Mutex::new(Duration::ZERO),
             searches: AtomicUsize::new(0),
         }
@@ -164,10 +166,24 @@ impl MockIndexer {
         *self.season_only_results.lock().unwrap() = Some(results);
     }
 
+    /// A text query naming an episode (`S02E03`) finds only that episode's
+    /// releases from these; any other query gets the plain search results.
+    pub fn set_per_episode_results(&self, results: Vec<Release>) {
+        *self.per_episode_results.lock().unwrap() = Some(results);
+    }
+
     /// Set the releases that will be returned by `rss`.
     pub fn set_rss_results(&self, results: Vec<Release>) {
         *self.rss_results.lock().unwrap() = results;
     }
+}
+
+fn is_episode_token(word: &str) -> bool {
+    let bytes = word.as_bytes();
+    bytes.len() == 6
+        && bytes[0] == b'S'
+        && bytes[3] == b'E'
+        && [1, 2, 4, 5].iter().all(|&i| bytes[i].is_ascii_digit())
 }
 
 #[async_trait]
@@ -192,6 +208,18 @@ impl IndexerHandler for MockIndexer {
         self.searches.fetch_add(1, Ordering::SeqCst);
         let delay = *self.search_delay.lock().unwrap();
         tokio::time::sleep(delay).await;
+        if let Some(per_episode) = self.per_episode_results.lock().unwrap().as_ref()
+            && let Some(token) = request
+                .query
+                .split_whitespace()
+                .find(|w| is_episode_token(w))
+        {
+            return Ok(per_episode
+                .iter()
+                .filter(|r| r.title.contains(token))
+                .cloned()
+                .collect());
+        }
         if request.episode.is_none()
             && let Some(season_only) = self.season_only_results.lock().unwrap().clone()
         {

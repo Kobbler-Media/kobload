@@ -9,7 +9,7 @@ use super::ranking::{KnownAvailability, RankCandidate};
 use super::usenet_files;
 use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::repositories::usenet_releases::{self, Listing};
-use crate::usenet::outputs::{Target, listed_files};
+use crate::usenet::outputs::{Target, choose, listed_files};
 use crate::watch::{ProcessedRelease, Release};
 use nats_jobs::types::{StreamOption, StreamSourceType};
 
@@ -150,6 +150,11 @@ pub async fn remember(
     for c in candidates.iter_mut().filter(|c| on_engine(c)) {
         if let Some(outputs) = c.option.release_key.as_ref().and_then(|k| files.get(k)) {
             c.option.files = listed_files(outputs, wanted);
+            // Judged per search from the file list, so a pack missing this episode stays
+            // the pick for the episodes it does hold.
+            if choose(outputs, None, wanted).is_err() {
+                c.availability = KnownAvailability::Dead;
+            }
         }
     }
 }

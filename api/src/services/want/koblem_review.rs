@@ -634,6 +634,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
         };

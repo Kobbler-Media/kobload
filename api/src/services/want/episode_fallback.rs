@@ -65,37 +65,11 @@ pub(super) async fn run_episode_fallback(
     preferred_protocol: Option<&str>,
     upgrade_ctx: &super::EpisodeUpgradeContext,
 ) -> Result<EpisodeFallbackResult, String> {
-    // Filter out unaired episodes — never search for episodes that haven't aired yet.
-    // Once we hit an episode with a future air_date, stop — subsequent episodes
-    // (including those with no air_date) are presumed to not yet be available.
-    // Sort by sort_order first (episodes_needed may be string-sorted: "1","10","2"...).
-    let today = time::OffsetDateTime::now_utc().date();
-    let mut sorted_eps: Vec<&EpisodeRef> = episodes_needed.iter().collect();
-    sorted_eps.sort_by_key(|ep| {
-        ep.sort_order
-            .unwrap_or(ep.episode.parse::<i32>().unwrap_or(999))
-    });
-    let mut hit_future = false;
-    let aired_episodes: Vec<&EpisodeRef> = sorted_eps
-        .into_iter()
-        .filter(|ep| {
-            if hit_future {
-                return false;
-            }
-            if let Some(d) = ep
-                .air_date
-                .as_deref()
-                .and_then(super::scoring::parse_iso_date)
-                && d > today
-            {
-                hit_future = true;
-                return false;
-            }
-            true
-        })
-        .collect();
+    let today = crate::clock::now_utc().date();
+    let search_episodes = super::scoring::episodes_to_search(episodes_needed, today);
 
-    let needed_set: HashSet<String> = aired_episodes.iter().map(|e| e.episode.clone()).collect();
+    let mut needed_set: HashSet<String> =
+        search_episodes.iter().map(|e| e.episode.clone()).collect();
     let mut covered: HashSet<String> = HashSet::new();
     let mut first_download_id = None;
     let mut first_release = None;
@@ -119,8 +93,9 @@ pub(super) async fn run_episode_fallback(
     )
     .await;
 
-    // Phase 2: Pluck from existing results (aired episodes only)
-    let episode_targets: Vec<MatchTarget> = aired_episodes
+    // Phase 2: Pluck from existing results. Costs no search, so scoring alone
+    // decides which episodes qualify.
+    let episode_targets: Vec<MatchTarget> = episodes_needed
         .iter()
         .map(|ep| episode_match_target(show_name, season, &ep.episode))
         .collect();
@@ -293,8 +268,8 @@ pub(super) async fn run_episode_fallback(
         }
     }
 
-    // Phase 3: Search for remaining gaps (aired episodes only)
-    let missing: Vec<&&EpisodeRef> = aired_episodes
+    // Phase 3: Search for remaining gaps
+    let missing: Vec<&&EpisodeRef> = search_episodes
         .iter()
         .filter(|ep| !covered.contains(&ep.episode))
         .collect();
@@ -504,6 +479,7 @@ pub(super) async fn run_episode_fallback(
         }
     }
 
+    needed_set.extend(covered.iter().cloned());
     let episodes_downloaded: Vec<String> = needed_set
         .iter()
         .filter(|e| covered.contains(*e))

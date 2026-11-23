@@ -49,6 +49,9 @@ pub(crate) const UNSOURCED_NEW_MOVIE_DAYS: i64 = 365;
 /// earlier than the date suggests). The check becomes air_date - N > today,
 /// so only episodes airing more than N days from now are rejected.
 pub(crate) const AIR_DATE_LENIENCY_DAYS: i64 = 1;
+pub(crate) use early_episode::{
+    EARLY_SEARCH_INTERVAL_HOURS, early_search_horizon, episode_held_back, episodes_to_search,
+};
 
 /// Reject releases with sufficiently negative community votes.
 /// Returns the rejection reason if votes are below threshold.
@@ -74,25 +77,28 @@ fn seeder_tiebreaker(release: &Release) -> f64 {
     (seeders + 1.0).log2() * 0.005
 }
 
-/// Freshness tiebreaker: prefer newer releases over older ones.
-/// Especially important for usenet where old files get removed.
-/// Returns 0.0..0.08 — enough to break ties but not override quality.
+// Stays under the smallest step a quality profile awards (preferred audio, 0.05), so age
+// breaks ties between similar releases and never overrides quality.
+const USENET_FRESHNESS_MAX: f64 = 0.04;
+const TORRENT_FRESHNESS_MAX: f64 = USENET_FRESHNESS_MAX / 2.0;
+const FRESHNESS_HORIZON_DAYS: f64 = 5000.0;
+
+/// Logarithmic, so days against years counts and 1000 against 1100 days barely does.
 pub fn freshness_tiebreaker(release: &Release) -> f64 {
-    let Ok(publish_date) = time::OffsetDateTime::parse(
-        &release.publish_date,
-        &time::format_description::well_known::Rfc3339,
-    ) else {
+    use time::format_description::well_known::{Rfc2822, Rfc3339};
+    let Ok(publish_date) = time::OffsetDateTime::parse(&release.publish_date, &Rfc2822)
+        .or_else(|_| time::OffsetDateTime::parse(&release.publish_date, &Rfc3339))
+    else {
         return 0.0;
     };
     let age_days = (crate::clock::now_utc() - publish_date).whole_days().max(0) as f64;
-    // Decay curve: 0.08 at 0 days, ~0.04 at 30 days, ~0.02 at 90 days, ~0.0 at 365+
-    // Usenet gets a 2x multiplier since old posts are more likely to be incomplete
-    let base = 0.08 * (-age_days / 120.0_f64).exp();
-    if release.protocol == "usenet" {
-        (base * 2.0).min(0.08)
+    let decay = (1.0 - (1.0 + age_days).ln() / (1.0 + FRESHNESS_HORIZON_DAYS).ln()).max(0.0);
+    let max = if release.protocol == "usenet" {
+        USENET_FRESHNESS_MAX
     } else {
-        base
-    }
+        TORRENT_FRESHNESS_MAX
+    };
+    max * decay
 }
 
 /// How the want's episode or season is numbered on scene releases, so the
@@ -1559,13 +1565,12 @@ fn structural_reject_judged(
         }
     };
 
-    // TvEpisode: reject if air_date hasn't passed (with context-dependent buffer)
     if let MediaWant::TvEpisode {
-        air_date: Some(air_date_str),
+        air_date,
+        season_premiere,
         ..
     } = media_want
-        && let Some(air_date) = parse_iso_date(air_date_str)
-        && air_date - time::Duration::days(air_date_leniency) > today
+        && episode_held_back(air_date.as_deref(), season_premiere.as_deref(), today)
     {
         return Some(StructuralRejectReason::UnairedEpisode);
     }
@@ -1612,12 +1617,11 @@ fn structural_reject_judged(
     {
         // A season that has not started airing should have no releases at all,
         // so anything claiming to be one is mislabelled or fake.
-        if let Some(premiere) = eps
+        let premiere = eps
             .iter()
             .filter_map(|er| er.air_date.as_deref().and_then(parse_iso_date))
-            .min()
-            && premiere - time::Duration::days(air_date_leniency) > today
-        {
+            .min();
+        if !early_episode::may_be_out(None, premiere, today) {
             return Some(StructuralRejectReason::UnairedEpisode);
         }
 
@@ -1680,7 +1684,15 @@ fn structural_reject_judged(
     };
 
     if let Some((dated_want_date, dated_want_year)) = match media_want {
-        MediaWant::TvEpisode { air_date, year, .. } => Some((air_date.as_deref(), *year)),
+        MediaWant::TvEpisode {
+            air_date,
+            season_premiere,
+            year,
+            ..
+        } => Some((
+            early_episode::known_premiere(season_premiere.as_deref()).or(air_date.as_deref()),
+            *year,
+        )),
         MediaWant::TvSeason { year, .. } => Some((tv_season_premiere_air_date, *year)),
         // A sport session's footage cannot be published before the session was
         // run, so the same "published too far before the date" rule applies —
@@ -2071,6 +2083,7 @@ pub fn group_by_target_id(
 }
 
 mod book;
+mod early_episode;
 #[cfg(test)]
 mod reference;
 mod sport;
@@ -2127,6 +2140,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -2151,6 +2165,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -2175,6 +2190,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -2223,6 +2239,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -2441,6 +2458,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
         };
@@ -2484,6 +2502,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
         };
@@ -2515,6 +2534,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
         };
@@ -2551,6 +2571,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
         };
@@ -2584,6 +2605,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
         };
@@ -2823,6 +2845,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -2844,6 +2867,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -2865,6 +2889,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -3087,6 +3112,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -3168,6 +3194,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4016,6 +4043,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4038,6 +4066,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4060,6 +4089,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4082,6 +4112,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4105,6 +4136,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4127,6 +4159,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4200,6 +4233,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -4222,6 +4256,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: None,
@@ -5524,6 +5559,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: Some(today_str),
@@ -5561,6 +5597,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: Some(tomorrow_str),
@@ -5599,6 +5636,7 @@ mod tests {
             identifiers: None,
             alternate_titles: None,
             episode_title: None,
+            season_premiere: None,
             quality_profile_id: None,
             quality_overrides: None,
             air_date: Some(future_str),

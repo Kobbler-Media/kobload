@@ -50,6 +50,7 @@ fn call(guid: &str, output: usize) -> HealthCall {
     HealthCall {
         guid: guid.to_string(),
         percent: Some(5),
+        articles: None,
         output: Some(output),
     }
 }

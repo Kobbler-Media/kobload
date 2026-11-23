@@ -18,6 +18,7 @@ async fn a_health_sample_counts_missing_articles_of_an_imported_release() {
         async move { harness.control("POST", &uri, None).await }
     };
 
+    let bodies = nntp.body_commands();
     let full = health("?percent=100").await;
     assert_eq!(full.status(), StatusCode::OK);
     assert_eq!(
@@ -36,16 +37,26 @@ async fn a_health_sample_counts_missing_articles_of_an_imported_release() {
         "{sampled:?}"
     );
 
-    let default: HealthSample = json(health("").await).await;
+    let quick: HealthSample = json(health("?articles=4&output=0").await).await;
+    assert_eq!(quick.checked, 4);
     assert_eq!(
-        default.checked, sampled.checked,
-        "5% unless asked otherwise"
+        nntp.body_commands(),
+        bodies,
+        "a quick check never fetches bodies"
     );
+
+    for invalid in ["", "?output=0", "?percent=5&articles=4", "?articles=0"] {
+        assert_eq!(
+            health(invalid).await.status(),
+            StatusCode::BAD_REQUEST,
+            "{invalid:?}"
+        );
+    }
 
     let one_file: HealthSample = json(health("?percent=100&output=1").await).await;
     assert!(one_file.checked > 0, "{one_file:?}");
     assert_eq!(
-        health("?output=2").await.status(),
+        health("?percent=100&output=2").await.status(),
         StatusCode::NOT_FOUND,
         "the season has two outputs"
     );
@@ -53,7 +64,7 @@ async fn a_health_sample_counts_missing_articles_of_an_imported_release() {
     let unknown = harness
         .control(
             "POST",
-            &format!("/v1/releases/nzb-{}/health", "0".repeat(64)),
+            &format!("/v1/releases/nzb-{}/health?percent=5", "0".repeat(64)),
             None,
         )
         .await;

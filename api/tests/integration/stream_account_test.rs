@@ -51,7 +51,7 @@ async fn test_search_offers_held_copies_first_and_refused_releases_last() {
             .map(|o| (o.release_title.as_str(), o.group))
             .collect::<Vec<_>>(),
         vec![
-            (HELD, Some(StreamGroup::Account)),
+            (HELD, Some(StreamGroup::Available)),
             (FRESH, Some(StreamGroup::Available)),
             (REFUSED, Some(StreamGroup::Failed)),
         ]

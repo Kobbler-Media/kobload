@@ -16,6 +16,7 @@ use crate::jobs::worker::JobHandler;
 use crate::media::{episode_match_target, episode_search_terms};
 use crate::repositories::{app_settings, watch as watch_repo};
 use crate::services::search::{CascadedSearchParams, search_all_sources_cascaded};
+use crate::services::want::scoring;
 use crate::state::AppState;
 use crate::watch::episode_key;
 use async_trait::async_trait;
@@ -170,7 +171,7 @@ impl JobHandler for BacklogSearchHandler {
 /// - Are enabled
 /// - Don't have an active download
 /// - Haven't been searched recently (based on backlog_search_interval_hours)
-async fn get_patterns_due_for_backlog(
+pub async fn get_patterns_due_for_backlog(
     pool: &sqlx::PgPool,
     limit: i64,
 ) -> Result<Vec<watch_repo::WatchPatternRow>, sqlx::Error> {
@@ -181,19 +182,56 @@ async fn get_patterns_due_for_backlog(
     // backlog job waits the full interval before touching it. Closes the race
     // where a want and a backlog cycle both grabbed a fresh pattern and each
     // downloaded a different release.
+    // A want whose next listed episode is close gets its own slower-than-RSS
+    // cadence, and a lone episode further out costs no searches at all: it is
+    // still accepted if RSS or a stream search turns it up.
+    let today = crate::clock::now_utc().date();
     sqlx::query_as::<_, watch_repo::WatchPatternRow>(
         r#"
-        SELECT * FROM watch_patterns
-        WHERE enabled = TRUE
-          AND (search_not_before IS NULL OR search_not_before <= NOW())
-          AND COALESCE(last_backlog_search_at, created_at)
-              < NOW() - (COALESCE(backlog_search_interval_hours, $1) * INTERVAL '1 hour')
-        ORDER BY COALESCE(last_backlog_search_at, created_at), created_at
+        SELECT wp.* FROM watch_patterns wp
+        CROSS JOIN LATERAL (
+            SELECT MIN(listed.day) FILTER (WHERE listed.day > $3::date) AS next_air
+            FROM (
+                SELECT CASE
+                    WHEN raw ~ '^\d{4}-\d{2}-\d{2}$' AND pg_input_is_valid(raw, 'date')
+                    THEN raw::date
+                END AS day
+                FROM (
+                    SELECT wp.media_want->>'air_date' AS raw
+                    WHERE wp.media_want->>'kind' = 'tv_episode'
+                    UNION ALL
+                    SELECT ep->>'air_date'
+                    FROM jsonb_array_elements(
+                        CASE WHEN wp.media_want->>'kind' = 'tv_season'
+                              AND jsonb_typeof(wp.media_want->'episodes_needed') = 'array'
+                             THEN wp.media_want->'episodes_needed'
+                             ELSE '[]'::jsonb
+                        END
+                    ) AS ep
+                    WHERE ep->>'in_library' IS DISTINCT FROM 'true'
+                ) dates
+            ) listed
+        ) air
+        WHERE wp.enabled = TRUE
+          AND (wp.search_not_before IS NULL OR wp.search_not_before <= NOW())
+          AND (wp.media_want->>'kind' IS DISTINCT FROM 'tv_episode'
+               OR air.next_air IS NULL
+               OR air.next_air <= $4::date)
+          AND COALESCE(wp.last_backlog_search_at, wp.created_at) < NOW() - (
+              CASE WHEN air.next_air <= $4::date
+                   THEN GREATEST(COALESCE(wp.backlog_search_interval_hours, $5), $5)
+                   ELSE COALESCE(wp.backlog_search_interval_hours, $1)
+              END * INTERVAL '1 hour'
+          )
+        ORDER BY COALESCE(wp.last_backlog_search_at, wp.created_at), wp.created_at
         LIMIT $2
         "#,
     )
     .bind(DEFAULT_BACKLOG_INTERVAL_HOURS)
     .bind(limit)
+    .bind(today)
+    .bind(scoring::early_search_horizon(today))
+    .bind(scoring::EARLY_SEARCH_INTERVAL_HOURS)
     .fetch_all(pool)
     .await
 }
@@ -1062,49 +1100,29 @@ pub async fn backlog_search_pattern(
     {
         let season_str = season.as_str();
 
-        // Determine which episodes are still missing (exclude unaired episodes).
-        // Once we hit an episode with a future air_date, stop — subsequent episodes
-        // (including those with no air_date) are presumed to not yet be available.
-        // Sort by sort_order first (episodes may be string-sorted: "1","10","2"...).
-        let today = time::OffsetDateTime::now_utc().date();
-        let mut sorted_needed: Vec<&nats_jobs::EpisodeRef> = needed.iter().collect();
-        sorted_needed.sort_by_key(|ep| {
-            ep.sort_order
-                .unwrap_or(ep.episode.parse::<i32>().unwrap_or(999))
-        });
-        let mut hit_future_ep = false;
+        let today = crate::clock::now_utc().date();
         let missing: Vec<&nats_jobs::EpisodeRef> =
             if best_per_episode.contains_key(episode_key::SEASON_PACK_KEY) {
                 Vec::new() // Season pack covers everything
             } else {
-                sorted_needed
-                    .into_iter()
-                    .filter(|ep| {
-                        if !episode_key::episode_needs_search(ep) {
-                            return false;
-                        }
-                        if hit_future_ep {
-                            return false;
-                        }
-                        if ep
-                            .air_date
-                            .as_deref()
-                            .and_then(crate::services::want::scoring::parse_iso_date)
-                            .is_some_and(|d| d > today)
-                        {
-                            hit_future_ep = true;
-                            return false;
-                        }
-                        let key = if let (Ok(s), Ok(e)) =
-                            (season_str.parse::<u32>(), ep.episode.parse::<u32>())
-                        {
-                            format!("S{:02}E{:02}", s, e)
-                        } else {
-                            return true; // Can't determine key, assume missing
-                        };
-                        !best_per_episode.contains_key(&key)
-                    })
-                    .collect()
+                scoring::episodes_to_search(
+                    needed
+                        .iter()
+                        .filter(|ep| episode_key::episode_needs_search(ep)),
+                    today,
+                )
+                .into_iter()
+                .filter(|ep| {
+                    let key = if let (Ok(s), Ok(e)) =
+                        (season_str.parse::<u32>(), ep.episode.parse::<u32>())
+                    {
+                        format!("S{:02}E{:02}", s, e)
+                    } else {
+                        return true; // Can't determine key, assume missing
+                    };
+                    !best_per_episode.contains_key(&key)
+                })
+                .collect()
             };
 
         let found_before = best_per_episode.len();

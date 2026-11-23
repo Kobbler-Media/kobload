@@ -2,20 +2,23 @@ use std::sync::Arc;
 
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tracing::warn;
 
 use super::attempt_log::{AttemptLog, Origin, Started, Step};
+use super::outcomes::record_report;
 use super::resolve::{StreamResolveContext, lane};
 use super::service::StreamSearchError;
+use super::usenet_failure;
 use super::usenet_flight::{self, ImportJob};
 use super::usenet_health::{self, Sampled};
 use super::usenet_warm;
 use crate::debrid::{DebridProvider, Throttled};
 use crate::repositories::stream_attempts::Change;
 use crate::repositories::usenet_releases::{self, UsenetRelease};
-use crate::usenet::outputs::{self, Target};
+use crate::usenet::outputs::{self, Target, Unplayable};
 use crate::usenet::{STREAM_TTL, UsenetEngine};
 use nats_jobs::NzbRef;
-use nats_jobs::types::{StreamResolveRequest, StreamResolveResponse};
+use nats_jobs::types::{StreamOutcomeReport, StreamResolveRequest, StreamResolveResponse};
 use usenet_proto::{ImportMode, ImportResponse, OutputInfo, Purpose};
 
 fn failed(message: impl Into<String>) -> StreamSearchError {
@@ -111,6 +114,9 @@ pub async fn resolve(
         Ok(output) => output,
         Err(unplayable) => {
             let message = unplayable.to_string();
+            if unplayable == Unplayable::NoVideo {
+                demote_no_video(ctx, request, &imported.release_key, &release).await;
+            }
             log.record(Step::Failed, &message, Change::failed(&message))
                 .await;
             return Err(failed(message));
@@ -122,14 +128,23 @@ pub async fn resolve(
         Purpose::Warm
     };
     let response = response(&engine, &imported, output, behind);
-    usenet_health::spawn(Sampled {
+    let sampled = Sampled {
         pool: ctx.pool.clone(),
         engine,
         provider_id: request.debrid_provider_id,
         release_key: imported.release_key.clone(),
         output: output.index,
         release_title: request.release_title.clone().or(release.release_title),
-    });
+    };
+    if !lane.is_user()
+        && let Some(damage) = usenet_health::quick_check(&sampled).await
+    {
+        let message = usenet_failure::quick_check_failed(damage.checked, damage.missing);
+        log.record(Step::Failed, &message, Change::failed(&message))
+            .await;
+        return Err(failed(message));
+    }
+    usenet_health::spawn(sampled);
     log.record(
         Step::Ready,
         format!("Stream ready: {}", response.filename),
@@ -143,6 +158,29 @@ pub async fn resolve(
     )
     .await;
     Ok(response)
+}
+
+async fn demote_no_video(
+    ctx: &StreamResolveContext<'_>,
+    request: &StreamResolveRequest,
+    release_key: &str,
+    release: &UsenetRelease,
+) {
+    let report = StreamOutcomeReport {
+        debrid_provider_id: Some(request.debrid_provider_id),
+        release_key: release_key.to_string(),
+        file_id: None,
+        ok: false,
+        reason: Some(usenet_failure::NO_VIDEO.to_string()),
+        release_title: request
+            .release_title
+            .clone()
+            .or_else(|| release.release_title.clone()),
+        filename: None,
+    };
+    if let Err(e) = record_report(ctx.pool, &report).await {
+        warn!(release_key, error = %e, "Could not demote a release with no video");
+    }
 }
 
 /// A binge or a re-resolve may know the release only by its key; any listing of it serves.
