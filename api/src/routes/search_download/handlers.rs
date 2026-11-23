@@ -150,6 +150,7 @@ async fn search_and_download(
             season: None,
             episode: None,
             source_filter: None,
+            on_source_answered: None,
         })
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;

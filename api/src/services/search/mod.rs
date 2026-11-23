@@ -4,8 +4,8 @@ mod types;
 
 pub use crate::repositories::watch::SearchContext;
 pub use indexers::{
-    CascadedSearchParams, SearchIndexersParams, SourceFilter, search_all_sources_cascaded,
-    search_indexers,
+    CascadedSearchParams, SearchIndexersParams, SourceAnswered, SourceFilter,
+    search_all_sources_cascaded, search_indexers,
 };
 pub use service::{EarlyExitCheck, search, search_type_from_media_want};
 pub use types::{

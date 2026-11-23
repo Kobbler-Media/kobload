@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use super::tv_watch::{TvWatch, usenet_release};
 use kobload_api::debrid::DefaultDebridProviderResolver;
-use kobload_api::repositories::usenet_releases;
+use kobload_api::repositories::{usenet_releases, watch as watch_repo};
 use kobload_api::usenet::{EngineSettings, UsenetEngine};
 use kobload_api::watch::Release;
 use nats_jobs::NzbRef;
@@ -463,10 +463,37 @@ impl UsenetRig {
     }
 
     pub fn nzb(&self, guid: &str, title: &str) -> Release {
+        self.nzb_from(self.tv.source.id, guid, title)
+    }
+
+    pub fn nzb_from(&self, source: Uuid, guid: &str, title: &str) -> Release {
         let mut release = usenet_release(guid, title);
         release.download_url = Some(format!("{}/nzb/{guid}?apikey={INDEXER_KEY}", self.nzbs.url));
-        release.indexer_source_id = Some(self.tv.source.id);
+        release.indexer_source_id = Some(source);
         release
+    }
+
+    pub async fn add_indexer(&self, name: &str, priority: i32) -> Uuid {
+        watch_repo::create_indexer_source(
+            &self.tv.server.pool,
+            watch_repo::IndexerSourceInput {
+                debrid_mode: Some("both".to_string()),
+                name: name.to_string(),
+                handler_type: "newznab".to_string(),
+                handler_config: json!({ "base_url": "http://localhost:9997" }),
+                category_ids: None,
+                media_type_ids: vec![],
+                enabled: true,
+                priority,
+                seed_ratio: None,
+                seed_time_minutes: None,
+                search_mode: None,
+                auto_throttle: None,
+                api_limit_daily: None,
+            },
+        )
+        .await
+        .unwrap()
     }
 
     pub fn nzb_ref(&self, guid: &str) -> NzbRef {

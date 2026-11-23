@@ -15,6 +15,7 @@ use crate::services::search::search_type_from_media_want;
 use crate::watch::{ExternalId, ExternalIdSource, Release};
 
 pub type SourceFilter = fn(&watch_repo::IndexerSourceRow) -> bool;
+pub type SourceAnswered<'a> = &'a (dyn Fn(usize, &[Release]) + Send + Sync);
 
 pub struct SearchIndexersParams<'a> {
     pub ctx: &'a IndexerContext<'a>,
@@ -33,19 +34,14 @@ pub struct SearchIndexersParams<'a> {
     /// Episode for structured TV search (Newznab/Cardigann `ep` param).
     pub episode: Option<String>,
     pub source_filter: Option<SourceFilter>,
+    pub on_source_answered: Option<SourceAnswered<'a>>,
 }
 
 pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Release>, String> {
-    let ctx = params.ctx;
-    let indexers = params.indexers;
     let pool = params.pool;
-    let query = params.query;
-    let _limit = params.limit;
-    let external_ids = params.external_ids;
-    let media_want = params.media_want;
     let media_type_id = params.media_type_id;
 
-    let search_type = search_type_from_media_want(media_want);
+    let search_type = search_type_from_media_want(params.media_want);
 
     let enabled_sources = watch_repo::list_enabled_sources(pool)
         .await
@@ -71,79 +67,104 @@ pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Re
 
     let mut releases = Vec::new();
 
-    for source in &searchable_sources {
-        if params.source_filter.is_some_and(|keep| !keep(source)) {
-            continue;
+    // One indexer stuck on its timeout must not hold back the others' answers, so a caller
+    // watching them arrive gets them concurrently.
+    if params.on_source_answered.is_some() {
+        let searches = searchable_sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| search_source(params, search_type, index, source));
+        for outcome in futures::future::join_all(searches).await {
+            releases.extend(outcome?);
         }
-        if watch_repo::should_skip_source(source) {
-            warn!(source = %source.name, "Skipping source due to rate limit or backoff");
-            continue;
-        }
-
-        let handler = match indexers.get(&source.handler_type) {
-            Some(h) => h,
-            None => {
-                // Skip handler types that don't support search (e.g. prowlarr_rss)
-                continue;
-            }
-        };
-
-        if !handler.capabilities().supports_search {
-            continue;
-        }
-
-        let search_categories = resolve_categories_for_source(pool, source, media_type_id)
-            .await
-            .map_err(|e| format!("Category resolution failed: {e}"))?;
-
-        let search_type = resolve_search_type(source, search_type);
-
-        let search_fut = handler.search(
-            ctx,
-            Some(source),
-            IndexerSearchRequest {
-                query: query.to_string(),
-                categories: search_categories,
-                limit: None, // Don't send limit — let indexer use its default (matches Sonarr)
-                offset: None,
-                external_ids: external_ids.to_vec(),
-                search_type,
-                season: params.season.clone(),
-                episode: params.episode.clone(),
-            },
-        );
-
-        let result = if let Some(timeout_duration) = params.per_source_timeout {
-            match tokio::time::timeout(timeout_duration, search_fut).await {
-                Ok(inner) => inner,
-                Err(_) => {
-                    warn!(source = %source.name, timeout_ms = timeout_duration.as_millis(), "Indexer search timed out");
-                    let _ = watch_repo::record_failure(pool, source.id, "search timed out").await;
-                    continue;
-                }
-            }
-        } else {
-            search_fut.await
-        };
-
-        match result {
-            Ok(mut source_releases) => {
-                let _ = watch_repo::record_success(pool, source.id).await;
-                releases.append(&mut source_releases);
-            }
-            Err(err) if err.status == axum::http::StatusCode::TOO_MANY_REQUESTS => {
-                let _ =
-                    watch_repo::record_rate_limited(pool, source.id, err.retry_after_seconds).await;
-                warn!(source = %source.name, "Indexer rate limited (429)");
-            }
-            Err(err) => {
-                crate::indexers::record_error(pool, source.id, &err).await;
-                warn!(error = %err, source = %source.name, "Indexer search failed");
-            }
+    } else {
+        for (index, source) in searchable_sources.iter().enumerate() {
+            releases.extend(search_source(params, search_type, index, source).await?);
         }
     }
 
     Ok(releases)
+}
+
+async fn search_source(
+    params: &SearchIndexersParams<'_>,
+    search_type: SearchType,
+    index: usize,
+    source: &watch_repo::IndexerSourceRow,
+) -> Result<Vec<Release>, String> {
+    let pool = params.pool;
+    let media_type_id = params.media_type_id;
+
+    if params.source_filter.is_some_and(|keep| !keep(source)) {
+        return Ok(Vec::new());
+    }
+    if watch_repo::should_skip_source(source) {
+        warn!(source = %source.name, "Skipping source due to rate limit or backoff");
+        return Ok(Vec::new());
+    }
+
+    // Handler types that don't support search (e.g. prowlarr_rss) are skipped.
+    let Some(handler) = params.indexers.get(&source.handler_type) else {
+        return Ok(Vec::new());
+    };
+
+    if !handler.capabilities().supports_search {
+        return Ok(Vec::new());
+    }
+
+    let search_categories = resolve_categories_for_source(pool, source, media_type_id)
+        .await
+        .map_err(|e| format!("Category resolution failed: {e}"))?;
+
+    let search_type = resolve_search_type(source, search_type);
+
+    let search_fut = handler.search(
+        params.ctx,
+        Some(source),
+        IndexerSearchRequest {
+            query: params.query.to_string(),
+            categories: search_categories,
+            limit: None, // Don't send limit — let indexer use its default (matches Sonarr)
+            offset: None,
+            external_ids: params.external_ids.to_vec(),
+            search_type,
+            season: params.season.clone(),
+            episode: params.episode.clone(),
+        },
+    );
+
+    let result = if let Some(timeout_duration) = params.per_source_timeout {
+        match tokio::time::timeout(timeout_duration, search_fut).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                warn!(source = %source.name, timeout_ms = timeout_duration.as_millis(), "Indexer search timed out");
+                let _ = watch_repo::record_failure(pool, source.id, "search timed out").await;
+                return Ok(Vec::new());
+            }
+        }
+    } else {
+        search_fut.await
+    };
+
+    match result {
+        Ok(source_releases) => {
+            let _ = watch_repo::record_success(pool, source.id).await;
+            if let Some(on_source_answered) = params.on_source_answered {
+                on_source_answered(index, &source_releases);
+            }
+            Ok(source_releases)
+        }
+        Err(err) if err.status == axum::http::StatusCode::TOO_MANY_REQUESTS => {
+            let _ = watch_repo::record_rate_limited(pool, source.id, err.retry_after_seconds).await;
+            warn!(source = %source.name, "Indexer rate limited (429)");
+            Ok(Vec::new())
+        }
+        Err(err) => {
+            crate::indexers::record_error(pool, source.id, &err).await;
+            warn!(error = %err, source = %source.name, "Indexer search failed");
+            Ok(Vec::new())
+        }
+    }
 }
 
 /// Callback for quality-aware early exit in cascaded search.

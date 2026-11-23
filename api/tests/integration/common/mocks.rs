@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +15,7 @@ use kobload_api::indexers::{
 use kobload_api::repositories::watch as watch_repo;
 use kobload_api::types::{DownloadClientConfig, TestConnectionResult};
 use kobload_api::watch::Release;
+use uuid::Uuid;
 
 // =============================================================================
 // Mock Download Client
@@ -133,6 +135,9 @@ pub struct MockIndexer {
     season_only_results: Mutex<Option<Vec<Release>>>,
     per_episode_results: Mutex<Option<Vec<Release>>>,
     search_delay: Mutex<Duration>,
+    query_delays: Mutex<Option<(Duration, Duration)>>,
+    source_delays: Mutex<HashMap<Uuid, Duration>>,
+    source_results: Mutex<HashMap<Uuid, Vec<Release>>>,
     searches: AtomicUsize,
 }
 
@@ -144,12 +149,40 @@ impl MockIndexer {
             season_only_results: Mutex::new(None),
             per_episode_results: Mutex::new(None),
             search_delay: Mutex::new(Duration::ZERO),
+            query_delays: Mutex::new(None),
+            source_delays: Mutex::new(HashMap::new()),
+            source_results: Mutex::new(HashMap::new()),
             searches: AtomicUsize::new(0),
         }
     }
 
     pub fn set_search_delay(&self, delay: Duration) {
         *self.search_delay.lock().unwrap() = delay;
+    }
+
+    pub fn set_query_delays(&self, episode: Duration, season: Duration) {
+        *self.query_delays.lock().unwrap() = Some((episode, season));
+    }
+
+    pub fn set_source_delay(&self, source: Uuid, delay: Duration) {
+        self.source_delays.lock().unwrap().insert(source, delay);
+    }
+
+    pub fn set_source_results(&self, source: Uuid, results: Vec<Release>) {
+        self.source_results.lock().unwrap().insert(source, results);
+    }
+
+    fn delay_for(&self, source: Option<Uuid>, request: &IndexerSearchRequest) -> Duration {
+        if let Some(delay) =
+            source.and_then(|id| self.source_delays.lock().unwrap().get(&id).copied())
+        {
+            return delay;
+        }
+        match *self.query_delays.lock().unwrap() {
+            Some((episode, _)) if request.episode.is_some() => episode,
+            Some((_, season)) => season,
+            None => *self.search_delay.lock().unwrap(),
+        }
     }
 
     pub fn searches(&self) -> usize {
@@ -202,12 +235,18 @@ impl IndexerHandler for MockIndexer {
     async fn search(
         &self,
         _ctx: &IndexerContext<'_>,
-        _source: Option<&watch_repo::IndexerSourceRow>,
+        source: Option<&watch_repo::IndexerSourceRow>,
         request: IndexerSearchRequest,
     ) -> Result<Vec<Release>, IndexerError> {
         self.searches.fetch_add(1, Ordering::SeqCst);
-        let delay = *self.search_delay.lock().unwrap();
+        let source_id = source.map(|s| s.id);
+        let delay = self.delay_for(source_id, &request);
         tokio::time::sleep(delay).await;
+        if let Some(results) =
+            source_id.and_then(|id| self.source_results.lock().unwrap().get(&id).cloned())
+        {
+            return Ok(results);
+        }
         if let Some(per_episode) = self.per_episode_results.lock().unwrap().as_ref()
             && let Some(token) = request
                 .query

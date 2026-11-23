@@ -886,6 +886,7 @@ mod tests {
             season: None,
             episode: None,
             source_filter: None,
+            on_source_answered: None,
         })
         .await;
 

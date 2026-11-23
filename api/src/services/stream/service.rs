@@ -616,6 +616,7 @@ pub async fn stream_search(
                 request,
                 source_filter,
                 indexer_search::TvScope::AsWanted,
+                None,
             )
             .await
             {
