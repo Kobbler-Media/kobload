@@ -23,7 +23,7 @@ impl AccountLoad {
                 .is_some_and(|cap| self.connections > i64::from(cap))
     }
 
-    // The engine shrinks to whatever SAB leaves, but never below one connection per server.
+    // The engine shrinks to whatever SAB leaves, so past this point a server gets nothing.
     pub fn sab_leaves_no_room(&self) -> bool {
         self.servers > 0
             && self.sab_connections > 0
@@ -48,11 +48,11 @@ impl AccountLoad {
 
     pub fn describe_sab(&self) -> String {
         format!(
-            "The account on {} would hold SABnzbd's {} connections plus at least {} for the usenet engine, over its cap of {}. Lower SABnzbd's connections for this server first.",
-            self.host,
+            "SABnzbd holds {} of the {} connections allowed on the account on {}, leaving no connection for one or more of its {} usenet engine servers. Lower SABnzbd's connections for this server first.",
             self.sab_connections,
-            self.servers,
-            self.cap.unwrap_or_default()
+            self.cap.unwrap_or_default(),
+            self.host,
+            self.servers
         )
     }
 }
@@ -147,9 +147,8 @@ pub fn sab_violation(rows: &[UsenetServerRow], sab: &[SabServer]) -> Option<Acco
         .find(AccountLoad::sab_leaves_no_room)
 }
 
-/// Connections each enabled server may open while SAB holds its share of the same account:
-/// the account's room goes to its servers in priority order, keeping one for each server
-/// still to come.
+// The account's room goes to its servers in priority order, keeping one for each server
+// still to come while there is enough. A server past the end of the room gets 0.
 pub fn engine_connections(rows: &[UsenetServerRow], sab: &[SabServer]) -> HashMap<Uuid, i32> {
     let mut room: HashMap<(String, String), (i64, i64)> = by_account(rows, sab)
         .into_iter()
@@ -167,7 +166,10 @@ pub fn engine_connections(rows: &[UsenetServerRow], sab: &[SabServer]) -> HashMa
             let connections = match room.get_mut(&account(row)) {
                 Some((left, servers)) => {
                     *servers -= 1;
-                    let given = i64::from(row.connections).min(*left - *servers).max(1);
+                    let given = (*left - *servers)
+                        .max((*left).min(1))
+                        .min(i64::from(row.connections))
+                        .max(0);
                     *left -= given;
                     i32::try_from(given).unwrap_or(row.connections)
                 }

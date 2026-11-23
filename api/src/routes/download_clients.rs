@@ -13,7 +13,7 @@ use crate::auth::require_auth;
 use crate::repositories::clients as clients_repo;
 use crate::state::AppState;
 use crate::types::{DownloadClientConfig, DownloadClientType, TestConnectionResult};
-use crate::usenet::{forget_sab_share, sab_client_refusal};
+use crate::usenet::{forget_sab_share, sab_client_refusal, sab_delete_refusal};
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadClientCreate {
@@ -304,13 +304,23 @@ async fn delete_download_client(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let is_sab = matches!(
-        clients_repo::get_client_by_id(&state.pool, id).await,
-        Ok(Some(c)) if c.client_type == "sabnzbd"
-    );
+    let sab = clients_repo::get_client_by_id(&state.pool, id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|c| c.client_type == "sabnzbd");
+    if let Some(sab) = &sab
+        && let Some(message) = sab_delete_refusal(&state.http_client, sab).await
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "message": message })),
+        )
+            .into_response();
+    }
     match clients_repo::delete_client(&state.pool, id).await {
         Ok(true) => {
-            if is_sab {
+            if sab.is_some() {
                 forget_sab_share(&state.pool, id).await;
                 nudge_engine(&state).await;
             }

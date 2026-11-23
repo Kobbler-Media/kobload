@@ -66,6 +66,14 @@ pub async fn engine_config(
         .into_iter()
         .filter_map(|mut row| {
             let left = *allowed.get(&row.id)?;
+            if left == 0 {
+                warn!(
+                    host = %row.host,
+                    configured = row.connections,
+                    "SABnzbd fills this account's connection cap; the usenet engine will not use this server until SABnzbd's connections are lowered"
+                );
+                return None;
+            }
             if left < row.connections && left < USEFUL_CONNECTIONS {
                 warn!(
                     host = %row.host,

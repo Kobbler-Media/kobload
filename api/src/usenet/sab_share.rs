@@ -14,7 +14,7 @@ use crate::types::DownloadClientConfig;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const SETTING_PREFIX: &str = "usenet_sab_share:";
 const DRAIN_REFRESH_SECS: i64 = 300;
-// A disabled SAB that died mid-queue must not pin the engine at its floor for good.
+// A disabled SAB that died mid-queue must not keep the engine shrunk for good.
 const DRAIN_TRUSTED_SECS: i64 = 3600;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +65,26 @@ struct QueueReply {
 #[derive(Deserialize)]
 struct Queue {
     #[serde(default)]
+    paused: bool,
+    #[serde(default)]
     slots: Vec<serde_json::Value>,
+}
+
+impl Queue {
+    fn working(&self) -> bool {
+        self.slots
+            .iter()
+            .any(|slot| slot_working(slot, self.paused))
+    }
+}
+
+// Mirrors SABnzbd's own `has_forced_jobs` and `is_empty`: Force jobs download through a global
+// pause, and a Grabbing job is still fetching its NZB over HTTP. An unknown status counts as
+// working so that a new SAB version errs towards the account cap.
+fn slot_working(slot: &serde_json::Value, queue_paused: bool) -> bool {
+    let status = slot["status"].as_str().unwrap_or_default();
+    !["Paused", "Grabbing", "Deleted"].contains(&status)
+        && (!queue_paused || slot["priority"].as_str() == Some("Force"))
 }
 
 fn number(value: &serde_json::Value) -> Option<i64> {
@@ -227,7 +246,7 @@ async fn read(
     http: &reqwest::Client,
     sab: &DownloadClientConfig,
 ) -> Result<(Vec<SabServer>, bool), String> {
-    let (servers, queue) = tokio::join!(fetch(http, sab), queue_has_jobs(http, sab));
+    let (servers, queue) = tokio::join!(fetch(http, sab), queue_working(http, sab));
     let draining = if sab.enabled {
         queue.unwrap_or(false)
     } else {
@@ -266,7 +285,7 @@ async fn api(
     Ok(resp)
 }
 
-async fn queue_has_jobs(
+pub async fn queue_working(
     http: &reqwest::Client,
     sab: &DownloadClientConfig,
 ) -> Result<bool, String> {
@@ -275,7 +294,7 @@ async fn queue_has_jobs(
         .json()
         .await
         .map_err(|e| e.without_url().to_string())?;
-    Ok(!reply.queue.slots.is_empty())
+    Ok(reply.queue.working())
 }
 
 async fn fetch(

@@ -144,7 +144,9 @@
           <div>
             <span class="label">Connections</span>
             <span>
-              {#if server.effective_connections != null && server.effective_connections < server.connections}
+              {#if server.effective_connections === 0}
+                0 of {server.connections} (not in use: SABnzbd fills the account cap)
+              {:else if server.effective_connections != null && server.effective_connections < server.connections}
                 {server.effective_connections} of {server.connections} (SABnzbd holds the rest)
               {:else}
                 {server.connections}

@@ -106,6 +106,52 @@ async fn the_engine_applies_pulled_servers_only_when_they_change() {
 }
 
 #[tokio::test]
+async fn a_server_left_out_of_the_config_goes_and_an_empty_config_survives_a_restart() {
+    let nntp = LoopbackServer::start([]).await.unwrap();
+    let served: Served = Arc::new(Mutex::new(EngineConfigResponse {
+        servers: vec![usenet_server("a", &nntp, 0), usenet_server("b", &nntp, 1)],
+    }));
+    let url = kobload(Arc::clone(&served)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path(), Vec::new()).await;
+    let mut pull = ConfigPull::new(
+        Arc::clone(&engine),
+        &url,
+        CONTROL,
+        dir.path(),
+        Configured::default(),
+    );
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(2));
+
+    served.lock().unwrap().servers.remove(0);
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(1));
+    assert_eq!(names(&engine), [("provider b".to_owned(), 1, 2)]);
+
+    served.lock().unwrap().servers.clear();
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(0));
+    assert!(names(&engine).is_empty());
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Unchanged);
+    let restarted = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        dir.path().join("config.json"),
+        restarted.path().join("config.json"),
+    )
+    .unwrap();
+    let booted = kobload_usenet::start_engine(kob_usenet::EngineConfig::new(
+        restarted.path().to_path_buf(),
+        Vec::new(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(booted.restored, Some(Vec::new()));
+    assert!(names(&booted.engine).is_empty());
+
+    served.lock().unwrap().servers = vec![usenet_server("a", &nntp, 0)];
+    assert_eq!(pull.tick().await.unwrap(), Pulled::Applied(1));
+    assert_eq!(names(&engine), [("provider a".to_owned(), 0, 2)]);
+}
+
+#[tokio::test]
 async fn a_pull_with_the_wrong_key_applies_nothing() {
     let nntp = LoopbackServer::start([]).await.unwrap();
     let served: Served = Arc::new(Mutex::new(EngineConfigResponse {

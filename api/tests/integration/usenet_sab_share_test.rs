@@ -15,17 +15,18 @@ use kobload_api::repositories::app_settings;
 use usenet_proto::EngineConfigResponse;
 
 const SAB_KEY: &str = "sab-api-key-under-test";
-const CLIENTS: &str = "/api/v1/admin/download-clients";
+pub(crate) const CLIENTS: &str = "/api/v1/admin/download-clients";
 const SERVERS: &str = "/api/v1/admin/usenet/servers";
 
 #[derive(Default)]
-struct Sab {
-    servers: Mutex<Value>,
-    queue: Mutex<Value>,
+pub(crate) struct Sab {
+    pub(crate) servers: Mutex<Value>,
+    pub(crate) queue: Mutex<Value>,
+    pub(crate) paused: Mutex<bool>,
 }
 
 impl Sab {
-    fn busy(&self, busy: bool) {
+    pub(crate) fn busy(&self, busy: bool) {
         *self.queue.lock().unwrap() = if busy {
             json!([{ "nzo_id": "SABnzbd_nzo_1", "status": "Downloading" }])
         } else {
@@ -33,7 +34,7 @@ impl Sab {
         };
     }
 
-    fn go_down(&self) {
+    pub(crate) fn go_down(&self) {
         *self.servers.lock().unwrap() = Value::Null;
         *self.queue.lock().unwrap() = Value::Null;
     }
@@ -57,16 +58,18 @@ async fn sab_api(
             if slots.is_null() {
                 return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
-            axum::Json(json!({ "queue": { "slots": slots } })).into_response()
+            let paused = *sab.paused.lock().unwrap();
+            axum::Json(json!({ "queue": { "paused": paused, "slots": slots } })).into_response()
         }
         _ => axum::Json(json!({ "version": "4.5.0" })).into_response(),
     }
 }
 
-async fn mock_sab(servers: Value) -> (String, Arc<Sab>) {
+pub(crate) async fn mock_sab(servers: Value) -> (String, Arc<Sab>) {
     let sab = Arc::new(Sab {
         servers: Mutex::new(servers),
         queue: Mutex::new(json!([])),
+        paused: Mutex::new(false),
     });
     let app = axum::Router::new()
         .route("/api", axum::routing::get(sab_api))
@@ -77,12 +80,17 @@ async fn mock_sab(servers: Value) -> (String, Arc<Sab>) {
     (url, sab)
 }
 
-fn sab_server(host: &str, username: &str, connections: u32) -> Value {
+pub(crate) fn sab_server(host: &str, username: &str, connections: u32) -> Value {
     json!({ "name": host, "host": host, "port": 563, "username": username,
             "password": "**********", "connections": connections, "enable": 1 })
 }
 
-fn engine_server(host: &str, backbone: Option<&str>, connections: u32, cap: u32) -> Value {
+pub(crate) fn engine_server(
+    host: &str,
+    backbone: Option<&str>,
+    connections: u32,
+    cap: u32,
+) -> Value {
     json!({
         "name": host, "host": host, "port": 563, "tls": true, "verify_cert": true,
         "connections": connections, "priority": 0, "backbone": backbone,
@@ -91,12 +99,12 @@ fn engine_server(host: &str, backbone: Option<&str>, connections: u32, cap: u32)
     })
 }
 
-async fn add_server(rig: &UsenetRig, body: &Value) -> (StatusCode, String) {
+pub(crate) async fn add_server(rig: &UsenetRig, body: &Value) -> (StatusCode, String) {
     let resp = rig.tv.server.admin_client().post_json(SERVERS, body).await;
     (resp.status, resp.text())
 }
 
-async fn add_sab(rig: &UsenetRig, url: &str, enabled: bool) -> (StatusCode, String) {
+pub(crate) async fn add_sab(rig: &UsenetRig, url: &str, enabled: bool) -> (StatusCode, String) {
     let resp = rig
         .tv
         .server
@@ -110,7 +118,7 @@ async fn add_sab(rig: &UsenetRig, url: &str, enabled: bool) -> (StatusCode, Stri
     (resp.status, resp.text())
 }
 
-async fn patch_sab(rig: &UsenetRig, id: &str, body: &Value) -> (StatusCode, String) {
+pub(crate) async fn patch_sab(rig: &UsenetRig, id: &str, body: &Value) -> (StatusCode, String) {
     let resp = rig
         .tv
         .server
@@ -120,7 +128,7 @@ async fn patch_sab(rig: &UsenetRig, id: &str, body: &Value) -> (StatusCode, Stri
     (resp.status, resp.text())
 }
 
-async fn pulled(rig: &UsenetRig) -> Vec<(String, u32)> {
+pub(crate) async fn pulled(rig: &UsenetRig) -> Vec<(String, u32)> {
     let resp = crate::common::TestClient::new(&rig.tv.server.api_url)
         .with_auth(CONTROL_KEY)
         .get("/api/v1/usenet/engine-config")
@@ -136,7 +144,7 @@ async fn pulled(rig: &UsenetRig) -> Vec<(String, u32)> {
     servers
 }
 
-fn id_of(body: &str) -> String {
+pub(crate) fn id_of(body: &str) -> String {
     serde_json::from_str::<Value>(body).unwrap()["id"]
         .as_str()
         .unwrap()
@@ -290,7 +298,7 @@ async fn test_one_login_on_two_hosts_of_a_backbone_is_one_account() {
     rig.tv.server.cleanup().await;
 }
 
-async fn listed_effective(rig: &UsenetRig, host: &str) -> Value {
+pub(crate) async fn listed_effective(rig: &UsenetRig, host: &str) -> Value {
     let rows: Vec<Value> = rig.tv.server.admin_client().get(SERVERS).await.json();
     rows.into_iter().find(|r| r["host"] == host).unwrap()["effective_connections"].clone()
 }

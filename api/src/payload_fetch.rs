@@ -26,13 +26,25 @@ pub struct PayloadGet<'a> {
     pub cookie: Option<&'a str>,
 }
 
-struct PublicOnly;
+pub struct SystemDns;
 
-impl Resolve for PublicOnly {
+impl Resolve for SystemDns {
     fn resolve(&self, name: Name) -> Resolving {
         Box::pin(async move {
             let addrs: Vec<SocketAddr> =
                 tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
+            Ok(Box::new(addrs.into_iter()) as Addrs)
+        })
+    }
+}
+
+struct PublicOnly<R>(Arc<R>);
+
+impl<R: Resolve + 'static> Resolve for PublicOnly<R> {
+    fn resolve(&self, name: Name) -> Resolving {
+        let dns = Arc::clone(&self.0);
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = dns.resolve(name).await?.collect();
             let addrs = refuse_internal(addrs)?;
             Ok(Box::new(addrs.into_iter()) as Addrs)
         })
@@ -54,6 +66,13 @@ impl PayloadClients {
     }
 
     pub fn build(customize: impl Fn(ClientBuilder) -> ClientBuilder) -> Self {
+        Self::with_dns(Arc::new(SystemDns), customize)
+    }
+
+    pub fn with_dns<R: Resolve + 'static>(
+        dns: Arc<R>,
+        customize: impl Fn(ClientBuilder) -> ClientBuilder,
+    ) -> Self {
         let base = || {
             customize(
                 crate::http::builder()
@@ -62,16 +81,21 @@ impl PayloadClients {
             )
         };
         Self {
-            plain: base().build().expect("Failed to create HTTP client"),
+            plain: base()
+                .dns_resolver(Arc::clone(&dns))
+                .build()
+                .expect("Failed to create HTTP client"),
+            // A proxy would resolve the name itself, past the check.
             public_only: base()
-                .dns_resolver(Arc::new(PublicOnly))
+                .no_proxy()
+                .dns_resolver(Arc::new(PublicOnly(dns)))
                 .build()
                 .expect("Failed to create HTTP client"),
         }
     }
 
     pub async fn get(&self, request: PayloadGet<'_>) -> Result<Response, PayloadError> {
-        let trust = request.origin.trust().await;
+        let trust = request.origin.trust();
         let mut url: Url = request
             .url
             .parse()
@@ -133,6 +157,6 @@ mod tests {
     #[tokio::test]
     async fn the_public_resolver_refuses_a_name_on_loopback() {
         let name = Name::from_str("localhost").unwrap();
-        assert!(PublicOnly.resolve(name).await.is_err());
+        assert!(PublicOnly(Arc::new(SystemDns)).resolve(name).await.is_err());
     }
 }

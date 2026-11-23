@@ -14,6 +14,22 @@ export class ApiError extends Error {
 
 type FetchOptions = Parameters<typeof fetch>[1];
 
+async function errorMessage(response: Response): Promise<string> {
+  const fallback = response.statusText || `Request failed: ${response.status}`;
+  const body = (await response.text().catch(() => '')).trim();
+  if (!body) return fallback;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === 'object') {
+      const message = (parsed as { message?: unknown }).message;
+      return typeof message === 'string' && message.trim() ? message.trim() : fallback;
+    }
+  } catch {
+    return body;
+  }
+  return body;
+}
+
 async function request<T>(path: string, options: FetchOptions = {}): Promise<T> {
   const token = getAuthToken();
   const response = await fetch(`${apiBase}${path}`, {
@@ -29,26 +45,7 @@ async function request<T>(path: string, options: FetchOptions = {}): Promise<T> 
     if (response.status === 401) {
       clearAuth();
     }
-    let message = `Request failed: ${response.status}`;
-    try {
-      const error = await response.json();
-      if (typeof error?.message === 'string' && error.message.trim()) {
-        message = error.message.trim();
-      }
-    } catch {
-      try {
-        const text = await response.text();
-        if (text.trim()) {
-          message = text.trim();
-        } else if (response.statusText) {
-          message = response.statusText;
-        }
-      } catch {
-        if (response.statusText) {
-          message = response.statusText;
-        }
-      }
-    }
+    const message = await errorMessage(response);
     throw new ApiError(response.status, message);
   }
 

@@ -167,6 +167,7 @@ pub fn quick_retries(retry_attempts: u32) -> DownloadConfig {
 
 pub struct Harness {
     pub app: Router,
+    pub engine: Arc<Engine>,
     pub downloads: PathBuf,
 }
 
@@ -197,13 +198,14 @@ impl Harness {
         config.download = download;
         let engine = Arc::new(Engine::new(config).await.expect("engine"));
         let downloads = dir.join("downloads");
-        let state = AppState::new(engine, CONTROL, SECRET)
+        let state = AppState::new(Arc::clone(&engine), CONTROL, SECRET)
             .with_byte_gap(gap)
             .with_metrics_key(Some(METRICS))
             .with_download_dir(&downloads);
         state.configured().set();
         Self {
             app: router(state),
+            engine,
             downloads,
         }
     }

@@ -23,26 +23,13 @@ impl Origin {
         }
     }
 
-    // A name may be public in shape yet resolve onto the LAN; the operator configured it,
-    // so that makes the indexer a LAN indexer.
-    pub async fn trust(&self) -> Trust<'_> {
-        let lan = match self.configured() {
-            Some(url) if internal(url) => true,
-            Some(url) => resolves_internal(url).await,
-            None => false,
-        };
-        Trust { origin: self, lan }
-    }
-}
-
-async fn resolves_internal(url: &Url) -> bool {
-    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
-        return false;
-    };
-    let lookup = tokio::net::lookup_host((host, port));
-    match tokio::time::timeout(std::time::Duration::from_secs(2), lookup).await {
-        Ok(Ok(mut addrs)) => addrs.any(|a| internal_ip(a.ip())),
-        _ => false,
+    // Only what the operator typed grants LAN trust: whoever runs a public indexer's DNS
+    // controls what its name resolves to.
+    pub fn trust(&self) -> Trust<'_> {
+        Trust {
+            origin: self,
+            lan: self.configured().is_some_and(internal),
+        }
     }
 }
 
@@ -53,38 +40,24 @@ pub struct Trust<'a> {
 }
 
 impl Trust<'_> {
-    #[cfg(test)]
-    fn new(origin: &Origin, lan: bool) -> Trust<'_> {
-        Trust { origin, lan }
-    }
-
-    fn on_lan(&self, url: &Url) -> bool {
-        internal(url) || (self.lan && self.is_origin(url))
-    }
-
-    fn is_origin(&self, url: &Url) -> bool {
-        self.origin.configured().is_some_and(|o| same_host(o, url))
-    }
-
     pub fn entry_allowed(&self, url: &Url) -> bool {
         match self.origin {
             Origin::Operator => true,
-            Origin::Indexer(_) => self.lan || self.is_origin(url) || !internal(url),
+            Origin::Indexer(_) => self.lan || !internal(url),
         }
     }
 
     pub fn hop_allowed(&self, previous: &Url, next: &Url) -> bool {
-        self.on_lan(previous) || !internal(next)
+        internal(previous) || !internal(next)
     }
 
-    // Names reached from a public host go through the resolver that refuses private answers.
+    // A public-shaped name goes through the resolver that refuses private answers even when
+    // a LAN indexer handed it out, because its DNS can still change between requests.
     pub fn may_resolve_privately(&self, previous: Option<&Url>, url: &Url) -> bool {
-        match previous {
-            Some(previous) => self.on_lan(previous),
-            None => match self.origin {
-                Origin::Operator => true,
-                Origin::Indexer(_) => self.lan || self.is_origin(url),
-            },
+        match (previous, self.origin) {
+            (None, Origin::Operator) => true,
+            (None, Origin::Indexer(_)) => self.lan && internal(url),
+            (Some(previous), _) => internal(previous) && internal(url),
         }
     }
 }
@@ -159,7 +132,7 @@ mod tests {
     #[test]
     fn each_hop_is_judged_against_the_one_before_it() {
         let origin = Origin::indexer(Some("http://192.168.1.5:9696"));
-        let trust = Trust::new(&origin, true);
+        let trust = origin.trust();
         for (previous, next, allowed) in [
             ("http://192.168.1.5:9696/n", "http://192.168.1.6/x", true),
             ("http://192.168.1.5:9696/n", "https://cdn.example/x", true),
@@ -188,18 +161,18 @@ mod tests {
         let public = Origin::indexer(Some("https://indexer.example"));
         let unknown = Origin::Indexer(None);
         let lan = Origin::indexer(Some("http://prowlarr:9696"));
-        for (origin, is_lan, target, allowed) in [
-            (&public, false, "https://indexer.example/d", true),
-            (&public, false, "https://cdn.example/d", true),
-            (&public, false, "http://10.0.0.208/d", false),
-            (&unknown, false, "http://127.0.0.1/d", false),
-            (&unknown, false, "https://cdn.example/d", true),
-            (&lan, true, "http://prowlarr:9696/d", true),
-            (&lan, true, "http://10.0.0.5/d", true),
-            (&Origin::Operator, false, "http://10.0.0.5/d", true),
+        for (origin, target, allowed) in [
+            (&public, "https://indexer.example/d", true),
+            (&public, "https://cdn.example/d", true),
+            (&public, "http://10.0.0.208/d", false),
+            (&unknown, "http://127.0.0.1/d", false),
+            (&unknown, "https://cdn.example/d", true),
+            (&lan, "http://prowlarr:9696/d", true),
+            (&lan, "http://10.0.0.5/d", true),
+            (&Origin::Operator, "http://10.0.0.5/d", true),
         ] {
             assert_eq!(
-                Trust::new(origin, is_lan).entry_allowed(&url(target)),
+                origin.trust().entry_allowed(&url(target)),
                 allowed,
                 "{origin:?} {target}"
             );
