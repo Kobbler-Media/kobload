@@ -11,7 +11,7 @@ use super::availability::known_availability;
 use super::ranking::{
     KnownAvailability, RankCandidate, RankPreferences, RankProvider, rank_options,
 };
-use super::{indexer_search, usenet_listing, usenet_search};
+use super::{indexer_search, usenet_listing, usenet_pack_slot, usenet_search};
 use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::decision_log::types::{LogProviderCall, LogRelease};
 use crate::decision_log::{self, DecisionCollector};
@@ -985,7 +985,7 @@ pub async fn stream_search(
         audio_languages: &request.audio_languages,
     };
     let mut options = rank_options(ctx.pool, &rank_provider, ranked, &preferences).await;
-    options.truncate(limit as usize);
+    usenet_pack_slot::truncate(&mut options, limit as usize, request.media_want.as_ref());
     super::usenet_warm::remember_auto_play(&options);
     timings.options_build_ms = options_build_start.elapsed().as_millis() as u64;
 

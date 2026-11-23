@@ -178,3 +178,30 @@ async fn test_library_wants_still_refuse_a_usenet_pack_for_an_episode() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_the_pack_survives_a_full_page_of_single_episodes() {
+    let show = "Usenet Crowded Show";
+    let rig = UsenetRig::start().await;
+    let dotted = show.replace(' ', ".");
+    let mut releases: Vec<_> = (0..60)
+        .map(|i| {
+            rig.nzb(
+                &format!("g-single-{i}"),
+                &format!("{dotted}.S02E03.1080p.WEB-DL.x264-NZB{i}"),
+            )
+        })
+        .collect();
+    releases.push(rig.nzb("g-season-pack", &pack_title(show)));
+    rig.tv.indexer.set_search_results(releases);
+
+    let options = episode_options(&rig, show).await;
+    assert_eq!(options.len(), 50, "{options:?}");
+    let usenet = of_type(&options, StreamSourceType::Usenet);
+    assert_eq!(
+        usenet.last().map(|o| o.nzb_ref.clone()),
+        Some(Some(rig.nzb_ref("g-season-pack"))),
+        "{options:?}"
+    );
+    rig.tv.server.cleanup().await;
+}

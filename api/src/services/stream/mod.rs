@@ -17,6 +17,7 @@ mod usenet_flight;
 mod usenet_health;
 mod usenet_listing;
 mod usenet_nzb;
+mod usenet_pack_slot;
 mod usenet_resolve;
 mod usenet_search;
 mod usenet_warm;
