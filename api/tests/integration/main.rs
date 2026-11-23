@@ -84,6 +84,7 @@ mod usenet_refusal_demotion_test;
 mod usenet_sab_drain_test;
 mod usenet_sab_share_test;
 mod usenet_servers_test;
+mod usenet_status_test;
 mod usenet_stream_search_test;
 mod usenet_stream_test;
 mod watch_directories_test;

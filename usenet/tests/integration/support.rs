@@ -11,7 +11,7 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use kob_usenet::vendor::testkit::{Article, LoopbackServer, post};
 use kob_usenet::{DownloadConfig, Engine, EngineConfig, IpPreference, ServerConfig};
-use kobload_usenet::{AppState, router};
+use kobload_usenet::{AppState, ProviderHosts, router};
 use tower::ServiceExt;
 use usenet_proto::{ImportMode, ImportRequest, ImportResponse, Purpose, StreamClaims};
 
@@ -169,6 +169,7 @@ pub struct Harness {
     pub app: Router,
     pub engine: Arc<Engine>,
     pub downloads: PathBuf,
+    pub hosts: ProviderHosts,
 }
 
 impl Harness {
@@ -203,10 +204,12 @@ impl Harness {
             .with_metrics_key(Some(METRICS))
             .with_download_dir(&downloads);
         state.configured().set();
+        let hosts = state.provider_hosts();
         Self {
             app: router(state),
             engine,
             downloads,
+            hosts,
         }
     }
 

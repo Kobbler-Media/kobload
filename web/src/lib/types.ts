@@ -771,3 +771,52 @@ export type UsenetTestResult = {
   success: boolean;
   message: string;
 };
+
+export type UsenetEngineActivity =
+  | { kind: 'idle' | 'downloading' | 'streaming' | 'downloads_waiting_for_stream' }
+  | { kind: 'paused_low_disk' }
+  | { kind: 'provider_failing'; host: string };
+
+export type UsenetJobPhase = 'queued' | 'downloading' | 'verifying' | 'repairing' | 'unpacking';
+
+export type UsenetWaitReason = 'stream' | 'low_disk';
+
+export type UsenetStreamKind = 'playing' | 'caching_ahead' | 'preloading';
+
+export type UsenetProviderActivity = {
+  host: string;
+  in_use: number;
+  open: number;
+  max: number;
+  failing: boolean;
+};
+
+export type UsenetJobActivity = {
+  id: string;
+  phase: UsenetJobPhase;
+  downloaded_bytes: number;
+  total_bytes: number;
+  speed_bps: number | null;
+  eta_seconds: number | null;
+  waiting: UsenetWaitReason | null;
+};
+
+export type UsenetStreamActivity = {
+  id: number;
+  name: string;
+  kind: UsenetStreamKind;
+  position_percent: number | null;
+  speed_bps: number | null;
+};
+
+export type UsenetEngineStatus = {
+  activity: UsenetEngineActivity;
+  speed_bps: number | null;
+  providers: UsenetProviderActivity[];
+  jobs: UsenetJobActivity[];
+  streams: UsenetStreamActivity[];
+};
+
+export type UsenetStatusResponse =
+  | { engine: 'not_configured' | 'unavailable' }
+  | { engine: 'available'; status: UsenetEngineStatus };

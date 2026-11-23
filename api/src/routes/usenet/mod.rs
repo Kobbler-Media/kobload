@@ -5,6 +5,7 @@ use crate::state::AppState;
 
 mod engine_config;
 mod servers;
+mod status;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -26,6 +27,7 @@ pub fn routes() -> Router<AppState> {
             "/api/v1/admin/usenet/servers/{id}/test",
             post(servers::test_saved),
         )
+        .route("/api/v1/admin/usenet/status", get(status::status))
         .route(
             "/api/v1/usenet/engine-config",
             get(engine_config::engine_config),

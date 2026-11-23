@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use usenet_proto::{
-    HealthSample, ImportRequest, ImportResponse, JobRequest, JobStatus, Purpose, StreamClaims,
+    EngineStatus, HealthSample, ImportRequest, ImportResponse, JobRequest, JobStatus, Purpose,
+    StreamClaims,
 };
 
 /// kobbler keeps a resolved URL this long before it resolves again.
@@ -16,6 +17,8 @@ const IMPORT_TIMEOUT: Duration = Duration::from_secs(90);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(300);
 
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+
+const STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct EngineSettings {
@@ -251,6 +254,17 @@ impl UsenetEngine {
         if let Err(e) = sent {
             tracing::warn!(error = %e.without_url(), "Could not ask the usenet engine to pull its config");
         }
+    }
+
+    pub async fn status(&self) -> Result<EngineStatus, EngineError> {
+        let resp = self
+            .http
+            .get(format!("{}/v1/status", self.settings.engine_url))
+            .bearer_auth(&self.settings.control_key)
+            .timeout(STATUS_TIMEOUT)
+            .send()
+            .await?;
+        decode(resp).await
     }
 
     pub async fn health(&self) -> Result<(), EngineError> {

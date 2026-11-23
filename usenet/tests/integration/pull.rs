@@ -14,7 +14,7 @@ use usenet_proto::{EngineConfigResponse, IpPreference, UsenetServer};
 
 use crate::support::{CONTROL, SECRET, engine};
 
-type Served = Arc<Mutex<EngineConfigResponse>>;
+pub type Served = Arc<Mutex<EngineConfigResponse>>;
 
 async fn engine_config(State(served): State<Served>, headers: HeaderMap) -> Response {
     if headers
@@ -27,7 +27,7 @@ async fn engine_config(State(served): State<Served>, headers: HeaderMap) -> Resp
     axum::Json(served.lock().unwrap().clone()).into_response()
 }
 
-async fn kobload(served: Served) -> String {
+pub async fn kobload(served: Served) -> String {
     let app = Router::new()
         .route("/api/v1/usenet/engine-config", get(engine_config))
         .with_state(served);
@@ -37,7 +37,7 @@ async fn kobload(served: Served) -> String {
     url
 }
 
-fn usenet_server(id: &str, nntp: &LoopbackServer, priority: u32) -> UsenetServer {
+pub fn usenet_server(id: &str, nntp: &LoopbackServer, priority: u32) -> UsenetServer {
     UsenetServer {
         id: id.to_owned(),
         name: format!("provider {id}"),

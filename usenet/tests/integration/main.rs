@@ -15,5 +15,6 @@ mod restart;
 mod resume;
 mod settings;
 mod startup;
+mod status;
 mod support;
 mod token;

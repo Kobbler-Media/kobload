@@ -9,6 +9,7 @@ use kob_usenet::OutputReader;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::{Instant, timeout, timeout_at};
 
+use super::live::LiveStream;
 use crate::damage::{Damage, ReadFailure};
 
 const CHUNK: usize = 256 * 1024;
@@ -26,6 +27,7 @@ pub struct Pump {
     pub label: String,
     pub damage: Arc<Damage>,
     pub sought: bool,
+    pub live: LiveStream,
 }
 
 impl Pump {
@@ -128,6 +130,7 @@ impl Pump {
         buf.truncate(read);
         self.at += read as u64;
         self.remaining -= read as u64;
+        self.live.advance(self.at, read as u64);
         Ok(buf.freeze())
     }
 

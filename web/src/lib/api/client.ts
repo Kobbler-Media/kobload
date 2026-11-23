@@ -514,6 +514,7 @@ import type {
   PaginatedResponse,
   UsenetServer,
   UsenetServerInput,
+  UsenetStatusResponse,
   UsenetTestResult
 } from '#lib/types.js';
 
@@ -836,6 +837,10 @@ export async function testDebridProviderById(id: string): Promise<DebridTestResu
 
 export async function getUsenetServers(): Promise<UsenetServer[]> {
   return request('/api/v1/admin/usenet/servers');
+}
+
+export async function getUsenetStatus(signal?: AbortSignal): Promise<UsenetStatusResponse> {
+  return request('/api/v1/admin/usenet/status', { signal });
 }
 
 export async function createUsenetServer(server: UsenetServerInput): Promise<{ id: string }> {

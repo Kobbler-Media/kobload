@@ -11,6 +11,7 @@ use usenet_proto::{EngineConfigResponse, UsenetServer};
 
 use crate::servers::engine_server;
 use crate::state::Configured;
+use crate::status::ProviderHosts;
 use crate::throttle::Throttle;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -60,6 +61,7 @@ pub struct ConfigPull {
     applied: Option<Vec<UsenetServer>>,
     warned: Throttle,
     refresh: Arc<Notify>,
+    hosts: ProviderHosts,
 }
 
 fn backoff(wait: Duration) -> Duration {
@@ -91,6 +93,7 @@ impl ConfigPull {
             applied: None,
             warned: Throttle::new(WARN_EVERY),
             refresh: Arc::default(),
+            hosts: ProviderHosts::default(),
         }
     }
 
@@ -100,7 +103,14 @@ impl ConfigPull {
         self
     }
 
+    #[must_use]
+    pub fn with_hosts(mut self, hosts: ProviderHosts) -> Self {
+        self.hosts = hosts;
+        self
+    }
+
     pub fn adopt(&mut self, servers: Vec<UsenetServer>) {
+        self.hosts.replace(&servers);
         self.configured.set();
         self.applied = Some(servers);
     }
@@ -181,6 +191,7 @@ impl ConfigPull {
                 "usenet server applied"
             );
         }
+        self.hosts.replace(&servers);
         self.configured.set();
         let engine = Arc::clone(&self.engine);
         tokio::spawn(async move { engine.prewarm().await });

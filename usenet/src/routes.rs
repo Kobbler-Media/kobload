@@ -6,7 +6,7 @@ use axum::routing::{get, post};
 
 use crate::auth::{admit_upload, refresh_config, require_control_key, require_metrics_key};
 use crate::state::AppState;
-use crate::{health, import, jobs, metrics, stream};
+use crate::{health, import, jobs, metrics, status, stream};
 
 // Season-pack NZBs run to tens of MB, and base64 adds a third.
 const IMPORT_LIMIT: usize = 128 << 20;
@@ -31,6 +31,7 @@ pub fn router(state: AppState) -> Router {
             ),
         )
         .route("/v1/jobs/{id}", get(jobs::get).delete(jobs::remove))
+        .route("/v1/status", get(status::status))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_control_key,

@@ -1,4 +1,5 @@
 mod body;
+mod live;
 mod range;
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -8,11 +9,12 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::Response;
 use kob_usenet::ReleaseKey;
-use usenet_proto::StreamClaims;
+use usenet_proto::{StreamClaims, StreamKind};
 
 use crate::error::ApiError;
 use crate::state::AppState;
 use body::{First, Pump};
+pub use live::LiveStreams;
 use range::{Span, span};
 
 pub async fn stream(
@@ -76,6 +78,14 @@ pub async fn stream(
     let mut reader = state.engine.open(&key, claims.output, purpose(&claims))?;
     reader.set_end(start + count);
     tracing::debug!(%key, output = claims.output, start, count, purpose = ?claims.purpose, "stream");
+    let live = state.live.enter(
+        key.to_string(),
+        claims.output,
+        stream_kind(&claims),
+        &display_name(&output.path),
+        len,
+        start,
+    );
     let mut pump = Pump {
         reader,
         at: start,
@@ -84,6 +94,7 @@ pub async fn stream(
         label: format!("{key}/{}", claims.output),
         damage: state.damage.clone(),
         sought: false,
+        live,
     };
     let First { bytes, failure } = pump.first().await;
     match failure {
@@ -101,6 +112,18 @@ const fn purpose(claims: &StreamClaims) -> kob_usenet::Purpose {
         usenet_proto::Purpose::Cache => kob_usenet::Purpose::Cache,
         usenet_proto::Purpose::Warm => kob_usenet::Purpose::Warm,
     }
+}
+
+const fn stream_kind(claims: &StreamClaims) -> StreamKind {
+    match claims.purpose {
+        usenet_proto::Purpose::Play => StreamKind::Playing,
+        usenet_proto::Purpose::Cache => StreamKind::CachingAhead,
+        usenet_proto::Purpose::Warm => StreamKind::Preloading,
+    }
+}
+
+fn display_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_owned()
 }
 
 fn now() -> i64 {

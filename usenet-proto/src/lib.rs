@@ -3,6 +3,7 @@ mod health;
 mod import;
 mod jobs;
 mod secret;
+mod status;
 mod token;
 
 pub use config::{EngineConfigResponse, IpPreference, UsenetServer};
@@ -10,6 +11,10 @@ pub use health::HealthSample;
 pub use import::{ImportMode, ImportRequest, ImportResponse, OutputInfo};
 pub use jobs::{JobFailure, JobRequest, JobState, JobStatus};
 pub use secret::{MIN_SECRET_BYTES, SecretError, check_secrets, keys_match};
+pub use status::{
+    EngineActivity, EngineStatus, JobActivity, JobPhase, ProviderActivity, StreamActivity,
+    StreamKind, WaitReason,
+};
 pub use token::{Purpose, StreamClaims, TokenError, sign, verify};
 
 #[cfg(test)]

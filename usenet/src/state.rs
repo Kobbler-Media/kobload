@@ -7,6 +7,8 @@ use kob_usenet::Engine;
 use tokio::sync::{Notify, Semaphore};
 
 use crate::damage::Damage;
+use crate::status::{ProviderHosts, SharedRates};
+use crate::stream::LiveStreams;
 use crate::throttle::Throttle;
 
 pub const BYTE_GAP: Duration = Duration::from_secs(7);
@@ -42,6 +44,9 @@ pub struct AppState {
     pub(crate) refused_tokens: Arc<Throttle>,
     pub(crate) uploads: Arc<Semaphore>,
     pub(crate) config_refresh: Arc<Notify>,
+    pub(crate) live: Arc<LiveStreams>,
+    pub(crate) rates: Arc<SharedRates>,
+    pub(crate) hosts: ProviderHosts,
 }
 
 impl AppState {
@@ -59,6 +64,9 @@ impl AppState {
             refused_tokens: Arc::new(Throttle::new(REFUSAL_WARN_EVERY)),
             uploads: Arc::new(Semaphore::new(IMPORTS_AT_ONCE)),
             config_refresh: Arc::default(),
+            live: Arc::default(),
+            rates: Arc::default(),
+            hosts: ProviderHosts::default(),
         }
     }
 
@@ -83,6 +91,11 @@ impl AppState {
     #[must_use]
     pub fn config_refresh(&self) -> Arc<Notify> {
         Arc::clone(&self.config_refresh)
+    }
+
+    #[must_use]
+    pub fn provider_hosts(&self) -> ProviderHosts {
+        self.hosts.clone()
     }
 
     #[must_use]

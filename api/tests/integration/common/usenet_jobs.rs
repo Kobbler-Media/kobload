@@ -29,6 +29,7 @@ pub struct EngineJobs {
     pub rotated_key: Mutex<bool>,
     pub add_times_out: Mutex<bool>,
     pub restarted: Mutex<HashSet<String>>,
+    pub status_reply: Mutex<Value>,
 }
 
 impl EngineJobs {
@@ -112,6 +113,16 @@ async fn status(
     }
 }
 
+async fn engine_status(
+    State(engine): State<Arc<EngineJobs>>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    if !engine.authorized(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(engine.status_reply.lock().unwrap().clone()).into_response()
+}
+
 fn unknown_job() -> axum::response::Response {
     (
         StatusCode::NOT_FOUND,
@@ -178,6 +189,7 @@ impl EngineFixture {
         let app = Router::new()
             .route("/v1/jobs", get(list).post(add))
             .route("/v1/jobs/{id}", get(status).delete(delete))
+            .route("/v1/status", get(engine_status))
             .route("/healthz", get(|| async { "ok" }))
             .with_state(engine.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

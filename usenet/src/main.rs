@@ -44,7 +44,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &settings.data_dir,
         state.configured(),
     )
-    .with_refresh(state.config_refresh());
+    .with_refresh(state.config_refresh())
+    .with_hosts(state.provider_hosts());
     if let Some(servers) = restored {
         pull.adopt(servers);
     }

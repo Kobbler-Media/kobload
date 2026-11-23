@@ -13,6 +13,7 @@
   import { createSseConnection, type SseConnection } from '#lib/sse.js';
   import { showToast } from '#lib/stores/toast.svelte.js';
   import DownloadCard from '../downloads/DownloadCard.svelte';
+  import UsenetStatusStrip from '../downloads/UsenetStatusStrip.svelte';
   import ReingestDialog from '../downloads/ReingestDialog.svelte';
   import DeleteDialog from '../downloads/DeleteDialog.svelte';
   import LoadingState from '../LoadingState.svelte';
@@ -259,6 +260,8 @@
     </div>
   {/if}
 </div>
+
+<UsenetStatusStrip />
 
 <div class="filters">
   <input

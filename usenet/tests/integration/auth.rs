@@ -24,6 +24,7 @@ async fn control_routes_need_the_bearer() {
         ("GET", "/v1/jobs".to_owned()),
         ("GET", "/v1/jobs/some-job".to_owned()),
         ("DELETE", "/v1/jobs/some-job?delete_files=true".to_owned()),
+        ("GET", "/v1/status".to_owned()),
     ];
 
     for (method, uri) in &routes {

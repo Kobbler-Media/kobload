@@ -2,6 +2,8 @@
   import type { DownloadItem, DownloadEvent } from '#lib/api/client.js';
   import { rescanDownload } from '#lib/api/client.js';
   import EventTimeline from '../EventTimeline.svelte';
+  import UsenetJobStats from './UsenetJobStats.svelte';
+  import { usenetJob } from './usenetStatus.svelte.js';
   import { downloadEventTones } from '#lib/styles/eventTones.js';
 
   interface Props {
@@ -53,6 +55,8 @@
     `status-${value.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
   const isActive = (status: string) => status === 'queued' || status === 'downloading';
+
+  const liveJob = $derived(isActive(item.status) ? usenetJob(item.external_id) : undefined);
 
   const canReingest = (status: string) => status === 'completed' || status === 'failed';
 
@@ -111,6 +115,9 @@
         {/if}
         <span>{new Date(item.created_at).toLocaleString()}</span>
       </div>
+      {#if liveJob}
+        <UsenetJobStats job={liveJob} />
+      {/if}
     </div>
     <div class="row-status">
       {#if item.progress !== null && item.progress < 1}
