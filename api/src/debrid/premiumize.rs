@@ -313,9 +313,13 @@ impl DebridProvider for PremiumizeProvider {
             .max_by_key(|f| f.size)
             .ok_or_else(|| DebridError::Other("No files in directdl response".to_string()))?;
 
+        let filename = basename(&file.path).ok_or_else(|| {
+            DebridError::Parse("Premiumize returned an unusable file path".to_string())
+        })?;
+
         Ok(UnrestrictedLink {
             url: file.link,
-            filename: file.path,
+            filename,
             filesize: file.size,
             mime_type: None,
             expires_at: None,
@@ -375,5 +379,32 @@ mod tests {
         assert_eq!(provider.max_hashes_per_batch(), 100);
         assert!(!provider.supports_usenet());
         assert_eq!(provider.display_name(), "Premiumize");
+    }
+}
+
+fn basename(path: &str) -> Option<String> {
+    let name = path.rsplit(['/', '\\']).next()?.trim();
+    (!matches!(name, "" | "." | "..")).then(|| name.to_string())
+}
+
+#[cfg(test)]
+mod basename_tests {
+    use super::basename;
+
+    #[test]
+    fn a_provider_path_becomes_a_safe_file_name() {
+        for (path, expected) in [
+            ("Show/Season 1/Show.S01E01.mkv", Some("Show.S01E01.mkv")),
+            ("../../etc/passwd", Some("passwd")),
+            ("dir\\file.mkv", Some("file.mkv")),
+            ("file.mkv", Some("file.mkv")),
+            ("", None),
+            ("dir/", None),
+            ("..", None),
+            ("a/..", None),
+            ("a/.", None),
+        ] {
+            assert_eq!(basename(path).as_deref(), expected, "{path}");
+        }
     }
 }

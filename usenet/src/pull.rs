@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use kob_usenet::Engine;
 use reqwest::header::AUTHORIZATION;
+use tokio::sync::Notify;
 use usenet_proto::{EngineConfigResponse, UsenetServer};
 
 use crate::servers::engine_server;
@@ -58,6 +59,7 @@ pub struct ConfigPull {
     configured: Configured,
     applied: Option<Vec<UsenetServer>>,
     warned: Throttle,
+    refresh: Arc<Notify>,
 }
 
 fn backoff(wait: Duration) -> Duration {
@@ -88,7 +90,14 @@ impl ConfigPull {
             configured,
             applied: None,
             warned: Throttle::new(WARN_EVERY),
+            refresh: Arc::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_refresh(mut self, refresh: Arc<Notify>) -> Self {
+        self.refresh = refresh;
+        self
     }
 
     pub fn adopt(&mut self, servers: Vec<UsenetServer>) {
@@ -135,8 +144,12 @@ impl ConfigPull {
         let mut ticks = tokio::time::interval(every);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticks.tick().await;
+        let refresh = Arc::clone(&self.refresh);
         loop {
-            ticks.tick().await;
+            tokio::select! {
+                _ = ticks.tick() => {}
+                () = refresh.notified() => {}
+            }
             match self.tick().await {
                 Ok(Pulled::Applied(count)) => {
                     tracing::info!(servers = count, "engine config applied");

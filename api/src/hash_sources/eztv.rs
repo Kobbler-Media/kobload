@@ -106,7 +106,7 @@ impl EztvClient {
 
         let entries = torrents
             .into_iter()
-            .filter(|t| !t.hash.is_empty())
+            .filter(|t| crate::info_hash::valid(&t.hash).is_some())
             .map(|t| {
                 let filename = t
                     .filename

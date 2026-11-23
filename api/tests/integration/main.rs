@@ -32,6 +32,7 @@ mod learned_alias_match_test;
 mod manual_grab_media_kind_test;
 mod newznab_proxy_test;
 mod parsing_callback_test;
+mod payload_fetch_test;
 mod poll_transient_test;
 mod prerelease_source_test;
 mod quality_default_test;

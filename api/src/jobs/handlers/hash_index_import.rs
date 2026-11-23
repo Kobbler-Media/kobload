@@ -201,6 +201,9 @@ async fn import_rarbg(
                     continue;
                 }
             };
+            if crate::info_hash::valid(&hash).is_none() {
+                continue;
+            }
 
             // Determine media kind from RARBG category
             let media_kind = rarbg_cat_to_media_kind(cat.as_deref());

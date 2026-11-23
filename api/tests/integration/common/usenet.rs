@@ -57,6 +57,7 @@ struct EngineState {
     health: HashMap<(String, Option<usize>), HealthSample>,
     health_calls: Vec<HealthCall>,
     health_delay: Duration,
+    config_refreshes: usize,
 }
 
 fn posted_guid(nzb: &[u8]) -> String {
@@ -130,6 +131,17 @@ async fn import(
     Json(response).into_response()
 }
 
+async fn config_refresh(
+    State(state): State<Arc<Mutex<EngineState>>>,
+    headers: HeaderMap,
+) -> StatusCode {
+    if !authorized(&headers) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    state.lock().unwrap().config_refreshes += 1;
+    StatusCode::NO_CONTENT
+}
+
 const HEALTHY: HealthSample = HealthSample {
     checked: 20,
     missing: 0,
@@ -196,6 +208,7 @@ impl MockEngine {
         let state = Arc::new(Mutex::new(EngineState::default()));
         let app = Router::new()
             .route("/v1/import", post(import))
+            .route("/v1/config/refresh", post(config_refresh))
             .route("/v1/releases/{key}", get(release))
             .route("/v1/releases/{key}/health", post(health))
             .route("/healthz", get(|| async { "ok" }))
@@ -288,6 +301,10 @@ impl MockEngine {
 
     pub fn delay(&self, delay: Duration) {
         self.state.lock().unwrap().delay = delay;
+    }
+
+    pub fn config_refreshes(&self) -> usize {
+        self.state.lock().unwrap().config_refreshes
     }
 
     pub fn imports(&self) -> Vec<ImportRequest> {

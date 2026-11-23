@@ -11,7 +11,7 @@ use crate::auth::require_auth;
 use crate::repositories::usenet_servers::{self as repo, UsenetServerInput, UsenetServerRow};
 use crate::state::AppState;
 use crate::usenet::config::{format_date, parse_date};
-use crate::usenet::{ProbeTarget, probe, sab_servers, same_host, violation};
+use crate::usenet::{ProbeTarget, engine_connections, probe, sab_servers, same_host, violation};
 
 #[derive(Debug, Serialize)]
 pub struct UsenetServerView {
@@ -23,6 +23,7 @@ pub struct UsenetServerView {
     verify_cert: bool,
     ip_preference: String,
     connections: i32,
+    effective_connections: Option<i32>,
     priority: i32,
     backbone: Option<String>,
     retention_days: Option<i32>,
@@ -49,6 +50,7 @@ impl From<UsenetServerRow> for UsenetServerView {
             verify_cert: row.verify_cert,
             ip_preference: row.ip_preference,
             connections: row.connections,
+            effective_connections: None,
             priority: row.priority,
             backbone: row.backbone,
             retention_days: row.retention_days,
@@ -253,15 +255,23 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
     if require_auth(&state, &headers).await.is_err() {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match repo::list(&state.pool).await {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(UsenetServerView::from)
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
-        Err(e) => database_error(e),
-    }
+    let rows = match repo::list(&state.pool).await {
+        Ok(rows) => rows,
+        Err(e) => return database_error(e),
+    };
+    let sab = sab_servers(&state.pool, &state.http_client).await;
+    let left = engine_connections(&rows, &sab);
+    let views: Vec<UsenetServerView> = rows
+        .into_iter()
+        .map(|row| {
+            let effective_connections = left.get(&row.id).copied();
+            UsenetServerView {
+                effective_connections,
+                ..row.into()
+            }
+        })
+        .collect();
+    Json(views).into_response()
 }
 
 pub async fn get(

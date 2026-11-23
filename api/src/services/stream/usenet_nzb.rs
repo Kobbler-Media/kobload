@@ -1,11 +1,13 @@
 use reqwest::StatusCode;
 
 use super::usenet_failure::indexer_refused;
+use crate::payload_fetch::{PayloadClients, PayloadError, PayloadGet};
+use crate::redirect_guard::Origin;
 
 /// Season-pack NZBs run to tens of MB; anything past this is not an NZB worth importing.
 pub const MAX_NZB_BYTES: usize = 128 << 20;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FetchError {
     Unreachable(String),
     Refused(StatusCode),
@@ -32,13 +34,19 @@ impl FetchError {
 
 /// The URL carries the indexer's API key, so neither it nor reqwest's error (which quotes
 /// it) is ever reported.
-pub async fn fetch(download_url: &str) -> Result<Vec<u8>, FetchError> {
+pub async fn fetch(download_url: &str, origin: Origin) -> Result<Vec<u8>, FetchError> {
     let unreachable = |e: reqwest::Error| FetchError::Unreachable(e.without_url().to_string());
-    let mut resp = crate::http::payload_client()
-        .get(download_url)
-        .send()
+    let mut resp = PayloadClients::shared()
+        .get(PayloadGet {
+            url: download_url,
+            origin,
+            ..Default::default()
+        })
         .await
-        .map_err(unreachable)?;
+        .map_err(|e| match e {
+            PayloadError::Request(e) => unreachable(e),
+            refused @ PayloadError::Refused(_) => FetchError::Unreachable(refused.to_string()),
+        })?;
     let status = resp.status();
     if !status.is_success() {
         return Err(FetchError::Refused(status));

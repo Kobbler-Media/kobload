@@ -1,28 +1,37 @@
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
-use serde::Deserialize;
+use futures::future::join_all;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::repositories::clients;
+use crate::repositories::{app_settings, clients, usenet_servers};
 use crate::types::DownloadClientConfig;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+const SETTING_PREFIX: &str = "usenet_sab_share:";
+const DRAIN_REFRESH_SECS: i64 = 300;
+// A disabled SAB that died mid-queue must not pin the engine at its floor for good.
+const DRAIN_TRUSTED_SECS: i64 = 3600;
 
-type LastSeen = HashMap<(Uuid, String), Vec<SabServer>>;
-
-// A SAB whose API stops answering may still hold its connections, so the engine must not
-// grow back into its share until SAB is disabled.
-static LAST_SEEN: LazyLock<Mutex<LastSeen>> = LazyLock::new(Default::default);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SabServer {
     pub host: String,
     pub username: String,
     pub connections: i64,
+}
+
+// Persisted because a SAB whose API is down may still hold its connections, and a kobload
+// restart must not hand them to the engine as well.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredShare {
+    base_url: String,
+    servers: Vec<SabServer>,
+    draining: bool,
+    seen_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +57,17 @@ struct ServerEntry {
     enable: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct QueueReply {
+    queue: Queue,
+}
+
+#[derive(Deserialize)]
+struct Queue {
+    #[serde(default)]
+    slots: Vec<serde_json::Value>,
+}
+
 fn number(value: &serde_json::Value) -> Option<i64> {
     match value {
         serde_json::Value::Number(n) => n.as_i64(),
@@ -57,12 +77,17 @@ fn number(value: &serde_json::Value) -> Option<i64> {
     }
 }
 
-// An unreachable SAB never blocks an edit: it may be the very thing being fixed.
-pub async fn sab_servers(pool: &PgPool, http: &reqwest::Client) -> Vec<SabServer> {
-    enabled_sab_servers(pool, http, None).await
+fn setting(id: Uuid) -> String {
+    format!("{SETTING_PREFIX}{id}")
 }
 
-pub async fn enabled_sab_servers(
+pub async fn sab_servers(pool: &PgPool, http: &reqwest::Client) -> Vec<SabServer> {
+    sab_servers_except(pool, http, None).await
+}
+
+// Disabled clients are included: they keep finishing their queue, and hold connections
+// until it is empty.
+pub async fn sab_servers_except(
     pool: &PgPool,
     http: &reqwest::Client,
     except: Option<Uuid>,
@@ -74,50 +99,163 @@ pub async fn enabled_sab_servers(
             return Vec::new();
         }
     };
-    let mut servers = Vec::new();
-    for sab in sabs
-        .iter()
-        .filter(|c| c.enabled && c.client_type == "sabnzbd" && Some(c.id) != except)
-    {
-        servers.extend(client_servers(http, sab).await);
-    }
-    servers
+    join_all(
+        sabs.iter()
+            .filter(|c| c.client_type == "sabnzbd" && Some(c.id) != except)
+            .map(|sab| share(pool, http, sab)),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
-pub async fn client_servers(http: &reqwest::Client, sab: &DownloadClientConfig) -> Vec<SabServer> {
-    let key = (sab.id, sab.base_url.clone());
-    let seen = || LAST_SEEN.lock().unwrap_or_else(|e| e.into_inner());
-    match fetch(http, sab).await {
-        Ok(found) => {
-            seen().insert(key, found.clone());
-            found
+async fn share(
+    pool: &PgPool,
+    http: &reqwest::Client,
+    sab: &DownloadClientConfig,
+) -> Vec<SabServer> {
+    let stored = load(pool, sab).await;
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    match read(http, sab).await {
+        Ok((servers, draining)) => {
+            let current = StoredShare {
+                base_url: sab.base_url.clone(),
+                servers: without_logins(&servers),
+                draining,
+                seen_at: now,
+            };
+            if needs_saving(stored.as_ref(), &current) {
+                save(pool, sab.id, &current).await;
+            }
+            if sab.enabled || draining {
+                servers
+            } else {
+                Vec::new()
+            }
         }
         Err(reason) => {
-            let last = seen().get(&key).cloned().unwrap_or_default();
+            let last = stored
+                .filter(|s| sab.enabled || (s.draining && now - s.seen_at < DRAIN_TRUSTED_SECS))
+                .map(|s| s.servers)
+                .unwrap_or_default();
+            let last = with_logins(pool, last).await;
             warn!(
                 client = %sab.name,
                 reason,
                 remembered_servers = last.len(),
-                "Could not read SABnzbd's servers; the usenet cap check uses its last known share"
+                "Could not read SABnzbd; the usenet cap check uses its last known share"
             );
             last
         }
     }
 }
 
-async fn fetch(
+fn login_digest(username: &str) -> String {
+    const_hex::encode(Sha256::digest(username.trim()))
+}
+
+// Settings land in backups, so the share keeps a digest that can only be matched back to a
+// login the usenet server settings already hold.
+fn without_logins(servers: &[SabServer]) -> Vec<SabServer> {
+    servers
+        .iter()
+        .map(|s| SabServer {
+            username: login_digest(&s.username),
+            ..s.clone()
+        })
+        .collect()
+}
+
+async fn with_logins(pool: &PgPool, mut servers: Vec<SabServer>) -> Vec<SabServer> {
+    let rows = match usenet_servers::list(pool).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(error = %e, "Could not match SABnzbd's last known share to its accounts");
+            return servers;
+        }
+    };
+    for server in &mut servers {
+        if let Some(row) = rows
+            .iter()
+            .find(|r| login_digest(&r.username) == server.username)
+        {
+            server.username.clone_from(&row.username);
+        }
+    }
+    servers
+}
+
+fn needs_saving(stored: Option<&StoredShare>, current: &StoredShare) -> bool {
+    stored.is_none_or(|s| {
+        s.servers != current.servers
+            || s.draining != current.draining
+            || (current.draining && current.seen_at - s.seen_at >= DRAIN_REFRESH_SECS)
+    })
+}
+
+async fn load(pool: &PgPool, sab: &DownloadClientConfig) -> Option<StoredShare> {
+    let value = match app_settings::get(pool, &setting(sab.id)).await {
+        Ok(value) => value?,
+        Err(e) => {
+            warn!(error = %e, "Could not load SABnzbd's last known share");
+            return None;
+        }
+    };
+    serde_json::from_value::<StoredShare>(value)
+        .ok()
+        .filter(|s| s.base_url == sab.base_url)
+}
+
+async fn save(pool: &PgPool, id: Uuid, share: &StoredShare) {
+    let Ok(value) = serde_json::to_value(share) else {
+        return;
+    };
+    if let Err(e) = app_settings::set(pool, &setting(id), &value).await {
+        warn!(error = %e, "Could not store SABnzbd's last known share");
+    }
+}
+
+pub async fn forget_sab_share(pool: &PgPool, id: Uuid) {
+    if let Err(e) = app_settings::delete(pool, &setting(id)).await {
+        warn!(error = %e, "Could not drop SABnzbd's last known share");
+    }
+}
+
+// An enabled client counts whatever its queue says, so only a disabled one needs the answer.
+async fn read(
     http: &reqwest::Client,
     sab: &DownloadClientConfig,
-) -> Result<Vec<SabServer>, String> {
+) -> Result<(Vec<SabServer>, bool), String> {
+    let (servers, queue) = tokio::join!(fetch(http, sab), queue_has_jobs(http, sab));
+    let draining = if sab.enabled {
+        queue.unwrap_or(false)
+    } else {
+        queue?
+    };
+    Ok((servers?, draining))
+}
+
+pub async fn candidate_servers(
+    http: &reqwest::Client,
+    sab: &DownloadClientConfig,
+) -> Vec<SabServer> {
+    fetch(http, sab).await.unwrap_or_else(|reason| {
+        warn!(client = %sab.name, reason, "Could not read SABnzbd's servers for the cap check");
+        Vec::new()
+    })
+}
+
+async fn api(
+    http: &reqwest::Client,
+    sab: &DownloadClientConfig,
+    query: &[(&str, &str)],
+) -> Result<reqwest::Response, String> {
     let api_key = sab.api_key.as_deref().unwrap_or_default();
     let resp = http
         .get(format!("{}/api", sab.base_url.trim_end_matches('/')))
-        .query(&[
-            ("mode", "get_config"),
-            ("section", "servers"),
-            ("output", "json"),
-            ("apikey", api_key),
-        ])
+        .query(query)
+        .query(&[("output", "json"), ("apikey", api_key)])
         .timeout(TIMEOUT)
         .send()
         .await
@@ -125,7 +263,30 @@ async fn fetch(
     if !resp.status().is_success() {
         return Err(format!("SABnzbd answered {}", resp.status()));
     }
-    let reply: ConfigReply = resp.json().await.map_err(|e| e.without_url().to_string())?;
+    Ok(resp)
+}
+
+async fn queue_has_jobs(
+    http: &reqwest::Client,
+    sab: &DownloadClientConfig,
+) -> Result<bool, String> {
+    let reply: QueueReply = api(http, sab, &[("mode", "queue")])
+        .await?
+        .json()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
+    Ok(!reply.queue.slots.is_empty())
+}
+
+async fn fetch(
+    http: &reqwest::Client,
+    sab: &DownloadClientConfig,
+) -> Result<Vec<SabServer>, String> {
+    let reply: ConfigReply = api(http, sab, &[("mode", "get_config"), ("section", "servers")])
+        .await?
+        .json()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
     Ok(reply
         .config
         .servers

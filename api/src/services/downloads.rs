@@ -3,6 +3,9 @@ use sha2::{Digest, Sha256};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::payload_fetch::{PayloadClients, PayloadError, PayloadGet};
+use crate::redirect_guard::Origin;
+
 use crate::download_clients::{DownloadClientError, DownloadClientResolver, NewDownload};
 use crate::helpers::{broadcast_download_created, log_event};
 use crate::indexers::{IndexerContext, IndexerResolver};
@@ -15,6 +18,7 @@ use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Default)]
 pub struct DownloadUrlContext {
+    pub origin: Origin,
     pub base_url: Option<String>,
     pub auth_header: Option<(String, String)>,
     pub cookie: Option<String>,
@@ -205,7 +209,7 @@ pub async fn submit_download(
         status: "submitting".to_string(),
         progress: None,
         error: None,
-        release_payload: input.release_payload.clone(),
+        release_payload: stored_payload(&input),
         api_key_id: input.api_key_id,
         quality_profile_id: input.quality_profile_id,
         media_kind: input.media_kind.clone(),
@@ -638,6 +642,36 @@ fn is_magnet_url(value: &str) -> bool {
     value.trim_start().starts_with("magnet:")
 }
 
+// A submission retry rebuilds the indexer's auth from this.
+fn stored_payload(input: &DownloadSubmission) -> Option<serde_json::Value> {
+    let mut payload = input.release_payload.clone();
+    if let Some(id) = input.indexer_source_id {
+        let object = payload.get_or_insert_with(|| serde_json::json!({}));
+        if let Some(fields) = object.as_object_mut() {
+            fields.insert("indexer_source_id".to_string(), serde_json::json!(id));
+        }
+    }
+    payload
+}
+
+async fn get_payload(
+    url: &str,
+    context: &DownloadUrlContext,
+) -> Result<reqwest::Response, DownloadClientError> {
+    PayloadClients::shared()
+        .get(PayloadGet {
+            url,
+            origin: context.origin.clone(),
+            auth_header: context.auth_header.as_ref(),
+            cookie: context.cookie.as_deref(),
+        })
+        .await
+        .map_err(|e| match e {
+            PayloadError::Request(e) => DownloadClientError::Request(e),
+            refused @ PayloadError::Refused(_) => DownloadClientError::Message(refused.to_string()),
+        })
+}
+
 enum ReleasePayload {
     Bytes(Vec<u8>),
     Url(String),
@@ -657,17 +691,7 @@ async fn fetch_release_payload(
         return Ok(ReleasePayload::Url(download_url.to_string()));
     }
 
-    let mut request = crate::http::payload_client()
-        .get(download_url)
-        .header("User-Agent", "Kobload/1.0");
-    if let Some((key, value)) = &url_context.auth_header {
-        request = request.header(key, value);
-    }
-    if let Some(ref cookie) = url_context.cookie {
-        request = request.header("Cookie", cookie);
-    }
-
-    let resp = request.send().await.map_err(DownloadClientError::Request)?;
+    let resp = get_payload(download_url, url_context).await?;
 
     if !resp.status().is_success() {
         return Err(DownloadClientError::Status(resp.status()));
@@ -682,6 +706,7 @@ async fn fetch_release_payload(
 /// Retry submitting a download to a download client.
 /// Used by the polling loop for downloads in pending_retry status.
 pub async fn retry_submission(
+    pool: &PgPool,
     http_client: &reqwest::Client,
     download: &downloads_repo::PendingRetryDownload,
     client: &crate::types::DownloadClientConfig,
@@ -694,12 +719,14 @@ pub async fn retry_submission(
             .await;
     }
 
-    // Fetch the payload (torrent file, NZB, etc.)
-    let request = crate::http::payload_client()
-        .get(&download.download_url)
-        .header("User-Agent", "Kobload/1.0");
-
-    let resp = request.send().await.map_err(DownloadClientError::Request)?;
+    let source = download
+        .release_payload
+        .as_ref()
+        .and_then(crate::helpers::extract_indexer_source_id);
+    let context = crate::helpers::download_url_context_for_indexer_source(pool, source)
+        .await
+        .map_err(DownloadClientError::Message)?;
+    let resp = get_payload(&download.download_url, &context).await?;
 
     if !resp.status().is_success() {
         return Err(DownloadClientError::Status(resp.status()));

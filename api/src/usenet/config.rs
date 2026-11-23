@@ -9,6 +9,8 @@ use super::sab_share::sab_servers;
 use crate::repositories::usenet_servers::UsenetServerRow;
 use crate::repositories::{RepositoryError, usenet_servers};
 
+const USEFUL_CONNECTIONS: i32 = 8;
+
 pub fn format_date(date: Date) -> String {
     date.format(format_description!("[year]-[month]-[day]"))
         .unwrap_or_default()
@@ -63,7 +65,16 @@ pub async fn engine_config(
     let servers = rows
         .into_iter()
         .filter_map(|mut row| {
-            row.connections = *allowed.get(&row.id)?;
+            let left = *allowed.get(&row.id)?;
+            if left < row.connections && left < USEFUL_CONNECTIONS {
+                warn!(
+                    host = %row.host,
+                    configured = row.connections,
+                    left,
+                    "SABnzbd leaves the usenet engine too few connections on this account; lower SABnzbd's"
+                );
+            }
+            row.connections = left;
             Some(to_wire(row))
         })
         .collect();
@@ -82,10 +93,7 @@ pub async fn warn_at_startup(pool: &PgPool) {
         return;
     }
     let sab = sab_servers(pool, &crate::http::new_client()).await;
-    for account in caps::accounts(&rows, &sab)
-        .iter()
-        .filter(|a| a.over_cap_after_yielding())
-    {
+    for account in caps::accounts(&rows, &sab).iter().filter(|a| a.over_cap()) {
         warn!(account = %account.describe(), "Usenet servers exceed the account's connection cap");
     }
 }

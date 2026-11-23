@@ -117,28 +117,10 @@ impl DebridHandler {
         Ok((throttled, api_key))
     }
 
-    /// Extract info_hash from a magnet URL.
     fn extract_info_hash(magnet: &str) -> Result<String, DownloadClientError> {
-        let lower = magnet.to_lowercase();
-        if let Some(pos) = lower.find("btih:") {
-            let after = &magnet[pos + 5..];
-            let hash = after
-                .split('&')
-                .next()
-                .unwrap_or(after)
-                .trim()
-                .to_lowercase();
-            if hash.is_empty() {
-                return Err(DownloadClientError::Message(
-                    "empty info_hash in magnet URL".to_string(),
-                ));
-            }
-            Ok(hash)
-        } else {
-            Err(DownloadClientError::Message(
-                "no info_hash found in magnet URL".to_string(),
-            ))
-        }
+        crate::info_hash::from_magnet(magnet).ok_or_else(|| {
+            DownloadClientError::Message("no valid info_hash in magnet URL".to_string())
+        })
     }
 }
 

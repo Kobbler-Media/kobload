@@ -108,7 +108,7 @@ impl BitmagnetSyncHandler {
         let mut hashes_with_files = Vec::new();
 
         for item in items {
-            if item.info_hash.is_empty() {
+            if crate::info_hash::valid(&item.info_hash).is_none() {
                 continue;
             }
 
@@ -512,7 +512,11 @@ impl BitmagnetSyncHandler {
                     break;
                 };
 
-                for file_item in &result.items {
+                for file_item in result
+                    .items
+                    .iter()
+                    .filter(|f| crate::info_hash::valid(&f.info_hash).is_some())
+                {
                     let (season, episodes, media_type) =
                         hash_index::classify_hash_file(&file_item.path);
                     all_files.push(HashFileEntry {

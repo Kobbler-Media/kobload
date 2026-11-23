@@ -72,14 +72,13 @@ fn parse_torznab_response(
             continue;
         }
 
-        let info_hash = extract_torznab_attr(item, "infohash")
+        let Some(info_hash) = extract_torznab_attr(item, "infohash")
             .or_else(|| extract_torznab_attr(item, "info_hash"))
-            .unwrap_or_default()
-            .to_lowercase();
-
-        if info_hash.len() != 40 {
+            .and_then(|hash| crate::info_hash::valid(&hash))
+            .filter(|hash| hash.len() == 40)
+        else {
             continue;
-        }
+        };
 
         let size: Option<i64> = extract_xml_value(item, "size").and_then(|s| s.parse().ok());
         let imdb_id = extract_torznab_attr(item, "imdbid")

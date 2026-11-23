@@ -178,3 +178,84 @@ async fn imports_past_the_admission_cap_wait_for_a_slot() {
     }
     assert_eq!(queued.await.unwrap(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cached_lookup_does_not_wait_behind_slow_imports() {
+    let slow = Arc::new(Fixture::season());
+    let cached = Fixture::feature();
+    let articles = slow.articles().into_iter().chain(cached.articles());
+    let nntp = LoopbackServer::start(articles).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Arc::new(Harness::new(dir.path(), &nntp).await);
+    let known = harness.import(&cached, "idx:cached").await;
+    let (arrived, release) = nntp.hold_article(slow.message_id(0, 0));
+
+    let held: Vec<_> = (0..4)
+        .map(|n| {
+            let harness = Arc::clone(&harness);
+            let slow = Arc::clone(&slow);
+            tokio::spawn(async move {
+                let body = import_body(Some(&slow), &format!("idx:slow-{n}"));
+                harness
+                    .control("POST", "/v1/import", Some(body))
+                    .await
+                    .status()
+            })
+        })
+        .collect();
+    arrived.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let lookup = tokio::time::timeout(
+        Duration::from_secs(2),
+        harness.control("POST", "/v1/import", Some(import_body(None, "idx:cached"))),
+    )
+    .await
+    .expect("a lookup with no NZB takes no upload slot");
+    assert_eq!(lookup.status(), StatusCode::OK);
+    assert_eq!(
+        json::<ImportResponse>(lookup).await.release_key,
+        known.release_key
+    );
+
+    drop(release);
+    for import in held {
+        assert_eq!(import.await.unwrap(), StatusCode::OK);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dropped_prewarm_request_frees_the_release_for_a_stream_import() {
+    let fixture = Fixture::season();
+    let nntp = LoopbackServer::start(fixture.articles()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Harness::new(dir.path(), &nntp).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/import", listener.local_addr().unwrap());
+    let app = harness.app.clone();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let (arrived, _release) = nntp.hold_article(fixture.message_id(0, 0));
+    let mut prewarm = import_body(Some(&fixture), "idx:raced");
+    prewarm["mode"] = "prewarm".into();
+    let warm = tokio::spawn(
+        reqwest::Client::new()
+            .post(url)
+            .bearer_auth(crate::support::CONTROL)
+            .json(&prewarm)
+            .send(),
+    );
+    arrived.await.unwrap();
+    warm.abort();
+
+    let stream = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.control(
+            "POST",
+            "/v1/import",
+            Some(import_body(Some(&fixture), "idx:raced")),
+        ),
+    )
+    .await
+    .expect("the abandoned prewarm no longer holds the release");
+    assert_eq!(stream.status(), StatusCode::OK);
+}

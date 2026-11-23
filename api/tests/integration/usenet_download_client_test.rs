@@ -2,6 +2,8 @@
 //! fetches the NZB, hands it to the engine's job API, polls the job like any other client,
 //! imports the finished folder and releases the job on every terminal path.
 
+use std::sync::{Arc, Mutex};
+
 use base64::Engine as _;
 use serde_json::json;
 use usenet_proto::{JobFailure, JobState};
@@ -304,5 +306,81 @@ async fn the_client_type_needs_no_url_or_key_and_tests_the_engine_health() {
         .await
         .json();
     assert_eq!(result["success"], true, "{result}");
+    fx.cleanup().await;
+}
+
+async fn keyed_nzb(
+    axum::extract::State(seen): axum::extract::State<Arc<Mutex<Vec<Option<String>>>>>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut seen = seen.lock().unwrap();
+    seen.push(
+        headers
+            .get("x-api-key")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+    );
+    if seen.len() == 1 {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    "<nzb><file subject=\"retry\"/></nzb>".into_response()
+}
+
+#[tokio::test]
+async fn a_submission_retry_keeps_the_indexers_auth_header() {
+    let fx = EngineFixture::start().await;
+    fx.add_usenet_client(true).await;
+    let seen: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let app = axum::Router::new()
+        .route("/nzb", axum::routing::get(keyed_nzb))
+        .with_state(Arc::clone(&seen));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    let source: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO indexer_sources (id, name, handler_type, handler_config, enabled)
+         VALUES ($1, 'Prowlarr', 'prowlarr', $2, true) RETURNING id",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(json!({ "base_url": base, "api_key": "indexer-header-key" }))
+    .fetch_one(&fx.server.pool)
+    .await
+    .unwrap();
+
+    let resp = fx
+        .server
+        .admin_client()
+        .post_json(
+            "/api/v1/downloads",
+            &json!({
+                "source": "test", "protocol": "usenet",
+                "name": "Retry.S01E01.1080p.WEB-DL-GRP",
+                "download_url": format!("{base}/nzb"),
+                "callback_url": "", "metadata": {},
+                "release": { "indexer_source_id": source },
+            }),
+        )
+        .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let id: uuid::Uuid = resp.json::<serde_json::Value>()["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(fx.row(id).await.status, "pending_retry");
+    sqlx::query(
+        "UPDATE downloads SET submission_last_attempt_at = NOW() - INTERVAL '1 hour' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&fx.server.pool)
+    .await
+    .unwrap();
+
+    fx.poll().await;
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_eq!(seen[1].as_deref(), Some("indexer-header-key"));
     fx.cleanup().await;
 }

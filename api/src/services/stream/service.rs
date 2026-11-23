@@ -1206,17 +1206,16 @@ pub(super) fn build_patterns(request: &StreamSearchRequest, naming: &TvNaming) -
 /// Find the info_hash for a raw Release.
 /// Falls back to extracting hash from magnet URL if info_hash field is empty.
 fn find_info_hash_for_release(release: &Release) -> Option<String> {
-    if let Some(ref hash) = release.info_hash
-        && !hash.is_empty()
-    {
-        return Some(hash.clone());
-    }
-
-    if let Some(ref magnet) = release.magnet_url {
-        extract_hash_from_magnet(magnet)
-    } else {
-        None
-    }
+    release
+        .info_hash
+        .as_deref()
+        .and_then(crate::info_hash::valid)
+        .or_else(|| {
+            release
+                .magnet_url
+                .as_deref()
+                .and_then(crate::info_hash::from_magnet)
+        })
 }
 
 /// Find the info_hash for a scored result.
@@ -1240,22 +1239,6 @@ fn collect_torrent_hashes(releases: &[Release]) -> Vec<String> {
 fn extract_file_idx_from_guid(guid: &str) -> Option<i32> {
     let f_pos = guid.rfind("_f")?;
     guid[f_pos + 2..].parse().ok()
-}
-
-/// Extract info_hash from a magnet URL.
-/// Looks for `xt=urn:btih:{hash}` parameter.
-fn extract_hash_from_magnet(magnet: &str) -> Option<String> {
-    for part in magnet.split('&') {
-        let part = part.strip_prefix("magnet:?").unwrap_or(part);
-        if let Some(value) = part.strip_prefix("xt=urn:btih:") {
-            // Hash may be followed by more params
-            let hash = value.split('&').next().unwrap_or(value);
-            if !hash.is_empty() {
-                return Some(hash.to_lowercase());
-            }
-        }
-    }
-    None
 }
 
 /// Load quality profile for stream search scoring.

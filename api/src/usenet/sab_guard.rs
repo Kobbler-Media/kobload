@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::caps::sab_violation;
-use super::sab_share::{client_servers, enabled_sab_servers};
+use super::sab_share::{candidate_servers, sab_servers_except};
 use crate::repositories::{RepositoryError, usenet_servers};
 use crate::types::DownloadClientConfig;
 
@@ -21,7 +21,7 @@ pub async fn sab_client_refusal(
         return Ok(None);
     }
     let except = (candidate.id != Uuid::nil()).then_some(candidate.id);
-    let mut sab = enabled_sab_servers(pool, http, except).await;
-    sab.extend(client_servers(http, candidate).await);
+    let mut sab = sab_servers_except(pool, http, except).await;
+    sab.extend(candidate_servers(http, candidate).await);
     Ok(sab_violation(&rows, &sab).map(|over| over.describe_sab()))
 }

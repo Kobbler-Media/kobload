@@ -241,7 +241,7 @@ pub fn parse_streams(
             // back to recovering both from that URL's path.
             let resolve = s.url.as_deref().and_then(parse_resolve_url);
             let info_hash = match s.info_hash.as_deref().filter(|h| !h.is_empty()) {
-                Some(h) => h.to_lowercase(),
+                Some(h) => crate::info_hash::valid(h)?,
                 None => resolve.as_ref()?.info_hash.clone(),
             };
             let file_idx = s

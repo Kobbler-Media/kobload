@@ -218,6 +218,7 @@ pub fn reload_definitions(cache: &DefinitionCache, base_dir: &Path, override_dir
 }
 
 fn convert_result(r: cardigann::CardigannResult, source: &watch_repo::IndexerSourceRow) -> Release {
+    let info_hash = r.info_hash.as_deref().and_then(crate::info_hash::valid);
     let protocol = if r.magnet_url.is_some() || r.info_hash.is_some() {
         "torrent"
     } else {
@@ -261,7 +262,7 @@ fn convert_result(r: cardigann::CardigannResult, source: &watch_repo::IndexerSou
         category_ids: r.category_ids,
         indexer: source.name.clone(),
         protocol: protocol.to_string(),
-        info_hash: r.info_hash,
+        info_hash,
         files: r.files,
         seeders: r.seeders,
         peers: None,

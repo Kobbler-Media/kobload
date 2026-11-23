@@ -794,6 +794,7 @@ async fn retry_pending_submissions(state: &AppState) {
 
         // Fetch release payload and attempt submission
         let result = crate::services::downloads::retry_submission(
+            &state.pool,
             &state.http_client,
             &download,
             &client,

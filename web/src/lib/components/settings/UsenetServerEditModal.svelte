@@ -254,7 +254,10 @@
       <label>
         Backbone group
         <input type="text" bind:value={form.backbone} placeholder="Optional" />
-        <span class="hint">Servers on the same backbone share missing-article memory.</span>
+        <span class="hint">
+          Servers on the same backbone share missing-article memory. The same backbone and login
+          count as one account for the connection cap.
+        </span>
       </label>
       <label>
         Retention (days)

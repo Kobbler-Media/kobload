@@ -15,41 +15,34 @@ pub struct AccountLoad {
 }
 
 impl AccountLoad {
+    // SAB's share alone never makes an account over cap: the engine yields to it.
     pub fn over_cap(&self) -> bool {
-        self.cap
-            .is_some_and(|cap| self.connections + self.sab_connections > i64::from(cap))
-    }
-
-    // The engine shrinks to whatever SAB leaves, but never below one connection per server.
-    pub fn sab_leaves_no_room(&self) -> bool {
-        self.sab_connections > 0
-            && self
-                .cap
-                .is_some_and(|cap| self.sab_connections + self.servers > i64::from(cap))
-    }
-
-    pub fn over_cap_after_yielding(&self) -> bool {
         self.sab_leaves_no_room()
             || self
                 .cap
                 .is_some_and(|cap| self.connections > i64::from(cap))
     }
 
+    // The engine shrinks to whatever SAB leaves, but never below one connection per server.
+    pub fn sab_leaves_no_room(&self) -> bool {
+        self.servers > 0
+            && self.sab_connections > 0
+            && self
+                .cap
+                .is_some_and(|cap| self.sab_connections + self.servers > i64::from(cap))
+    }
+
     pub fn describe(&self) -> String {
+        if self.sab_leaves_no_room() {
+            return self.describe_sab();
+        }
         let login = format!("The account on {}", self.host);
-        let held = if self.sab_connections > 0 {
-            format!(
-                "{} connections ({} here plus SABnzbd's {})",
-                self.connections + self.sab_connections,
-                self.connections,
-                self.sab_connections
-            )
-        } else {
-            format!("{} connections", self.connections)
-        };
         match self.cap {
-            Some(cap) => format!("{login} would hold {held}, over its cap of {cap}"),
-            None => format!("{login} holds {held}"),
+            Some(cap) => format!(
+                "{login} would hold {} connections, over its cap of {cap}",
+                self.connections
+            ),
+            None => format!("{login} holds {} connections", self.connections),
         }
     }
 
@@ -73,17 +66,19 @@ fn host_key(host: &str) -> String {
 }
 
 // One login reached through several hosts of a backbone is still one account with one cap.
+// Without a login there is nothing to say two servers share an account.
 fn account(row: &UsenetServerRow) -> (String, String) {
+    let username = row.username.trim();
     let provider = row
         .backbone
         .as_deref()
         .map(str::trim)
-        .filter(|b| !b.is_empty())
+        .filter(|b| !b.is_empty() && !username.is_empty())
         .map_or_else(
             || host_key(&row.host),
             |b| format!("backbone:{}", b.to_lowercase()),
         );
-    (provider, row.username.trim().to_string())
+    (provider, username.to_string())
 }
 
 // SAB knows no backbones, so its server joins whichever account one of our rows reaches

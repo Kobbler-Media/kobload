@@ -1,15 +1,18 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use kob_usenet::vendor::testkit::LoopbackServer;
-use kobload_usenet::{ConfigPull, Configured, Pulled};
+use kobload_usenet::{AppState, ConfigPull, Configured, Pulled, router};
+use tower::ServiceExt;
 use usenet_proto::{EngineConfigResponse, IpPreference, UsenetServer};
 
-use crate::support::{CONTROL, engine};
+use crate::support::{CONTROL, SECRET, engine};
 
 type Served = Arc<Mutex<EngineConfigResponse>>;
 
@@ -170,4 +173,53 @@ async fn a_config_that_cannot_be_stored_still_serves_and_is_not_reapplied() {
     assert!(configured.is_set());
     assert_eq!(names(&engine), [("provider a".to_owned(), 0, 2)]);
     assert_eq!(pull.tick().await.unwrap(), Pulled::Unchanged);
+}
+
+#[tokio::test]
+async fn a_refresh_request_pulls_at_once_instead_of_at_the_next_tick() {
+    let nntp = LoopbackServer::start([]).await.unwrap();
+    let served: Served = Arc::new(Mutex::new(EngineConfigResponse {
+        servers: vec![usenet_server("a", &nntp, 0)],
+    }));
+    let url = kobload(Arc::clone(&served)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path(), Vec::new()).await;
+    let state = AppState::new(Arc::clone(&engine), CONTROL, SECRET);
+    let refresh = state.config_refresh();
+    let app = router(state);
+    let pull = ConfigPull::new(
+        Arc::clone(&engine),
+        &url,
+        CONTROL,
+        dir.path(),
+        Configured::default(),
+    )
+    .with_refresh(refresh);
+    tokio::spawn(pull.run(Duration::from_secs(3600)));
+    let until = |want: usize| {
+        let engine = Arc::clone(&engine);
+        async move {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while names(&engine).first().map(|n| n.2) != Some(want) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the new config applied");
+        }
+    };
+    until(2).await;
+
+    served.lock().unwrap().servers[0].connections = 1;
+    let response = app
+        .oneshot(
+            Request::post("/v1/config/refresh")
+                .header(header::AUTHORIZATION, format!("Bearer {CONTROL}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    until(1).await;
 }

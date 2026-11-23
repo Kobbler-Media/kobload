@@ -742,6 +742,7 @@ export type UsenetServer = {
   username: string;
   has_password: boolean;
   account_connection_cap: number | null;
+  effective_connections: number | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;

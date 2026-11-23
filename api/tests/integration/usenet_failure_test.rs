@@ -158,6 +158,34 @@ async fn test_an_unimportable_release_is_remembered_but_an_engine_fault_is_not()
 }
 
 #[tokio::test]
+async fn test_a_tap_during_a_warm_import_gets_a_stream_import_and_no_second_grab() {
+    let rig = UsenetRig::start().await;
+    rig.tv.indexer.set_search_results(vec![
+        rig.nzb("g-raced", "Engine.Raced.Show.S01E05.1080p.WEB-DL.x264-NZB"),
+    ]);
+    let options = rig.options("Engine Raced Show", "5").await;
+    let nzb_ref = options[0].nzb_ref.clone();
+    rig.engine.delay(Duration::from_millis(300));
+
+    let warm = rig.resolve(json!({ "nzb_ref": nzb_ref, "priority": "warm" }));
+    let tap = async {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        rig.resolve(json!({ "nzb_ref": nzb_ref })).await
+    };
+    let (_, (status, body)) = tokio::join!(warm, tap);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        rig.engine
+            .imports()
+            .iter()
+            .any(|i| i.mode == usenet_proto::ImportMode::Stream),
+        "a viewer's import runs in stream mode"
+    );
+    assert_eq!(rig.nzbs.fetches("g-raced"), 1, "the indexer is asked once");
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
 async fn test_an_nzb_over_the_cap_is_refused_without_reading_it_all() {
     let rig = UsenetRig::start().await;
     rig.nzbs.serve("g-huge", Served::Huge);

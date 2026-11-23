@@ -143,7 +143,13 @@
         <div class="meta-grid">
           <div>
             <span class="label">Connections</span>
-            <span>{server.connections}</span>
+            <span>
+              {#if server.effective_connections != null && server.effective_connections < server.connections}
+                {server.effective_connections} of {server.connections} (SABnzbd holds the rest)
+              {:else}
+                {server.connections}
+              {/if}
+            </span>
           </div>
           <div>
             <span class="label">Priority</span>

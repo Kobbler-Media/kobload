@@ -20,19 +20,6 @@ static SHARED_CLIENT: LazyLock<Client> = LazyLock::new(|| {
         .expect("Failed to create HTTP client")
 });
 
-// Release payloads (NZBs, torrent files) are fetched from indexer-supplied URLs.
-static PAYLOAD_CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    builder()
-        .user_agent("Kobload/1.0")
-        .redirect(crate::redirect_guard::policy())
-        .build()
-        .expect("Failed to create HTTP client")
-});
-
-pub fn payload_client() -> Client {
-    PAYLOAD_CLIENT.clone()
-}
-
 /// Default headers applied to all outbound HTTP clients.
 fn default_headers() -> reqwest::header::HeaderMap {
     let mut headers = reqwest::header::HeaderMap::new();

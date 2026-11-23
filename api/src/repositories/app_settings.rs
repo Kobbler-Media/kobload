@@ -15,6 +15,16 @@ where
     Ok(row)
 }
 
+pub async fn delete<'e, E>(exec: E, key: &str) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query!("DELETE FROM app_settings WHERE key = $1", key)
+        .execute(exec)
+        .await?;
+    Ok(())
+}
+
 /// Set a setting value (upsert).
 pub async fn set<'e, E>(exec: E, key: &str, value: &serde_json::Value) -> Result<()>
 where

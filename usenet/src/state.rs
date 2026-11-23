@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kob_usenet::Engine;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::damage::Damage;
 use crate::throttle::Throttle;
@@ -41,6 +41,7 @@ pub struct AppState {
     pub(crate) download_dir: Arc<Path>,
     pub(crate) refused_tokens: Arc<Throttle>,
     pub(crate) uploads: Arc<Semaphore>,
+    pub(crate) config_refresh: Arc<Notify>,
 }
 
 impl AppState {
@@ -57,6 +58,7 @@ impl AppState {
             download_dir: PathBuf::from(DEFAULT_DOWNLOAD_DIR).into(),
             refused_tokens: Arc::new(Throttle::new(REFUSAL_WARN_EVERY)),
             uploads: Arc::new(Semaphore::new(IMPORTS_AT_ONCE)),
+            config_refresh: Arc::default(),
         }
     }
 
@@ -76,6 +78,11 @@ impl AppState {
     pub const fn with_byte_gap(mut self, byte_gap: Duration) -> Self {
         self.byte_gap = byte_gap;
         self
+    }
+
+    #[must_use]
+    pub fn config_refresh(&self) -> Arc<Notify> {
+        Arc::clone(&self.config_refresh)
     }
 
     #[must_use]

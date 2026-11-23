@@ -57,23 +57,21 @@ pub async fn stream(
     };
     let content_type = mime_guess::from_path(&output.path).first_or_octet_stream();
     let content_type = HeaderValue::from_str(content_type.as_ref()).map_err(internal)?;
-    let reply = |count: u64| {
-        let builder = Response::builder()
-            .header(header::ACCEPT_RANGES, "bytes")
-            .header(header::CONTENT_TYPE, content_type.clone())
-            .header(header::CONTENT_LENGTH, count);
-        if ranged {
-            builder.status(StatusCode::PARTIAL_CONTENT).header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{}/{len}", start + count - 1),
-            )
-        } else {
-            builder.status(StatusCode::OK)
-        }
+    let mut reply = Response::builder()
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, count);
+    reply = if ranged {
+        reply.status(StatusCode::PARTIAL_CONTENT).header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{}/{len}", start + count - 1),
+        )
+    } else {
+        reply.status(StatusCode::OK)
     };
 
     if method == Method::HEAD || count == 0 {
-        return reply(count).body(Body::empty()).map_err(internal);
+        return reply.body(Body::empty()).map_err(internal);
     }
     let mut reader = state.engine.open(&key, claims.output, purpose(&claims))?;
     reader.set_end(start + count);
@@ -89,12 +87,11 @@ pub async fn stream(
     };
     let First { bytes, failure } = pump.first().await;
     match failure {
-        None => reply(count).body(pump.into_body(bytes)).map_err(internal),
-        // A shorter 206 is only legal for a Range request; the client re-requests from its end.
-        Some(_) if ranged && !bytes.is_empty() => reply(bytes.len() as u64)
-            .body(Body::from(bytes))
+        None => reply.body(pump.into_body(bytes)).map_err(internal),
+        Some((_, error)) if ranged && !bytes.is_empty() => reply
+            .body(Pump::aborted_body(bytes, error))
             .map_err(internal),
-        Some(failure) => Err(ApiError::new(failure.status(), failure.code())),
+        Some((failure, _)) => Err(ApiError::new(failure.status(), failure.code())),
     }
 }
 

@@ -13,8 +13,12 @@ pub async fn create_provider(pool: &sqlx::PgPool, provider_type: &str) -> RankPr
     RankProvider { id }
 }
 
+// Ingest refuses anything but a real info hash, and tests name theirs by any letter.
 pub fn hash(c: char) -> String {
-    std::iter::repeat_n(c, 40).collect()
+    if c.is_ascii_hexdigit() {
+        return c.to_string().repeat(40);
+    }
+    format!("{:02x}", c as u32 & 0xff).repeat(20)
 }
 
 pub fn option(provider: &RankProvider, release_key: &str, title: &str, score: f64) -> StreamOption {

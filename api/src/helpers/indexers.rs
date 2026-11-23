@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::redirect_guard::Origin;
 use crate::repositories::{
     handler_type_defaults, indexer_category_mappings as category_repo, watch as watch_repo,
 };
@@ -31,6 +32,7 @@ pub async fn download_url_context_for_indexer_source(
                     .and_then(|value| value.as_str())
                     .map(|value| value.to_string());
                 return Ok(DownloadUrlContext {
+                    origin: Origin::indexer(base_url.as_deref()),
                     base_url,
                     auth_header: None,
                     cookie: None,
@@ -60,6 +62,7 @@ pub async fn download_url_context_for_indexer_source(
                 }
 
                 return Ok(DownloadUrlContext {
+                    origin: Origin::indexer(base_url.as_deref()),
                     base_url,
                     auth_header: api_key.map(|key| ("X-Api-Key".to_string(), key)),
                     cookie: None,
@@ -74,6 +77,7 @@ pub async fn download_url_context_for_indexer_source(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 return Ok(DownloadUrlContext {
+                    origin: Origin::Indexer(None),
                     base_url: None,
                     auth_header: None,
                     cookie: if mam_id.is_empty() {
@@ -97,6 +101,7 @@ pub async fn download_url_context_for_indexer_source(
                     .and_then(|v| v.as_str())
                     .map(|v| v.to_string());
                 return Ok(DownloadUrlContext {
+                    origin: Origin::indexer(base_url.as_deref()),
                     base_url,
                     auth_header: None,
                     cookie,
@@ -105,7 +110,13 @@ pub async fn download_url_context_for_indexer_source(
                 });
             }
             _ => {
+                let base_url = source
+                    .handler_config
+                    .get("base_url")
+                    .or_else(|| source.handler_config.get("sitelink"))
+                    .and_then(|value| value.as_str());
                 return Ok(DownloadUrlContext {
+                    origin: Origin::indexer(base_url),
                     seed_ratio: source.seed_ratio,
                     seed_time_minutes: source.seed_time_minutes,
                     ..Default::default()

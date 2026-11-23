@@ -15,6 +15,8 @@ const IMPORT_TIMEOUT: Duration = Duration::from_secs(90);
 /// yields to every other workload.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(300);
 
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Clone)]
 pub struct EngineSettings {
     pub engine_url: String,
@@ -207,6 +209,21 @@ impl UsenetEngine {
 
     fn jobs_url(&self) -> String {
         format!("{}/v1/jobs", self.settings.engine_url)
+    }
+
+    // Best effort: the engine pulls on its own within a minute anyway.
+    pub async fn refresh_config(&self) {
+        let sent = self
+            .http
+            .post(format!("{}/v1/config/refresh", self.settings.engine_url))
+            .bearer_auth(&self.settings.control_key)
+            .timeout(REFRESH_TIMEOUT)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status);
+        if let Err(e) = sent {
+            tracing::warn!(error = %e.without_url(), "Could not ask the usenet engine to pull its config");
+        }
     }
 
     pub async fn health(&self) -> Result<(), EngineError> {

@@ -13,7 +13,7 @@ use crate::auth::require_auth;
 use crate::repositories::clients as clients_repo;
 use crate::state::AppState;
 use crate::types::{DownloadClientConfig, DownloadClientType, TestConnectionResult};
-use crate::usenet::sab_client_refusal;
+use crate::usenet::{forget_sab_share, sab_client_refusal};
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadClientCreate {
@@ -131,6 +131,7 @@ async fn create_download_client(
     }
 
     let client_type = payload.client_type.to_lowercase();
+    let is_sab = client_type == "sabnzbd";
 
     // Look up the client type to get its protocol
     let client_type_info = match DownloadClientType::get(&client_type) {
@@ -192,6 +193,9 @@ async fn create_download_client(
                 let _ = clients_repo::clear_default_for_protocol_except(&state.pool, &protocol, id)
                     .await;
             }
+            if is_sab {
+                nudge_engine(&state).await;
+            }
             Json(serde_json::json!({ "id": id })).into_response()
         }
         Err(err) => {
@@ -211,15 +215,22 @@ async fn update_download_client(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
+    let is_sab;
     match clients_repo::get_client_by_id(&state.pool, id).await {
         Ok(Some(stored)) => {
+            is_sab = stored.client_type == "sabnzbd";
+            let was_live = stored.enabled;
+            let (old_url, old_key) = (stored.base_url.clone(), stored.api_key.clone());
             let candidate = DownloadClientConfig {
-                base_url: payload.base_url.clone().unwrap_or(stored.base_url.clone()),
-                api_key: payload.api_key.clone().or(stored.api_key.clone()),
+                base_url: payload.base_url.clone().unwrap_or(old_url.clone()),
+                api_key: payload.api_key.clone().or(old_key.clone()),
                 enabled: payload.enabled.unwrap_or(stored.enabled),
                 ..stored
             };
-            if let Some(refused) = sab_refusal(&state, &candidate).await {
+            let same_sab = candidate.base_url == old_url && candidate.api_key == old_key;
+            if !(was_live && same_sab)
+                && let Some(refused) = sab_refusal(&state, &candidate).await
+            {
                 return refused;
             }
         }
@@ -253,6 +264,9 @@ async fn update_download_client(
                 let _ = clients_repo::clear_default_for_protocol_except(&state.pool, &protocol, id)
                     .await;
             }
+            if is_sab {
+                nudge_engine(&state).await;
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => (StatusCode::NOT_FOUND, "not found").into_response(),
@@ -275,6 +289,12 @@ async fn sab_refusal(state: &AppState, candidate: &DownloadClientConfig) -> Opti
     }
 }
 
+async fn nudge_engine(state: &AppState) {
+    if let Some(engine) = state.debrid_providers.usenet_engine() {
+        engine.refresh_config().await;
+    }
+}
+
 async fn delete_download_client(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -284,8 +304,18 @@ async fn delete_download_client(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
+    let is_sab = matches!(
+        clients_repo::get_client_by_id(&state.pool, id).await,
+        Ok(Some(c)) if c.client_type == "sabnzbd"
+    );
     match clients_repo::delete_client(&state.pool, id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if is_sab {
+                forget_sab_share(&state.pool, id).await;
+                nudge_engine(&state).await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => (StatusCode::NOT_FOUND, "not found").into_response(),
         Err(err) => {
             warn!(error = %err, "Failed to delete download client");

@@ -85,7 +85,7 @@ async fn an_article_missing_mid_body_aborts_without_filler_and_is_counted() {
 }
 
 #[tokio::test]
-async fn damage_inside_the_first_chunk_of_a_range_serves_the_good_bytes_before_it() {
+async fn damage_inside_the_first_chunk_of_a_range_aborts_after_the_good_bytes() {
     let fixture = Fixture::season();
     let gone = 5;
     let nntp = LoopbackServer::start(fixture.without(0, gone))
@@ -103,17 +103,34 @@ async fn damage_inside_the_first_chunk_of_a_range_serves_the_good_bytes_before_i
     let good = gone * ARTICLE;
     assert_eq!(
         response.headers()[header::CONTENT_RANGE],
-        format!("bytes 100-{}/{len}", good - 1).as_str()
+        format!("bytes 100-{}/{len}", len - 1).as_str(),
+        "the headers promise the whole range"
     );
     assert_eq!(
         response.headers()[header::CONTENT_LENGTH],
-        (good - 100).to_string().as_str()
+        (len - 100).to_string().as_str()
     );
     let (body, error) = collect(response).await;
-    assert_eq!(error, None);
+    assert!(error.is_some(), "the body aborts instead of ending cleanly");
     assert!(body == fixture.data(0)[100..good], "only the good bytes");
     let metrics = harness.metrics().await;
     assert_eq!(metric(&metrics, FAILURES, &["missing_articles"]), 1);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = harness.app.clone();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let over_http = reqwest::Client::new()
+        .get(format!("http://{addr}/stream/{token}"))
+        .header(header::RANGE, "bytes=100-")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(over_http.status(), StatusCode::PARTIAL_CONTENT);
+    assert!(
+        over_http.bytes().await.is_err(),
+        "an HTTP/1.1 client sees an incomplete body"
+    );
 
     let at_damage = harness
         .stream("GET", &token, Some(&format!("bytes={good}-")))

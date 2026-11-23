@@ -508,16 +508,19 @@ async fn test_sabnzbd_connections_to_the_same_account_count_toward_its_cap() {
     let rig = UsenetRig::start().await;
     let sab = add_sab(&rig, &mock_sab().await).await;
 
-    let (status, body) = create(&rig, &server("Primary", "alice", 20)).await;
+    let id = created_id(&rig, &server("Primary", "alice", 20)).await;
+    let (_, body) = engine_config(&rig, Some(CONTROL_KEY)).await;
+    let config: EngineConfigResponse = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        config.servers[0].connections, 18,
+        "the engine yields to SAB's 12"
+    );
+    let (status, body) = update(&rig, &id, &server("Primary", "alice", 31)).await;
     assert_eq!(
         status,
         StatusCode::BAD_REQUEST,
-        "20 + SAB's 12 > 30: {body}"
+        "over the cap alone: {body}"
     );
-    assert!(body.contains("SABnzbd"), "{body}");
-    let id = created_id(&rig, &server("Primary", "alice", 18)).await;
-    let (status, body) = update(&rig, &id, &server("Primary", "alice", 19)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let (status, body) = create(&rig, &server("Another login", "bob", 30)).await;
     assert_eq!(
         status,

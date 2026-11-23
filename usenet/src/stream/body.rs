@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
-use futures_util::stream;
+use futures_util::{StreamExt as _, stream};
 use kob_usenet::OutputReader;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::{Instant, timeout, timeout_at};
@@ -15,7 +15,7 @@ const CHUNK: usize = 256 * 1024;
 
 pub struct First {
     pub bytes: Bytes,
-    pub failure: Option<ReadFailure>,
+    pub failure: Option<(ReadFailure, io::Error)>,
 }
 
 pub struct Pump {
@@ -41,15 +41,16 @@ impl Pump {
                     let failure = self.failed(&error, "stream refused");
                     return First {
                         bytes: first.freeze(),
-                        failure: Some(failure),
+                        failure: Some((failure, error)),
                     };
                 }
                 Err(_) if !first.is_empty() => break,
                 Err(_) => {
-                    let failure = self.failed(&self.silent(), "stream refused");
+                    let error = self.silent();
+                    let failure = self.failed(&error, "stream refused");
                     return First {
                         bytes: Bytes::new(),
-                        failure: Some(failure),
+                        failure: Some((failure, error)),
                     };
                 }
             }
@@ -58,6 +59,18 @@ impl Pump {
             bytes: first.freeze(),
             failure: None,
         }
+    }
+
+    // A short body that ended cleanly reads as end of file to a transcoder, so the promised
+    // length stands and the connection is aborted after the good bytes. The yield lets hyper
+    // flush them: an error in the same poll drops the buffered headers and data unsent.
+    pub fn aborted_body(good: Bytes, error: io::Error) -> Body {
+        Body::from_stream(
+            stream::once(async { Ok(good) }).chain(stream::once(async move {
+                tokio::task::yield_now().await;
+                Err(error)
+            })),
+        )
     }
 
     pub fn into_body(self, first: Bytes) -> Body {

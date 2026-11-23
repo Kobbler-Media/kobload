@@ -277,7 +277,8 @@ pub struct ProwlarrRelease {
 }
 
 impl From<ProwlarrRelease> for Release {
-    fn from(r: ProwlarrRelease) -> Self {
+    fn from(mut r: ProwlarrRelease) -> Self {
+        r.info_hash = r.info_hash.as_deref().and_then(crate::info_hash::valid);
         let raw_data = serde_json::to_value(&r).unwrap_or_default();
         let external_ids = extract_external_ids_from_other(&r.other);
         Release {
@@ -503,7 +504,7 @@ pub(crate) fn parse_newznab_rss(
                         "leechers" | "peers" => leechers = attr_value.parse().ok(),
                         "grabs" => grabs = attr_value.parse().ok(),
                         "votes" => votes = attr_value.parse().ok(),
-                        "infohash" => info_hash = Some(attr_value),
+                        "infohash" => info_hash = crate::info_hash::valid(&attr_value),
                         "files" => files = attr_value.parse().ok(),
                         "imdb" | "imdbid" if !attr_value.is_empty() => {
                             imdb_id = Some(attr_value);
@@ -748,6 +749,22 @@ pub fn parse_api_limits(xml: &str) -> Option<NewznabApiLimits> {
 mod tests {
     use super::*;
     use crate::watch::{ExternalIdSource, Release};
+
+    #[test]
+    fn a_hostile_infohash_never_reaches_a_release() {
+        let xml = r#"<rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel><item>
+            <title>Show</title><guid>g</guid><link>http://i.example/d</link>
+            <torznab:attr name="infohash" value="../../x"/>
+        </item></channel></rss>"#;
+        let parsed = parse_newznab_rss(xml, 1).unwrap();
+        assert_eq!(parsed[0].info_hash, None);
+        let mut direct = parsed.into_iter().next().unwrap();
+        direct.info_hash = Some("../../x".to_string());
+        let release = Release::from(direct);
+        assert_eq!(release.info_hash, None);
+        assert!(!release.raw_data.to_string().contains("../../x"));
+    }
+
     #[test]
     fn test_newznab_rss_extracts_external_ids() {
         let xml = r#"<?xml version="1.0" encoding="utf-8"?>
