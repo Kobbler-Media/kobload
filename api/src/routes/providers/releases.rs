@@ -236,7 +236,8 @@ async fn search_releases(
             on_source_answered: None,
         })
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?
+        .releases;
 
         for release in releases {
             if seen_guids.insert(release.guid.clone()) {

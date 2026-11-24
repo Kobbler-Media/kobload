@@ -51,6 +51,7 @@ pub(crate) const UNSOURCED_NEW_MOVIE_DAYS: i64 = 365;
 pub(crate) const AIR_DATE_LENIENCY_DAYS: i64 = 1;
 pub(crate) use early_episode::{
     EARLY_SEARCH_INTERVAL_HOURS, early_search_horizon, episode_held_back, episodes_to_search,
+    is_near_air,
 };
 
 /// Reject releases with sufficiently negative community votes.
@@ -1566,11 +1567,17 @@ fn structural_reject_judged(
     };
 
     if let MediaWant::TvEpisode {
+        season,
         air_date,
         season_premiere,
         ..
     } = media_want
-        && episode_held_back(air_date.as_deref(), season_premiere.as_deref(), today)
+        && episode_held_back(
+            season,
+            air_date.as_deref(),
+            season_premiere.as_deref(),
+            today,
+        )
     {
         return Some(StructuralRejectReason::UnairedEpisode);
     }
@@ -1608,6 +1615,7 @@ fn structural_reject_judged(
     // TvSeason: two separate unaired checks, because a listed air date means very
     // different things depending on whether the episode carries one of its own.
     if let MediaWant::TvSeason {
+        season,
         episodes_needed: Some(eps),
         ..
     } = media_want
@@ -1615,12 +1623,14 @@ fn structural_reject_judged(
         && !tv.is_pack
         && !tv.episodes.is_empty()
     {
+        let specials = early_episode::is_specials(season);
         // A season that has not started airing should have no releases at all,
         // so anything claiming to be one is mislabelled or fake.
         let premiere = eps
             .iter()
             .filter_map(|er| er.air_date.as_deref().and_then(parse_iso_date))
-            .min();
+            .min()
+            .filter(|_| !specials);
         if !early_episode::may_be_out(None, premiere, today) {
             return Some(StructuralRejectReason::UnairedEpisode);
         }
@@ -1654,7 +1664,7 @@ fn structural_reject_judged(
 
         let all_unaired = tv.episodes.iter().all(|ep_num| {
             bounds.get(ep_num).is_some_and(|(has_own_date, bound)| {
-                !has_own_date
+                (specials || !has_own_date)
                     && bound.is_some_and(|d| d - time::Duration::days(air_date_leniency) > today)
             })
         });
@@ -1674,23 +1684,41 @@ fn structural_reject_judged(
     // once, so gating each release on its own episode's air date rejected
     // whole seasons permanently.
     let tv_season_premiere_air_date: Option<&str> = if let MediaWant::TvSeason {
+        season,
         episodes_needed: Some(eps),
         ..
     } = media_want
     {
-        eps.iter().filter_map(|er| er.air_date.as_deref()).min()
+        if early_episode::is_specials(season) {
+            match &parsed.media {
+                ParsedMedia::Tv(tv) if !tv.is_pack => eps
+                    .iter()
+                    .filter(|er| {
+                        er.episode
+                            .parse::<u32>()
+                            .is_ok_and(|n| tv.episodes.contains(&n))
+                    })
+                    .filter_map(|er| er.air_date.as_deref())
+                    .min(),
+                _ => None,
+            }
+        } else {
+            eps.iter().filter_map(|er| er.air_date.as_deref()).min()
+        }
     } else {
         None
     };
 
     if let Some((dated_want_date, dated_want_year)) = match media_want {
         MediaWant::TvEpisode {
+            season,
             air_date,
             season_premiere,
             year,
             ..
         } => Some((
-            early_episode::known_premiere(season_premiere.as_deref()).or(air_date.as_deref()),
+            early_episode::known_premiere(season, season_premiere.as_deref())
+                .or(air_date.as_deref()),
             *year,
         )),
         MediaWant::TvSeason { year, .. } => Some((tv_season_premiere_air_date, *year)),

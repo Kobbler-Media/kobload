@@ -37,7 +37,12 @@ pub struct SearchIndexersParams<'a> {
     pub on_source_answered: Option<SourceAnswered<'a>>,
 }
 
-pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Release>, String> {
+pub struct IndexerSearch {
+    pub releases: Vec<Release>,
+    pub complete: bool,
+}
+
+pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<IndexerSearch, String> {
     let pool = params.pool;
     let media_type_id = params.media_type_id;
 
@@ -65,7 +70,7 @@ pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Re
         );
     }
 
-    let mut releases = Vec::new();
+    let mut outcomes = Vec::new();
 
     // One indexer stuck on its timeout must not hold back the others' answers, so a caller
     // watching them arrive gets them concurrently.
@@ -74,16 +79,47 @@ pub async fn search_indexers(params: &SearchIndexersParams<'_>) -> Result<Vec<Re
             .iter()
             .enumerate()
             .map(|(index, source)| search_source(params, search_type, index, source));
-        for outcome in futures::future::join_all(searches).await {
-            releases.extend(outcome?);
-        }
+        outcomes = futures::future::join_all(searches).await;
     } else {
         for (index, source) in searchable_sources.iter().enumerate() {
-            releases.extend(search_source(params, search_type, index, source).await?);
+            outcomes.push(search_source(params, search_type, index, source).await);
         }
     }
 
-    Ok(releases)
+    combine(outcomes)
+}
+
+enum SourceOutcome {
+    Answered(Vec<Release>),
+    NotApplicable,
+    NoAnswer,
+    LookupFailed(String),
+}
+
+// A lookup error only fails the search when no other source has anything to say.
+fn combine(outcomes: Vec<SourceOutcome>) -> Result<IndexerSearch, String> {
+    let mut releases = Vec::new();
+    let mut answered = false;
+    let mut complete = true;
+    let mut lookup_error = None;
+    for outcome in outcomes {
+        match outcome {
+            SourceOutcome::Answered(found) => {
+                answered = true;
+                releases.extend(found);
+            }
+            SourceOutcome::NotApplicable => {}
+            SourceOutcome::NoAnswer => complete = false,
+            SourceOutcome::LookupFailed(error) => {
+                complete = false;
+                lookup_error.get_or_insert(error);
+            }
+        }
+    }
+    match lookup_error {
+        Some(error) if !answered => Err(error),
+        _ => Ok(IndexerSearch { releases, complete }),
+    }
 }
 
 async fn search_source(
@@ -91,30 +127,35 @@ async fn search_source(
     search_type: SearchType,
     index: usize,
     source: &watch_repo::IndexerSourceRow,
-) -> Result<Vec<Release>, String> {
+) -> SourceOutcome {
     let pool = params.pool;
     let media_type_id = params.media_type_id;
 
     if params.source_filter.is_some_and(|keep| !keep(source)) {
-        return Ok(Vec::new());
-    }
-    if watch_repo::should_skip_source(source) {
-        warn!(source = %source.name, "Skipping source due to rate limit or backoff");
-        return Ok(Vec::new());
+        return SourceOutcome::NotApplicable;
     }
 
     // Handler types that don't support search (e.g. prowlarr_rss) are skipped.
     let Some(handler) = params.indexers.get(&source.handler_type) else {
-        return Ok(Vec::new());
+        return SourceOutcome::NotApplicable;
     };
 
     if !handler.capabilities().supports_search {
-        return Ok(Vec::new());
+        return SourceOutcome::NotApplicable;
     }
 
-    let search_categories = resolve_categories_for_source(pool, source, media_type_id)
-        .await
-        .map_err(|e| format!("Category resolution failed: {e}"))?;
+    if watch_repo::should_skip_source(source) {
+        warn!(source = %source.name, "Skipping source due to rate limit or backoff");
+        return SourceOutcome::NoAnswer;
+    }
+
+    let search_categories = match resolve_categories_for_source(pool, source, media_type_id).await {
+        Ok(categories) => categories,
+        Err(e) => {
+            warn!(error = %e, source = %source.name, "Category resolution failed");
+            return SourceOutcome::LookupFailed(format!("Category resolution failed: {e}"));
+        }
+    };
 
     let search_type = resolve_search_type(source, search_type);
 
@@ -139,7 +180,7 @@ async fn search_source(
             Err(_) => {
                 warn!(source = %source.name, timeout_ms = timeout_duration.as_millis(), "Indexer search timed out");
                 let _ = watch_repo::record_failure(pool, source.id, "search timed out").await;
-                return Ok(Vec::new());
+                return SourceOutcome::NoAnswer;
             }
         }
     } else {
@@ -152,17 +193,17 @@ async fn search_source(
             if let Some(on_source_answered) = params.on_source_answered {
                 on_source_answered(index, &source_releases);
             }
-            Ok(source_releases)
+            SourceOutcome::Answered(source_releases)
         }
         Err(err) if err.status == axum::http::StatusCode::TOO_MANY_REQUESTS => {
             let _ = watch_repo::record_rate_limited(pool, source.id, err.retry_after_seconds).await;
             warn!(source = %source.name, "Indexer rate limited (429)");
-            Ok(Vec::new())
+            SourceOutcome::NoAnswer
         }
         Err(err) => {
             crate::indexers::record_error(pool, source.id, &err).await;
             warn!(error = %err, source = %source.name, "Indexer search failed");
-            Ok(Vec::new())
+            SourceOutcome::NoAnswer
         }
     }
 }

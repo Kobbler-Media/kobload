@@ -25,6 +25,20 @@ where
     Ok(())
 }
 
+pub async fn list_by_prefix<'e, E>(
+    exec: E,
+    prefix: &str,
+) -> Result<Vec<(String, serde_json::Value)>>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let rows = sqlx::query_as("SELECT key, value FROM app_settings WHERE starts_with(key, $1)")
+        .bind(prefix)
+        .fetch_all(exec)
+        .await?;
+    Ok(rows)
+}
+
 /// Set a setting value (upsert).
 pub async fn set<'e, E>(exec: E, key: &str, value: &serde_json::Value) -> Result<()>
 where

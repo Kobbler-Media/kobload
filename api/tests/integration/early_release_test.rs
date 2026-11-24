@@ -12,8 +12,9 @@ use uuid::Uuid;
 use crate::common::entry_points::{Grabber, grab_alone, post_want, searched, torrent};
 use crate::common::tv_watch::{TvWatch, episode_want, usenet_release};
 use kobload_api::jobs::handlers::{
-    SearchGates, backlog_search_pattern, get_patterns_due_for_backlog,
+    BacklogSearchHandler, SearchGates, backlog_search_pattern, get_patterns_due_for_backlog,
 };
+use kobload_api::jobs::worker::JobHandler;
 use kobload_api::services::want::koblem_review::{review_wanted_title, worth_reviewing};
 use kobload_api::services::want::{ScoringConfig, SearchContext, score_release, structural_reject};
 use kobload_api::watch::Release;
@@ -411,6 +412,19 @@ fn due_cases() -> Vec<DueCase> {
         ),
         case("season next in window, 13h", next_in_window(), 13, true),
         case("season next in window, 11h", next_in_window(), 11, false),
+        DueCase {
+            interval_hours: Some(24),
+            ..case(
+                "season at the column default, 13h",
+                next_in_window(),
+                13,
+                true,
+            )
+        },
+        DueCase {
+            interval_hours: Some(48),
+            ..case("season with a slower interval", next_in_window(), 13, false)
+        },
         case("season next far out, 13h", next_far_out(), 13, false),
         case("season next far out, 25h", next_far_out(), 25, true),
         case("aired, 13h", episode(Some(-1), None), 13, false),
@@ -479,4 +493,117 @@ async fn backlog_due_query_applies_the_window_and_its_cadence() {
 
     assert_eq!(due, expected);
     tv.server.cleanup().await;
+}
+
+async fn run_backlog(tv: &TvWatch) -> BTreeSet<String> {
+    tv.indexer.take_searched_episodes();
+    BacklogSearchHandler::new(tv.server.app_state.clone())
+        .execute(
+            Uuid::now_v7(),
+            serde_json::json!({}),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    tv.indexer.take_searched_episodes()
+}
+
+async fn age_searches(tv: &TvWatch, id: Uuid, full_hours: i32, near_air_hours: Option<i32>) {
+    sqlx::query(
+        "UPDATE watch_patterns SET
+            last_backlog_search_at = NOW() - ($2::int * INTERVAL '1 hour'),
+            last_near_air_search_at = NOW() - ($3::int * INTERVAL '1 hour')
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(full_hours)
+    .bind(near_air_hours)
+    .execute(&tv.server.pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_near_air_episode_runs_at_the_early_cadence() {
+    let names = |eps: &[&str]| -> BTreeSet<String> { eps.iter().map(|e| e.to_string()).collect() };
+    for interval in [None, Some(24)] {
+        let tv = TvWatch::start().await;
+        let wanted = season(&[(1, Some(-30)), (2, Some(-23)), (3, Some(-16)), (4, Some(2))]);
+        tv.indexer.set_search_results(vec![offered(
+            "Kitsune.Days.S02E09.1080p.WEB-DL.x264-GRP",
+            0,
+        )]);
+        let pattern = tv.pattern(&wanted).await;
+        sqlx::query("UPDATE watch_patterns SET backlog_search_interval_hours = $2 WHERE id = $1")
+            .bind(pattern.id)
+            .bind(interval)
+            .execute(&tv.server.pool)
+            .await
+            .unwrap();
+
+        age_searches(&tv, pattern.id, 13, None).await;
+        assert_eq!(
+            run_backlog(&tv).await,
+            names(&["S02E04"]),
+            "{interval:?}: 12h run"
+        );
+        let due = get_patterns_due_for_backlog(&tv.server.pool, 10)
+            .await
+            .unwrap();
+        assert!(
+            due.is_empty(),
+            "{interval:?}: the 12h run restarts its clock"
+        );
+
+        age_searches(&tv, pattern.id, 25, Some(1)).await;
+        assert_eq!(
+            run_backlog(&tv).await,
+            names(&["S02E01", "S02E02", "S02E03", "S02E04"]),
+            "{interval:?}: the normal interval still covers old gaps"
+        );
+        tv.server.cleanup().await;
+    }
+}
+
+fn specials(mut want: MediaWant) -> MediaWant {
+    match &mut want {
+        MediaWant::TvEpisode { season, .. } => *season = "0".to_string(),
+        MediaWant::TvSeason {
+            season,
+            episodes_needed,
+            ..
+        } => {
+            *season = "00".to_string();
+            for ep in episodes_needed.iter_mut().flatten() {
+                ep.season = "0".to_string();
+            }
+        }
+        _ => {}
+    }
+    want
+}
+
+#[test]
+fn specials_have_no_premiere_and_keep_the_strict_own_date_rule() {
+    const SPECIAL: &str = "Kitsune.Days.S00E04.1080p.WEB-DL.x264-GRP";
+    let cases = [
+        ("unaired, old premiere", 14, -400, 0, UNAIRED),
+        ("posted long before its date", -1, -400, -30, TOO_OLD),
+        ("aired and freshly posted", -1, -400, 0, None),
+        ("inside the leniency window", 1, -400, 0, None),
+    ];
+    let mut failures = Vec::new();
+    for (name, air_in, premiere_in, published, expected) in cases {
+        for kind in KINDS {
+            let wanted = specials(want(kind, air_in, premiere_in));
+            for context in [SearchContext::Structured, SearchContext::Rss] {
+                let verdict =
+                    structural_reject(&offered(SPECIAL, published), Some(&wanted), context);
+                if verdict != expected {
+                    failures.push(format!("{name} {kind:?} {context:?}: {verdict:?}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

@@ -153,7 +153,8 @@ async fn search_and_download(
             on_source_answered: None,
         })
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?
+        .releases;
 
         info!(
             pattern = %pattern,

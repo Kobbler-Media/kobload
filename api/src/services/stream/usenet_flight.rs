@@ -57,12 +57,13 @@ struct Flight {
     outcome: Shared<BoxFuture<'static, Imported>>,
 }
 
-type FlightKey = (Uuid, String, bool);
+type FlightKey = (Uuid, String, String, bool);
+type GrabKey = (Uuid, String, String);
 type Grabbed = Result<Arc<Vec<u8>>, FetchError>;
 type SharedGrab = Shared<BoxFuture<'static, Grabbed>>;
 
 static FLIGHTS: LazyLock<DashMap<FlightKey, Flight>> = LazyLock::new(DashMap::new);
-static GRABS: LazyLock<DashMap<(Uuid, String), SharedGrab>> = LazyLock::new(DashMap::new);
+static GRABS: LazyLock<DashMap<GrabKey, SharedGrab>> = LazyLock::new(DashMap::new);
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct Joined {
@@ -89,7 +90,7 @@ pub async fn import(job: ImportJob, lane: Lane) -> Joined {
 }
 
 fn enter(job: &ImportJob, lane: &Lane) -> (Shared<BoxFuture<'static, Imported>>, bool) {
-    let key = (job.provider_id, job.nzb_ref.guid.clone(), job.may_grab);
+    let key = flight_key(job.provider_id, &job.nzb_ref, job.may_grab);
     match FLIGHTS.entry(key.clone()) {
         dashmap::Entry::Occupied(mut e) => {
             // The engine holds a release's lock for the whole import, so a viewer behind a
@@ -111,6 +112,19 @@ fn enter(job: &ImportJob, lane: &Lane) -> (Shared<BoxFuture<'static, Imported>>,
             (outcome, false)
         }
     }
+}
+
+fn flight_key(provider: Uuid, nzb_ref: &NzbRef, may_grab: bool) -> FlightKey {
+    (
+        provider,
+        nzb_ref.indexer_id.clone(),
+        nzb_ref.guid.clone(),
+        may_grab,
+    )
+}
+
+fn grab_key(provider: Uuid, nzb_ref: &NzbRef) -> GrabKey {
+    (provider, nzb_ref.indexer_id.clone(), nzb_ref.guid.clone())
 }
 
 fn launch(
@@ -151,7 +165,7 @@ fn launch(
 // Outlives the flight that started it, so a viewer taking over a prewarm mid-grab shares the
 // request instead of asking the indexer again.
 async fn grab(job: &ImportJob) -> Grabbed {
-    let key = (job.provider_id, job.nzb_ref.guid.clone());
+    let key = grab_key(job.provider_id, &job.nzb_ref);
     let outcome = match GRABS.entry(key.clone()) {
         dashmap::Entry::Occupied(e) => e.get().clone(),
         dashmap::Entry::Vacant(v) => {
@@ -305,5 +319,28 @@ async fn remember_refusal(job: &ImportJob, message: &str) {
             Some(UnavailableReason::Dead),
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_the_same_guid_from_two_indexers_shares_no_flight_or_grab() {
+        let provider = Uuid::nil();
+        let of = |indexer: &str| NzbRef {
+            indexer_id: indexer.to_string(),
+            guid: "same-guid".to_string(),
+        };
+        assert_ne!(
+            flight_key(provider, &of("a"), true),
+            flight_key(provider, &of("b"), true)
+        );
+        assert_ne!(grab_key(provider, &of("a")), grab_key(provider, &of("b")));
+        assert_eq!(
+            flight_key(provider, &of("a"), true),
+            flight_key(provider, &of("a"), true)
+        );
     }
 }

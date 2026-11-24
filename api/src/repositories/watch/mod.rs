@@ -14,8 +14,8 @@ pub use patterns::{
     get_all_enabled_patterns, get_pattern_by_id, get_pattern_by_source,
     get_patterns_for_media_type, has_active_patterns, insert_pattern_by_source, list_patterns,
     list_patterns_by_enabled, list_patterns_by_source, list_patterns_by_source_enabled,
-    pattern_exists, reset_backlog_search, set_pattern_enabled, set_upgrade_until,
-    update_pattern_by_id, update_pattern_by_source, update_pattern_partial,
+    pattern_exists, record_near_air_search, reset_backlog_search, set_pattern_enabled,
+    set_upgrade_until, update_pattern_by_id, update_pattern_by_source, update_pattern_partial,
 };
 
 // Re-export match types and functions

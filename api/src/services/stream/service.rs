@@ -621,8 +621,10 @@ pub async fn stream_search(
             .await
             {
                 Ok(found) => {
-                    indexer_search::remember(&cache_key, &found);
-                    found
+                    if found.complete {
+                        indexer_search::remember(&cache_key, &found.releases);
+                    }
+                    found.releases
                 }
                 Err(e) => {
                     warn!(error = %e, "Cardigann fallback search failed");
@@ -658,9 +660,13 @@ pub async fn stream_search(
     if let Some(search) = usenet_search {
         let usenet_start = Instant::now();
         // With torrents to offer, usenet must not hold the search up; without them it is
-        // all there is, so it gets the indexers' own timeout like the fallback did.
-        let wait = (!timings.cardigann_ran)
-            .then(|| usenet_search::DEADLINE.saturating_sub(search_start.elapsed()));
+        // all there is, so past the deadline it waits only until one indexer has answered.
+        let remaining = usenet_search::DEADLINE.saturating_sub(search_start.elapsed());
+        let wait = if timings.cardigann_ran {
+            usenet_search::Wait::UntilAnswered(remaining)
+        } else {
+            usenet_search::Wait::CutAt(remaining)
+        };
         let collected = search.collect(wait).await;
         timings.usenet_status = collected.status;
         timings.usenet_ms = usenet_start.elapsed().as_millis() as u64;

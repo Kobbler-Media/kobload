@@ -782,6 +782,22 @@ where
     Ok(())
 }
 
+pub async fn record_near_air_search<'e, E>(exec: E, id: Uuid, jitter_minutes: i64) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query(
+        "UPDATE watch_patterns
+         SET last_near_air_search_at = NOW() + ($2 * INTERVAL '1 minute')
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(jitter_minutes as f64)
+    .execute(exec)
+    .await?;
+    Ok(())
+}
+
 /// Lightweight row for orphan cleanup (avoids fetching all pattern columns).
 #[derive(Debug, sqlx::FromRow)]
 pub struct OrphanPatternRow {

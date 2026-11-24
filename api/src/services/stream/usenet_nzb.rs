@@ -1,3 +1,5 @@
+use quick_xml::Reader;
+use quick_xml::events::{BytesStart, Event};
 use reqwest::StatusCode;
 
 use super::usenet_failure::indexer_refused;
@@ -84,5 +86,37 @@ pub async fn fetch(download_url: &str, origin: Origin) -> Result<Vec<u8>, FetchE
         }
         body.extend_from_slice(&chunk);
     }
+    if is_limit_reply(&body) {
+        return Err(FetchError::Refused(StatusCode::TOO_MANY_REQUESTS));
+    }
     Ok(body)
+}
+
+// The published newznab error table has no limit codes; 500 and 501 are what indexers send in
+// practice, and Sonarr matches the description instead, so both are read.
+fn is_limit_reply(body: &[u8]) -> bool {
+    let head = &body[..body.len().min(NZB_ROOT_WINDOW)];
+    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    let mut reader = Reader::from_reader(head);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(root) | Event::Empty(root)) => {
+                return root.name().as_ref().eq_ignore_ascii_case("error") && error_is_limit(&root);
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            Ok(_) => buf.clear(),
+        }
+    }
+}
+
+fn error_is_limit(error: &BytesStart<'_>) -> bool {
+    error.attributes().flatten().any(|attr| {
+        let value = attr.value.to_ascii_lowercase();
+        match attr.key.as_ref() {
+            "code" => matches!(value.trim(), "429" | "500" | "501"),
+            "description" => value.contains("limit"),
+            _ => false,
+        }
+    })
 }

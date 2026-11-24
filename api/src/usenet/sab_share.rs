@@ -118,7 +118,7 @@ pub async fn sab_servers_except(
             return Vec::new();
         }
     };
-    join_all(
+    let mut servers: Vec<SabServer> = join_all(
         sabs.iter()
             .filter(|c| c.client_type == "sabnzbd" && Some(c.id) != except)
             .map(|sab| share(pool, http, sab)),
@@ -126,7 +126,80 @@ pub async fn sab_servers_except(
     .await
     .into_iter()
     .flatten()
-    .collect()
+    .collect();
+    servers.extend(deleted_shares(pool, &sabs, except).await);
+    servers
+}
+
+// A SAB deleted while unreachable may still be downloading, so its share outlives the row
+// until the trust period ends or the same SAB is added back and counts for itself.
+async fn deleted_shares(
+    pool: &PgPool,
+    clients: &[DownloadClientConfig],
+    except: Option<Uuid>,
+) -> Vec<SabServer> {
+    let stored = match app_settings::list_by_prefix(pool, SETTING_PREFIX).await {
+        Ok(stored) => stored,
+        Err(e) => {
+            warn!(error = %e, "Could not load the shares of deleted SABnzbd clients");
+            return Vec::new();
+        }
+    };
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let mut held = Vec::new();
+    for (key, value) in stored {
+        let Some(id) = key
+            .strip_prefix(SETTING_PREFIX)
+            .and_then(|id| Uuid::parse_str(id).ok())
+        else {
+            continue;
+        };
+        if Some(id) == except || clients.iter().any(|c| c.id == id) {
+            continue;
+        }
+        let share = serde_json::from_value::<StoredShare>(value)
+            .ok()
+            .filter(|s| s.draining && now - s.seen_at < DRAIN_TRUSTED_SECS);
+        match share {
+            Some(share) => {
+                let re_added = clients
+                    .iter()
+                    .any(|c| c.client_type == "sabnzbd" && c.base_url == share.base_url);
+                if !re_added {
+                    held.extend(share.servers);
+                }
+            }
+            None => forget_sab_share(pool, id).await,
+        }
+    }
+    with_logins(pool, held).await
+}
+
+// The trust period starts now for a client that was counting in full; one already draining
+// keeps the clock it had, so repeated edits cannot extend it.
+pub async fn hold_sab_share(pool: &PgPool, sab: &DownloadClientConfig, was_enabled: bool) {
+    let Some(mut stored) = load(pool, sab).await else {
+        return;
+    };
+    if was_enabled {
+        stored.draining = true;
+        stored.seen_at = OffsetDateTime::now_utc().unix_timestamp();
+    } else if !stored.draining {
+        forget_sab_share(pool, sab.id).await;
+        return;
+    }
+    save(pool, sab.id, &stored).await;
+}
+
+pub async fn hold_sab_share_if_unreachable(
+    pool: &PgPool,
+    http: &reqwest::Client,
+    sab: &DownloadClientConfig,
+) {
+    if let Err(reason) = queue_working(http, sab).await {
+        warn!(client = %sab.name, reason, "Disabled a SABnzbd that is not answering; keeping its share");
+        hold_sab_share(pool, sab, true).await;
+    }
 }
 
 async fn share(
@@ -247,8 +320,10 @@ async fn read(
     sab: &DownloadClientConfig,
 ) -> Result<(Vec<SabServer>, bool), String> {
     let (servers, queue) = tokio::join!(fetch(http, sab), queue_working(http, sab));
+    // An unread queue must not be stored as idle: if this SAB is disabled while still down,
+    // that stored answer is what decides whether it keeps its connections.
     let draining = if sab.enabled {
-        queue.unwrap_or(false)
+        queue.unwrap_or(true)
     } else {
         queue?
     };

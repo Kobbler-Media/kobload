@@ -892,7 +892,7 @@ mod tests {
 
         // Should either error (Prowlarr not running) or return empty
         assert!(
-            result.is_err() || result.unwrap().is_empty(),
+            result.is_err() || result.unwrap().releases.is_empty(),
             "expected error or empty results with no sources"
         );
     }

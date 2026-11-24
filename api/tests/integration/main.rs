@@ -67,6 +67,7 @@ mod stream_pack_test;
 mod stream_ranking_test;
 mod stream_release_key_test;
 mod stream_resolve_test;
+mod stream_search_completeness_test;
 mod stream_trait_learning_test;
 mod submit_dedup_test;
 mod tv_disambiguation_test;

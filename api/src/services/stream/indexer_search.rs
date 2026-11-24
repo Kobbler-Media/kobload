@@ -13,7 +13,7 @@ use crate::indexers::{IndexerContext, IndexerResolver};
 use crate::repositories::watch::IndexerSourceRow;
 use crate::scene_titles::TvNaming;
 use crate::services::search::{
-    SearchIndexersParams, SourceAnswered, SourceFilter, search_indexers,
+    IndexerSearch, SearchIndexersParams, SourceAnswered, SourceFilter, search_indexers,
 };
 use crate::watch::{ExternalId, ExternalIdSource, ProcessedRelease, Release};
 use nats_jobs::types::StreamSearchRequest;
@@ -83,7 +83,7 @@ pub async fn search(
     source_filter: Option<SourceFilter>,
     scope: TvScope,
     on_source_answered: Option<SourceAnswered<'_>>,
-) -> Result<Vec<Release>, String> {
+) -> Result<IndexerSearch, String> {
     let external_ids: Vec<ExternalId> = request
         .media_want
         .as_ref()

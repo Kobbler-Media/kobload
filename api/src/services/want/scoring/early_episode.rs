@@ -20,20 +20,39 @@ pub(super) fn may_be_out(own: Option<Date>, premiere: Option<Date>, today: Date)
     }
 }
 
+// Season 0 collects one-offs from across a show's life: its oldest special says nothing
+// about whether a new one is out, so specials never have a premiere.
+pub(super) fn is_specials(season: &str) -> bool {
+    let season = season.trim();
+    season.eq_ignore_ascii_case("specials") || season.parse::<u32>() == Ok(0)
+}
+
 pub(crate) fn episode_held_back(
+    season: &str,
     air_date: Option<&str>,
     season_premiere: Option<&str>,
     today: Date,
 ) -> bool {
     !may_be_out(
         air_date.and_then(parse_iso_date),
-        season_premiere.and_then(parse_iso_date),
+        known_premiere(season, season_premiere).and_then(parse_iso_date),
         today,
     )
 }
 
-pub(super) fn known_premiere(season_premiere: Option<&str>) -> Option<&str> {
-    season_premiere.filter(|p| parse_iso_date(p).is_some())
+pub(super) fn known_premiere<'a>(
+    season: &str,
+    season_premiere: Option<&'a str>,
+) -> Option<&'a str> {
+    season_premiere.filter(|p| !is_specials(season) && parse_iso_date(p).is_some())
+}
+
+pub(crate) fn is_near_air(episode: &EpisodeRef, today: Date) -> bool {
+    episode
+        .air_date
+        .as_deref()
+        .and_then(parse_iso_date)
+        .is_some_and(|date| date > today && date <= early_search_horizon(today))
 }
 
 pub(crate) fn early_search_horizon(today: Date) -> Date {

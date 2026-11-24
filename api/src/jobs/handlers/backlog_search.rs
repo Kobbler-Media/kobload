@@ -139,7 +139,13 @@ impl JobHandler for BacklogSearchHandler {
             }
 
             // Perform backlog search for this pattern (scheduled auto-path)
-            let found = backlog_search_pattern(&self.state, &pattern, SearchGates::AUTOMATIC).await;
+            let near_air_only = only_near_air_due(&pattern);
+            let gates = if near_air_only {
+                SearchGates::NEAR_AIR
+            } else {
+                SearchGates::AUTOMATIC
+            };
+            let found = backlog_search_pattern(&self.state, &pattern, gates).await;
             patterns_checked += 1;
             if found {
                 matches_found += 1;
@@ -147,8 +153,15 @@ impl JobHandler for BacklogSearchHandler {
 
             // Update last_backlog_search_at with jitter (0-60 min)
             let jitter_minutes = rand::rng().random_range(0..60);
-            let _ =
-                update_backlog_search_timestamp(&self.state.pool, pattern.id, jitter_minutes).await;
+            let _ = if near_air_only {
+                watch_repo::record_near_air_search(&self.state.pool, pattern.id, jitter_minutes)
+                    .await
+                    .map_err(|e| e.to_string())
+            } else {
+                update_backlog_search_timestamp(&self.state.pool, pattern.id, jitter_minutes)
+                    .await
+                    .map_err(|e| e.to_string())
+            };
         }
 
         if patterns_checked > 0 {
@@ -217,11 +230,33 @@ pub async fn get_patterns_due_for_backlog(
           AND (wp.media_want->>'kind' IS DISTINCT FROM 'tv_episode'
                OR air.next_air IS NULL
                OR air.next_air <= $4::date)
-          AND COALESCE(wp.last_backlog_search_at, wp.created_at) < NOW() - (
-              CASE WHEN air.next_air <= $4::date
-                   THEN GREATEST(COALESCE(wp.backlog_search_interval_hours, $5), $5)
-                   ELSE COALESCE(wp.backlog_search_interval_hours, $1)
-              END * INTERVAL '1 hour'
+          AND (
+              COALESCE(wp.last_backlog_search_at, wp.created_at) < NOW() - (
+                  CASE WHEN air.next_air <= $4::date
+                       THEN GREATEST(
+                           COALESCE(
+                               wp.backlog_search_interval_hours,
+                               CASE WHEN wp.media_want->>'kind' = 'tv_season' THEN $1 ELSE $5 END
+                           ),
+                           $5
+                       )
+                       ELSE COALESCE(wp.backlog_search_interval_hours, $1)
+                  END * INTERVAL '1 hour'
+              )
+              OR (
+                  wp.media_want->>'kind' = 'tv_season'
+                  AND air.next_air <= $4::date
+                  AND GREATEST(
+                      wp.last_near_air_search_at,
+                      COALESCE(wp.last_backlog_search_at, wp.created_at)
+                  ) < NOW() - (
+                      -- The column defaults to 24, so only a slower interval was chosen.
+                      CASE WHEN wp.backlog_search_interval_hours > $1
+                           THEN wp.backlog_search_interval_hours
+                           ELSE $5
+                      END * INTERVAL '1 hour'
+                  )
+              )
           )
         ORDER BY COALESCE(wp.last_backlog_search_at, wp.created_at), wp.created_at
         LIMIT $2
@@ -234,6 +269,31 @@ pub async fn get_patterns_due_for_backlog(
     .bind(scoring::EARLY_SEARCH_INTERVAL_HOURS)
     .fetch_all(pool)
     .await
+}
+
+// A season picked up only because an episode is close must not re-search its old gaps, whose
+// clock is `last_backlog_search_at`.
+fn only_near_air_due(pattern: &watch_repo::WatchPatternRow) -> bool {
+    let Some(nats_jobs::MediaWant::TvSeason {
+        episodes_needed: Some(episodes),
+        ..
+    }) = pattern
+        .media_want
+        .clone()
+        .and_then(|want| serde_json::from_value(want).ok())
+    else {
+        return false;
+    };
+    let now = crate::clock::now_utc();
+    let near_air = episodes
+        .iter()
+        .any(|ep| ep.in_library != Some(true) && scoring::is_near_air(ep, now.date()));
+    let interval = pattern
+        .backlog_search_interval_hours
+        .unwrap_or(DEFAULT_BACKLOG_INTERVAL_HOURS)
+        .max(scoring::EARLY_SEARCH_INTERVAL_HOURS);
+    let last_full = pattern.last_backlog_search_at.unwrap_or(pattern.created_at);
+    near_air && now - last_full < time::Duration::hours(i64::from(interval))
 }
 
 /// Update last_backlog_search_at for a pattern, adding jitter for load spreading.
@@ -370,13 +430,21 @@ pub struct SearchGates {
     /// Skip the "already has an active or imported download" check. Only a
     /// human asking for this specific search should ever set this.
     pub bypass_duplicate_gate: bool,
+    pub near_air_only: bool,
 }
 
 impl SearchGates {
+    pub const NEAR_AIR: Self = Self {
+        bypass_upgrade_gate: false,
+        bypass_duplicate_gate: false,
+        near_air_only: true,
+    };
+
     /// Background scheduler: every gate enforced.
     pub const AUTOMATIC: Self = Self {
         bypass_upgrade_gate: false,
         bypass_duplicate_gate: false,
+        near_air_only: false,
     };
 
     /// A user explicitly asked for this search ("search now"). They can see
@@ -384,6 +452,7 @@ impl SearchGates {
     pub const USER_REQUESTED: Self = Self {
         bypass_upgrade_gate: true,
         bypass_duplicate_gate: true,
+        near_air_only: false,
     };
 
     /// Automated replacement after a failed download/import. Must be allowed to
@@ -392,6 +461,7 @@ impl SearchGates {
     pub const REPLACEMENT: Self = Self {
         bypass_upgrade_gate: true,
         bypass_duplicate_gate: false,
+        near_air_only: false,
     };
 }
 
@@ -1122,6 +1192,7 @@ pub async fn backlog_search_pattern(
                     };
                     !best_per_episode.contains_key(&key)
                 })
+                .filter(|ep| !gates.near_air_only || scoring::is_near_air(ep, today))
                 .collect()
             };
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -138,7 +138,9 @@ pub struct MockIndexer {
     query_delays: Mutex<Option<(Duration, Duration)>>,
     source_delays: Mutex<HashMap<Uuid, Duration>>,
     source_results: Mutex<HashMap<Uuid, Vec<Release>>>,
+    source_errors: Mutex<HashMap<Uuid, axum::http::StatusCode>>,
     searches: AtomicUsize,
+    searched_episodes: Mutex<BTreeSet<String>>,
 }
 
 impl MockIndexer {
@@ -152,7 +154,9 @@ impl MockIndexer {
             query_delays: Mutex::new(None),
             source_delays: Mutex::new(HashMap::new()),
             source_results: Mutex::new(HashMap::new()),
+            source_errors: Mutex::new(HashMap::new()),
             searches: AtomicUsize::new(0),
+            searched_episodes: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -172,6 +176,10 @@ impl MockIndexer {
         self.source_results.lock().unwrap().insert(source, results);
     }
 
+    pub fn set_source_error(&self, source: Uuid, status: axum::http::StatusCode) {
+        self.source_errors.lock().unwrap().insert(source, status);
+    }
+
     fn delay_for(&self, source: Option<Uuid>, request: &IndexerSearchRequest) -> Duration {
         if let Some(delay) =
             source.and_then(|id| self.source_delays.lock().unwrap().get(&id).copied())
@@ -183,6 +191,10 @@ impl MockIndexer {
             Some((_, season)) => season,
             None => *self.search_delay.lock().unwrap(),
         }
+    }
+
+    pub fn take_searched_episodes(&self) -> BTreeSet<String> {
+        std::mem::take(&mut self.searched_episodes.lock().unwrap())
     }
 
     pub fn searches(&self) -> usize {
@@ -239,9 +251,24 @@ impl IndexerHandler for MockIndexer {
         request: IndexerSearchRequest,
     ) -> Result<Vec<Release>, IndexerError> {
         self.searches.fetch_add(1, Ordering::SeqCst);
+        if let Some(token) = request
+            .query
+            .split_whitespace()
+            .find(|w| is_episode_token(w))
+        {
+            self.searched_episodes
+                .lock()
+                .unwrap()
+                .insert(token.to_string());
+        }
         let source_id = source.map(|s| s.id);
         let delay = self.delay_for(source_id, &request);
         tokio::time::sleep(delay).await;
+        if let Some(status) =
+            source_id.and_then(|id| self.source_errors.lock().unwrap().get(&id).copied())
+        {
+            return Err(IndexerError::new(status, "mock indexer failure"));
+        }
         if let Some(results) =
             source_id.and_then(|id| self.source_results.lock().unwrap().get(&id).cloned())
         {

@@ -288,10 +288,12 @@ pub async fn search(
             let today = time::OffsetDateTime::now_utc().date();
             match mw {
                 nats_jobs::MediaWant::TvEpisode {
+                    season,
                     air_date,
                     season_premiere,
                     ..
                 } => crate::services::want::scoring::episode_held_back(
+                    season,
                     air_date.as_deref(),
                     season_premiere.as_deref(),
                     today,

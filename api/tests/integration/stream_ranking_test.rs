@@ -112,15 +112,15 @@ async fn test_groups_run_played_cached_unknown_uncached_then_failed() {
             "Movie.2024.1080p.BluRay.x264-EEE",
             "Movie.2024.1080p.BluRay.x264-FFF",
             "Movie.2024.720p.BluRay.x264-III",
-            "Movie.2024.1080p.BluRay.x264-DDD",
             "Movie.2024.1080p.ZQX.x264-CCC",
+            "Movie.2024.1080p.BluRay.x264-DDD",
             "Movie.2024.2160p.BluRay.x265-JJJ",
             "Movie.2024.1080p.BluRay.x264-AAA",
             "Movie.2024.1080p.BluRay.x264-HHH",
             "Movie.2024.1080p.BluRay.x264-BBB",
         ],
-        "played > cached (on account, probed ready and RD+) by score > learned refusal risk, \
-         then unknown > uncached, likely refused included > failed"
+        "played > cached (on account, probed ready and RD+) by score, then cached with learned \
+         refusal risk > unknown > uncached, likely refused included > failed"
     );
     use StreamGroup as G;
     assert_eq!(
@@ -147,8 +147,8 @@ async fn test_groups_run_played_cached_unknown_uncached_then_failed() {
             Some(Likely),
             Some(Ready),
             Some(Ready),
-            Some(Unknown),
             Some(Likely),
+            Some(Unknown),
             Some(Uncached),
             Some(Uncached),
             Some(Uncached),

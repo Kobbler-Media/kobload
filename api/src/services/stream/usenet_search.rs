@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sqlx::PgPool;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::warn;
 use uuid::Uuid;
@@ -10,6 +11,7 @@ use uuid::Uuid;
 use super::indexer_search::{self, TvScope, is_episode_want, is_usenet_source};
 use super::service::StreamSearchContext;
 use crate::indexers::IndexerResolver;
+use crate::services::search::IndexerSearch;
 use crate::watch::Release;
 use nats_jobs::types::StreamSearchRequest;
 
@@ -19,8 +21,32 @@ pub enum UsenetSearch {
     Cached(Vec<Release>),
     Running {
         handle: JoinHandle<Vec<Release>>,
-        answers: Arc<Mutex<Answers>>,
+        board: Arc<AnswerBoard>,
     },
+}
+
+#[derive(Clone, Copy)]
+pub enum Wait {
+    CutAt(Duration),
+    UntilAnswered(Duration),
+}
+
+#[derive(Default)]
+pub struct AnswerBoard {
+    answers: Mutex<Answers>,
+    arrived: Notify,
+}
+
+impl AnswerBoard {
+    fn record(&self, scope: TvScope, source: usize, releases: &[Release]) {
+        self.answers.lock().unwrap().record(scope, source, releases);
+        self.arrived.notify_one();
+    }
+
+    fn at_deadline(&self) -> Option<Collected> {
+        let answers = self.answers.lock().unwrap();
+        (!answers.is_empty()).then(|| at_deadline(&answers))
+    }
 }
 
 pub struct Collected {
@@ -72,8 +98,8 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
     let http_client = ctx.http_client.clone();
     let indexers = ctx.indexers.clone();
     let request = request.clone();
-    let answers = Arc::new(Mutex::new(Answers::default()));
-    let task_answers = answers.clone();
+    let board = Arc::new(AnswerBoard::default());
+    let task_board = board.clone();
     // Detached rather than a job: a search cut at the deadline still finishes here and
     // fills the cache, so the next search for the same want lists its releases.
     let handle = tokio::spawn(async move {
@@ -83,7 +109,7 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
             indexers.as_ref(),
             &request,
             TvScope::AsWanted,
-            &task_answers,
+            &task_board,
         );
         // A newznab `ep` search lists only that episode's posts, never its season pack.
         let season = async {
@@ -94,19 +120,25 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
                     indexers.as_ref(),
                     &request,
                     TvScope::Season,
-                    &task_answers,
+                    &task_board,
                 )
                 .await
             } else {
-                Vec::new()
+                IndexerSearch {
+                    releases: Vec::new(),
+                    complete: true,
+                }
             }
         };
         let (wanted, season) = tokio::join!(wanted, season);
-        let releases = merge(wanted, season);
-        indexer_search::remember(&key, &releases);
+        let complete = wanted.complete && season.complete;
+        let releases = merge(wanted.releases, season.releases);
+        if complete {
+            indexer_search::remember(&key, &releases);
+        }
         releases
     });
-    UsenetSearch::Running { handle, answers }
+    UsenetSearch::Running { handle, board }
 }
 
 fn listing_id(release: &Release) -> (Option<Uuid>, String) {
@@ -119,10 +151,10 @@ async fn search(
     indexers: &dyn IndexerResolver,
     request: &StreamSearchRequest,
     scope: TvScope,
-    answers: &Mutex<Answers>,
-) -> Vec<Release> {
+    board: &AnswerBoard,
+) -> IndexerSearch {
     let on_source_answered = |source: usize, releases: &[Release]| {
-        answers.lock().unwrap().record(scope, source, releases);
+        board.record(scope, source, releases);
     };
     indexer_search::search(
         pool,
@@ -136,27 +168,41 @@ async fn search(
     .await
     .unwrap_or_else(|e| {
         warn!(error = %e, "Usenet indexer search failed");
-        Vec::new()
+        IndexerSearch {
+            releases: Vec::new(),
+            complete: false,
+        }
     })
 }
 
 impl UsenetSearch {
-    pub async fn collect(self, wait: Option<Duration>) -> Collected {
-        let (handle, answers) = match self {
+    pub async fn collect(self, wait: Wait) -> Collected {
+        let (mut handle, board) = match self {
             Self::Cached(releases) => {
                 return Collected {
                     releases,
                     status: "cached",
                 };
             }
-            Self::Running { handle, answers } => (handle, answers),
+            Self::Running { handle, board } => (handle, board),
         };
-        let joined = match wait {
-            Some(wait) => match tokio::time::timeout(wait, handle).await {
-                Ok(joined) => joined,
-                Err(_) => return at_deadline(&answers.lock().unwrap()),
+        let deadline = match wait {
+            Wait::CutAt(deadline) | Wait::UntilAnswered(deadline) => deadline,
+        };
+        let joined = match tokio::time::timeout(deadline, &mut handle).await {
+            Ok(joined) => joined,
+            Err(_) if matches!(wait, Wait::CutAt(_)) => {
+                return at_deadline(&board.answers.lock().unwrap());
+            }
+            Err(_) => loop {
+                if let Some(partial) = board.at_deadline() {
+                    return partial;
+                }
+                tokio::select! {
+                    joined = &mut handle => break joined,
+                    () = board.arrived.notified() => {}
+                }
             },
-            None => handle.await,
         };
         Collected {
             releases: joined.unwrap_or_default(),

@@ -27,20 +27,26 @@ pub async fn sab_client_refusal(
     Ok(sab_violation(&rows, &sab).map(|over| over.describe_sab()))
 }
 
+pub enum SabDeleteCheck {
+    Refused(String),
+    Idle,
+    Unreachable,
+}
+
 // An unreachable SAB is not refused: an admin must be able to remove a dead client.
-pub async fn sab_delete_refusal(
+pub async fn sab_delete_check(
     http: &reqwest::Client,
     sab: &DownloadClientConfig,
-) -> Option<String> {
+) -> SabDeleteCheck {
     match queue_working(http, sab).await {
-        Ok(true) => Some(format!(
+        Ok(true) => SabDeleteCheck::Refused(format!(
             "{} still has an active download queue and holds its usenet connections. Let the queue finish, or pause or clear it in SABnzbd, then delete this client.",
             sab.name
         )),
-        Ok(false) => None,
+        Ok(false) => SabDeleteCheck::Idle,
         Err(reason) => {
             warn!(client = %sab.name, reason, "Could not read SABnzbd's queue; allowing its deletion");
-            None
+            SabDeleteCheck::Unreachable
         }
     }
 }

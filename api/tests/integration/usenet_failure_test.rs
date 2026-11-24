@@ -514,3 +514,71 @@ fn test_the_shipped_env_templates_start() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_an_indexer_limit_reply_reads_as_rate_limited_and_spares_the_release() {
+    const LIMIT_REPLIES: [&str; 5] = [
+        r#"<?xml version="1.0"?><error code="500" description="Request limit reached"/>"#,
+        r#"<?xml version="1.0" encoding="UTF-8"?><error code="501" description="Download limit reached"/>"#,
+        r#"<error code="429" description="Too many requests"/>"#,
+        r#"<error description="Download limit reached" code='501'/>"#,
+        "\u{feff}  <?xml version='1.0'?>\n<error code=\"900\" description=\"API limit exceeded\"/>",
+    ];
+    let rig = UsenetRig::start().await;
+    for (i, reply) in LIMIT_REPLIES.into_iter().enumerate() {
+        let guid = format!("g-limit-{i}");
+        rig.nzbs.serve(&guid, Served::Body(reply));
+        let nzb_ref = rig
+            .list(&guid, "Limit.Reply.2026.1080p.WEB-DL.x264-NZB")
+            .await;
+
+        let (status, body) = rig.resolve(json!({ "nzb_ref": nzb_ref })).await;
+
+        assert!(!status.is_success(), "{reply}: {body}");
+        let message = text(&body).to_lowercase();
+        assert!(message.contains("rate limit"), "{reply}: {message}");
+        for earlier in [
+            "refused this",
+            "blocked",
+            "not a video",
+            "not cached",
+            "unavailable for nzb grabs",
+        ] {
+            assert!(!message.contains(earlier), "{reply} reads as {earlier}");
+        }
+        let failed: Option<String> = sqlx::query_scalar(
+            "SELECT last_failure_reason FROM stream_release_outcomes WHERE release_key = $1",
+        )
+        .bind(&nzb_ref.guid)
+        .fetch_optional(&rig.tv.server.pool)
+        .await
+        .unwrap();
+        assert_eq!(failed, None, "{reply}");
+    }
+    assert_eq!(
+        rig.engine.imports_with_nzb(),
+        0,
+        "the engine is not sent an error page"
+    );
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_a_newznab_error_that_is_not_a_limit_stays_an_invalid_nzb() {
+    let rig = UsenetRig::start().await;
+    rig.nzbs.serve(
+        "g-gone",
+        Served::Body(r#"<error code="300" description="No such item"/>"#),
+    );
+    rig.engine
+        .refuse("", EngineStatus::BAD_REQUEST, "invalid_nzb");
+    let nzb_ref = rig
+        .list("g-gone", "Gone.Reply.2026.1080p.WEB-DL.x264-NZB")
+        .await;
+
+    let (status, body) = rig.resolve(json!({ "nzb_ref": nzb_ref })).await;
+
+    assert!(!status.is_success(), "{body}");
+    assert!(text(&body).to_lowercase().contains("not cached"), "{body}");
+    rig.tv.server.cleanup().await;
+}

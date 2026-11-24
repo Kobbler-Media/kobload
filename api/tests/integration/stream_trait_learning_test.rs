@@ -13,9 +13,8 @@ use uuid::Uuid;
 const TAGGED: &str = "Movie.2024.1080p.ZQX.x264-AAA";
 const PLAIN: &str = "Movie.2024.1080p.BluRay.x264-BBB";
 
-/// A tagged release the provider is said to hold, against a plain one nobody has checked.
-/// Without learned risk the tagged one leads on tier; once refusals of its tag are
-/// expected it drops below the unchecked one.
+/// Two releases the provider is said to hold. Without learned risk the tagged one leads on
+/// score; once refusals of its tag are expected it drops below the plain one.
 async fn leader(server: &TestServer, provider: &RankProvider) -> String {
     let candidates = vec![
         RankCandidate {
@@ -24,7 +23,7 @@ async fn leader(server: &TestServer, provider: &RankProvider) -> String {
         },
         RankCandidate {
             option: option(provider, &hash('b'), PLAIN, 8.0),
-            availability: KnownAvailability::Unknown,
+            availability: KnownAvailability::LikelyAvailable,
         },
     ];
     rank_options(
@@ -132,6 +131,27 @@ async fn test_refusals_of_a_made_up_tag_teach_the_ranking() {
     );
     refuse(&server, p.id, "ZQX", 6).await;
     assert_eq!(leader(&server, &p).await, PLAIN);
+    let against_unchecked = vec![
+        RankCandidate {
+            option: option(&p, &hash('a'), TAGGED, 1.0),
+            availability: KnownAvailability::LikelyAvailable,
+        },
+        RankCandidate {
+            option: option(&p, &hash('b'), PLAIN, 9.0),
+            availability: KnownAvailability::Unknown,
+        },
+    ];
+    let ranked = rank_options(
+        &server.pool,
+        &p,
+        against_unchecked,
+        &RankPreferences::default(),
+    )
+    .await;
+    assert_eq!(
+        ranked[0].release_title, TAGGED,
+        "cached beats unchecked, whatever its learned risk"
+    );
 
     let other = create_provider(&server.pool, "real_debrid").await;
     assert_eq!(
@@ -168,7 +188,7 @@ async fn test_spelling_variants_are_learned_apart() {
                 },
                 RankCandidate {
                     option: option(p, &hash('b'), PLAIN, 8.0),
-                    availability: KnownAvailability::Unknown,
+                    availability: KnownAvailability::LikelyAvailable,
                 },
             ];
             rank_options(&server.pool, p, candidates, &RankPreferences::default())

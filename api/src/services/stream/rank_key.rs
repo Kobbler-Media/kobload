@@ -28,8 +28,8 @@ pub struct RankKey {
     open_language: bool,
     open_suspect: bool,
     outside_tier_continuity: continuity::Rank,
-    open_risk: u8,
     unvouched: bool,
+    open_risk: u8,
     language_missing: bool,
     suspect: bool,
     continuity: continuity::Rank,
@@ -55,8 +55,8 @@ impl RankFacts {
             } else {
                 self.continuity
             },
-            open_risk: if certain { 0 } else { self.risk },
             unvouched: !(self.likely || certain),
+            open_risk: if certain { 0 } else { self.risk },
             language_missing: self.language_missing,
             suspect: self.suspect,
             continuity: self.continuity,
@@ -70,5 +70,124 @@ impl RankFacts {
         } else {
             0.0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cached() -> RankFacts {
+        RankFacts {
+            group: StreamGroup::Available,
+            hardcoded: false,
+            language_missing: false,
+            suspect: false,
+            continuity: continuity::Rank::None,
+            risk: 0,
+            ready: false,
+            likely: true,
+        }
+    }
+
+    fn unknown() -> RankFacts {
+        RankFacts {
+            likely: false,
+            ..cached()
+        }
+    }
+
+    fn ready() -> RankFacts {
+        RankFacts {
+            ready: true,
+            likely: false,
+            ..cached()
+        }
+    }
+
+    #[test]
+    fn test_full_precedence() {
+        let order: Vec<(&str, RankFacts)> = vec![
+            (
+                "played, even at high risk",
+                RankFacts {
+                    group: StreamGroup::Played,
+                    risk: 3,
+                    ..unknown()
+                },
+            ),
+            ("ready or RD+ or engine usenet", cached()),
+            ("ready at risk 3", RankFacts { risk: 3, ..ready() }),
+            (
+                "RD+ or engine usenet at risk 1",
+                RankFacts {
+                    risk: 1,
+                    ..cached()
+                },
+            ),
+            (
+                "RD+ or engine usenet at risk 3",
+                RankFacts {
+                    risk: 3,
+                    ..cached()
+                },
+            ),
+            ("unknown torrent", unknown()),
+            (
+                "unknown torrent at risk",
+                RankFacts {
+                    risk: 1,
+                    ..unknown()
+                },
+            ),
+            (
+                "suspected fake, even if cached",
+                RankFacts {
+                    suspect: true,
+                    ..cached()
+                },
+            ),
+            (
+                "wrong language, even if cached",
+                RankFacts {
+                    language_missing: true,
+                    ..cached()
+                },
+            ),
+            (
+                "hardcoded subs, even if played",
+                RankFacts {
+                    group: StreamGroup::Played,
+                    hardcoded: true,
+                    ..unknown()
+                },
+            ),
+            (
+                "uncached",
+                RankFacts {
+                    group: StreamGroup::Uncached,
+                    ..unknown()
+                },
+            ),
+            (
+                "failed",
+                RankFacts {
+                    group: StreamGroup::Failed,
+                    ..unknown()
+                },
+            ),
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                pair[0].1.key() < pair[1].1.key(),
+                "{} must rank above {}",
+                pair[0].0,
+                pair[1].0
+            );
+        }
+        assert!(
+            ready().key() == cached().key(),
+            "ready and RD+ compete on score"
+        );
     }
 }
