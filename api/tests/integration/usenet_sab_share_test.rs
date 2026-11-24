@@ -316,27 +316,6 @@ async fn test_the_admin_list_shows_what_the_engine_is_left_with() {
 }
 
 #[tokio::test]
-async fn test_a_disabled_sab_keeps_its_share_until_its_queue_drains() {
-    let rig = UsenetRig::start().await;
-    add_server(&rig, &engine_server("news.a.test", None, 49, 50)).await;
-    let (url, sab) = mock_sab(json!([sab_server("news.a.test", "alice", 40)])).await;
-    let (_, body) = add_sab(&rig, &url, true).await;
-    let id = id_of(&body);
-    sab.busy(true);
-
-    let (status, body) = patch_sab(&rig, &id, &json!({ "enabled": false })).await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
-    assert_eq!(
-        pulled(&rig).await,
-        [("news.a.test".to_string(), 10)],
-        "SAB is still downloading its queue"
-    );
-    sab.busy(false);
-    assert_eq!(pulled(&rig).await, [("news.a.test".to_string(), 49)]);
-    rig.tv.server.cleanup().await;
-}
-
-#[tokio::test]
 async fn test_the_last_known_share_survives_a_restart_while_sab_is_down() {
     let rig = UsenetRig::start().await;
     add_server(&rig, &engine_server("news.a.test", None, 49, 50)).await;

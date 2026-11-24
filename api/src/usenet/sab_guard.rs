@@ -27,26 +27,24 @@ pub async fn sab_client_refusal(
     Ok(sab_violation(&rows, &sab).map(|over| over.describe_sab()))
 }
 
-pub enum SabDeleteCheck {
-    Refused(String),
-    Idle,
-    Unreachable,
-}
-
-// An unreachable SAB is not refused: an admin must be able to remove a dead client.
-pub async fn sab_delete_check(
+// An unreachable SAB is not refused: an admin must be able to remove a dead client. A
+// disabled one is not kobload's to ask about.
+pub async fn sab_delete_refusal(
     http: &reqwest::Client,
     sab: &DownloadClientConfig,
-) -> SabDeleteCheck {
+) -> Option<String> {
+    if !sab.enabled {
+        return None;
+    }
     match queue_working(http, sab).await {
-        Ok(true) => SabDeleteCheck::Refused(format!(
+        Ok(true) => Some(format!(
             "{} still has an active download queue and holds its usenet connections. Let the queue finish, or pause or clear it in SABnzbd, then delete this client.",
             sab.name
         )),
-        Ok(false) => SabDeleteCheck::Idle,
+        Ok(false) => None,
         Err(reason) => {
             warn!(client = %sab.name, reason, "Could not read SABnzbd's queue; allowing its deletion");
-            SabDeleteCheck::Unreachable
+            None
         }
     }
 }

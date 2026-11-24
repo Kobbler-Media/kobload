@@ -13,10 +13,7 @@ use crate::auth::require_auth;
 use crate::repositories::clients as clients_repo;
 use crate::state::AppState;
 use crate::types::{DownloadClientConfig, DownloadClientType, TestConnectionResult};
-use crate::usenet::{
-    SabDeleteCheck, forget_sab_share, hold_sab_share, hold_sab_share_if_unreachable,
-    sab_client_refusal, sab_delete_check,
-};
+use crate::usenet::{forget_sab_share, sab_client_refusal, sab_delete_refusal};
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadClientCreate {
@@ -219,7 +216,6 @@ async fn update_download_client(
     }
 
     let is_sab;
-    let mut disabling = None;
     match clients_repo::get_client_by_id(&state.pool, id).await {
         Ok(Some(stored)) => {
             is_sab = stored.client_type == "sabnzbd";
@@ -236,9 +232,6 @@ async fn update_download_client(
                 && let Some(refused) = sab_refusal(&state, &candidate).await
             {
                 return refused;
-            }
-            if is_sab && was_live && same_sab && !candidate.enabled {
-                disabling = Some(candidate);
             }
         }
         Ok(None) => return (StatusCode::NOT_FOUND, "not found").into_response(),
@@ -270,9 +263,6 @@ async fn update_download_client(
             {
                 let _ = clients_repo::clear_default_for_protocol_except(&state.pool, &protocol, id)
                     .await;
-            }
-            if let Some(sab) = &disabling {
-                hold_sab_share_if_unreachable(&state.pool, &state.http_client, sab).await;
             }
             if is_sab {
                 nudge_engine(&state).await;
@@ -319,11 +309,9 @@ async fn delete_download_client(
         .ok()
         .flatten()
         .filter(|c| c.client_type == "sabnzbd");
-    let check = match &sab {
-        Some(sab) => sab_delete_check(&state.http_client, sab).await,
-        None => SabDeleteCheck::Idle,
-    };
-    if let SabDeleteCheck::Refused(message) = &check {
+    if let Some(sab) = &sab
+        && let Some(message) = sab_delete_refusal(&state.http_client, sab).await
+    {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "message": message })),
@@ -332,13 +320,8 @@ async fn delete_download_client(
     }
     match clients_repo::delete_client(&state.pool, id).await {
         Ok(true) => {
-            if let Some(sab) = &sab {
-                match check {
-                    SabDeleteCheck::Unreachable => {
-                        hold_sab_share(&state.pool, sab, sab.enabled).await;
-                    }
-                    _ => forget_sab_share(&state.pool, id).await,
-                }
+            if sab.is_some() {
+                forget_sab_share(&state.pool, id).await;
                 nudge_engine(&state).await;
             }
             StatusCode::NO_CONTENT.into_response()

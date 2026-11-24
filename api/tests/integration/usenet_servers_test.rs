@@ -553,3 +553,100 @@ async fn test_an_unreachable_sabnzbd_does_not_block_a_save() {
     assert_eq!(status, StatusCode::OK, "{body}");
     rig.tv.server.cleanup().await;
 }
+
+// Accepts connections and never answers, so a client that talks to it can only time out.
+async fn silent_sab() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = contacts.clone();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            held.push(stream);
+        }
+    });
+    (url, contacts)
+}
+
+// A client that past downloads still point at.
+async fn reference_client(rig: &UsenetRig, client: uuid::Uuid) {
+    let pool = &rig.tv.server.pool;
+    sqlx::query(
+        "INSERT INTO downloads (id, source, protocol, name, download_url, callback_url, metadata, status, download_client_id)
+         VALUES ($1, 'test', 'usenet', 'Past grab', 'http://example.com/dl', 'http://callback', '{}'::jsonb, 'completed', $2)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(client)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn test_a_disabled_sabnzbd_is_never_contacted_and_can_be_deleted() {
+    let rig = UsenetRig::start().await;
+    let (url, contacts) = silent_sab().await;
+    let sab = add_sab(&rig, &url).await;
+    sqlx::query("UPDATE download_clients SET enabled = false WHERE id = $1")
+        .bind(sab)
+        .execute(&rig.tv.server.pool)
+        .await
+        .unwrap();
+    reference_client(&rig, sab).await;
+    created_id(&rig, &server("Primary", "alice", 20)).await;
+
+    let started = std::time::Instant::now();
+    let resp = rig.tv.server.admin_client().get(SERVERS).await;
+    resp.assert_ok();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the list waited on a disabled SAB"
+    );
+
+    let resp = rig
+        .tv
+        .server
+        .admin_client()
+        .delete(&format!("/api/v1/admin/download-clients/{sab}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT, "{}", resp.text());
+    assert_eq!(
+        contacts.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a disabled SAB is nothing to kobload"
+    );
+    rig.tv.server.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_deleting_a_client_keeps_the_downloads_that_used_it() {
+    let rig = UsenetRig::start().await;
+    let pool = &rig.tv.server.pool;
+    let client: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO download_clients (id, name, client_type, protocol, base_url, enabled, is_default)
+         VALUES ($1, 'Old client', 'transmission', 'torrent', 'http://127.0.0.1:1', true, false) RETURNING id",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    reference_client(&rig, client).await;
+
+    let resp = rig
+        .tv
+        .server
+        .admin_client()
+        .delete(&format!("/api/v1/admin/download-clients/{client}"))
+        .await;
+    assert_eq!(resp.status, StatusCode::NO_CONTENT, "{}", resp.text());
+    let orphaned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM downloads WHERE name = 'Past grab' AND download_client_id IS NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(orphaned, 1, "history outlives the client");
+    rig.tv.server.cleanup().await;
+}
