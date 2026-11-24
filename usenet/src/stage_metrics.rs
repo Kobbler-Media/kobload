@@ -8,6 +8,7 @@ use crate::metrics::family;
 
 const STAGES: &str = "kobload_usenet_stream_stage_seconds";
 const ROUTES: &str = "kobload_usenet_stream_connection_routes_total";
+const PATHS: &str = "kobload_usenet_stream_connection_paths_total";
 const LOAD: &str = "kobload_usenet_stream_assign_load";
 const BYTES: &str = "kobload_usenet_stream_body_bytes_total";
 const ABANDONED: &str = "kobload_usenet_stream_abandoned_total";
@@ -46,6 +47,22 @@ pub fn render_stages(out: &mut String, workloads: &[WorkloadStageSnapshot]) {
                 "{ROUTES}{{workload=\"{}\",route=\"{}\"}} {count}",
                 snapshot.workload.label(),
                 route.label()
+            );
+        }
+    }
+    family(
+        out,
+        PATHS,
+        "counter",
+        "Body attempts by whether their connection moved body data in the last second (warm) or not (cold).",
+    );
+    for snapshot in workloads {
+        for (path, count) in &snapshot.paths {
+            let _ = writeln!(
+                out,
+                "{PATHS}{{workload=\"{}\",path=\"{}\"}} {count}",
+                snapshot.workload.label(),
+                path.label()
             );
         }
     }

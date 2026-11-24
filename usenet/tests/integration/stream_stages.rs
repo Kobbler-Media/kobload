@@ -11,6 +11,7 @@ use crate::support::{Fixture, Harness, collect, metric, output, token};
 
 const STAGES: &str = "kobload_usenet_stream_stage_seconds";
 const ROUTES: &str = "kobload_usenet_stream_connection_routes_total";
+const PATHS: &str = "kobload_usenet_stream_connection_paths_total";
 const BYTES: &str = "kobload_usenet_stream_body_bytes_total";
 const REPLY_DELAY: Duration = Duration::from_millis(40);
 const ADDITIVE: [&str; 8] = [
@@ -109,12 +110,22 @@ async fn a_stream_read_reports_stages_that_add_up_to_what_the_client_waited() {
     assert!(stage(&text, "sum", "stream", "service") >= REPLY_DELAY.as_secs_f64() * 0.9);
     assert!(metric(&text, ROUTES, &["workload=\"stream\""]) >= delivered as u64);
     assert!(metric(&text, BYTES, &["workload=\"stream\""]) > 0);
+    let paths = metric(&text, PATHS, &["workload=\"stream\""]);
+    assert_eq!(paths, metric(&text, ROUTES, &["workload=\"stream\""]));
+    assert!(text.contains(&format!("{PATHS}{{workload=\"stream\",path=\"warm\"}}")));
     assert!(text.contains(&format!(
         "{STAGES}_bucket{{workload=\"stream\",stage=\"total\",le=\"16\"}}"
     )));
     assert!(text.contains(
         "kobload_usenet_stream_assign_load_count{workload=\"stream\",measure=\"busy_connections\"}"
     ));
+    for family in [
+        "kobload_usenet_keep_warm_stats_total",
+        "kobload_usenet_provider_warm_connections",
+        "kobload_usenet_provider_cold_connections",
+    ] {
+        assert!(text.contains(&format!("{family}{{provider=")), "{family}");
+    }
     assert_eq!(stage(&text, "count", "cache", "total"), 0.0);
     assert!(!text.contains(fixture.message_id(0, 0)));
 }

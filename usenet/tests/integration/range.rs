@@ -1,8 +1,10 @@
+use std::time::Duration;
+
 use axum::http::{StatusCode, header};
 use kob_usenet::vendor::testkit::LoopbackServer;
 use usenet_proto::Purpose;
 
-use crate::support::{Fixture, Harness, collect, output, token};
+use crate::support::{ARTICLE, Fixture, Harness, collect, output, token};
 
 struct Case<'a> {
     range: Option<String>,
@@ -23,6 +25,34 @@ fn case(
         content_range,
         body,
     }
+}
+
+#[tokio::test]
+async fn a_seek_near_an_articles_end_answers_without_waiting_for_the_next_article() {
+    let fixture = Fixture::feature();
+    let nntp = LoopbackServer::start(fixture.articles()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let harness = Harness::new(dir.path(), &nntp).await;
+    let release = harness.import(&fixture, "idx:guid").await;
+    let index = output(&release, "Feature.2026.mkv");
+    let token = token(&release.release_key, index, Purpose::Play);
+    let start = 21 * ARTICLE - 10;
+    let (arrived, held) = nntp.hold_article(fixture.message_id(0, 21));
+    let range = format!("bytes={start}-{}", start + 99);
+
+    // Under the reader's half-second hedge, which would fetch the held article again.
+    let response = tokio::time::timeout(
+        Duration::from_millis(250),
+        harness.stream("GET", &token, Some(&range)),
+    )
+    .await
+    .expect("the first article's bytes answer the seek");
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    arrived.await.unwrap();
+    held.send(()).unwrap();
+    let (body, error) = collect(response).await;
+    assert_eq!(error, None);
+    assert_eq!(body, fixture.data(0)[start..start + 100]);
 }
 
 #[tokio::test]

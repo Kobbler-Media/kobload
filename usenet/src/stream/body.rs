@@ -28,12 +28,15 @@ pub struct Pump {
     pub label: String,
     pub damage: Arc<Damage>,
     pub sought: bool,
+    pub ranged: bool,
     pub live: LiveStream,
 }
 
 impl Pump {
     // A failure before the headers can still change the status, so the first chunk is read
-    // up front. Bytes read before the failure are returned with it.
+    // up front. Bytes read before the failure are returned with it. A ranged reply ends the
+    // same way whether a later failure comes before or after its headers, an aborted body
+    // after the good bytes, so it need not wait for the next article.
     pub async fn first(&mut self) -> First {
         let deadline = Instant::now() + self.gap;
         let mut first = BytesMut::new();
@@ -43,6 +46,9 @@ impl Pump {
                 Ok(Ok(bytes)) => {
                     first_read.get_or_insert_with(std::time::Instant::now);
                     first.extend_from_slice(&bytes);
+                    if self.ranged {
+                        break;
+                    }
                 }
                 Ok(Err(error)) => {
                     let failure = self.failed(&error, "stream refused");
@@ -95,6 +101,8 @@ impl Pump {
                     Ok(bytes) => Some((Ok(bytes), (Some(pump), None))),
                     Err(error) => {
                         pump.failed(&error, "stream aborted");
+                        // As in `aborted_body`: the headers and good bytes must flush first.
+                        tokio::task::yield_now().await;
                         Some((Err(error), (None, None)))
                     }
                 }

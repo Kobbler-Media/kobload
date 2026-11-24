@@ -95,6 +95,7 @@ pub async fn stream(
         label: format!("{key}/{}", claims.output),
         damage: state.damage.clone(),
         sought: false,
+        ranged,
         live,
     };
     let First {

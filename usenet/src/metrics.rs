@@ -120,6 +120,24 @@ fn render(
         |p| u64::from(p.connect_error.is_some()),
     );
     per_provider(
+        "kobload_usenet_keep_warm_stats_total",
+        "counter",
+        "STATs sent only to keep an idle connection's congestion window open while someone watches.",
+        |p| p.keep_warm_stats,
+    );
+    per_provider(
+        "kobload_usenet_provider_warm_connections",
+        "gauge",
+        "Open connections that moved a body or a keep-warm reply within the last second.",
+        |p| p.warm_connections as u64,
+    );
+    per_provider(
+        "kobload_usenet_provider_cold_connections",
+        "gauge",
+        "Open connections that have gone idle long enough to restart slow start.",
+        |p| p.connections.len().saturating_sub(p.warm_connections) as u64,
+    );
+    per_provider(
         "kobload_usenet_breaker_trips_total",
         "counter",
         "Times the circuit breaker opened.",
