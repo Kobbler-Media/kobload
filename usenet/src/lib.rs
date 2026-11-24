@@ -11,6 +11,7 @@ mod pull;
 mod routes;
 mod servers;
 mod settings;
+mod stage_metrics;
 mod state;
 mod status;
 mod stream;

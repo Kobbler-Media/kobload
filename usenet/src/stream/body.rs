@@ -17,6 +17,7 @@ const CHUNK: usize = 256 * 1024;
 pub struct First {
     pub bytes: Bytes,
     pub failure: Option<(ReadFailure, io::Error)>,
+    pub first_read: Option<std::time::Instant>,
 }
 
 pub struct Pump {
@@ -36,14 +37,19 @@ impl Pump {
     pub async fn first(&mut self) -> First {
         let deadline = Instant::now() + self.gap;
         let mut first = BytesMut::new();
+        let mut first_read = None;
         while first.len() < CHUNK && self.remaining > 0 {
             match timeout_at(deadline, self.next()).await {
-                Ok(Ok(bytes)) => first.extend_from_slice(&bytes),
+                Ok(Ok(bytes)) => {
+                    first_read.get_or_insert_with(std::time::Instant::now);
+                    first.extend_from_slice(&bytes);
+                }
                 Ok(Err(error)) => {
                     let failure = self.failed(&error, "stream refused");
                     return First {
                         bytes: first.freeze(),
                         failure: Some((failure, error)),
+                        first_read,
                     };
                 }
                 Err(_) if !first.is_empty() => break,
@@ -53,6 +59,7 @@ impl Pump {
                     return First {
                         bytes: Bytes::new(),
                         failure: Some((failure, error)),
+                        first_read: None,
                     };
                 }
             }
@@ -60,6 +67,7 @@ impl Pump {
         First {
             bytes: first.freeze(),
             failure: None,
+            first_read,
         }
     }
 

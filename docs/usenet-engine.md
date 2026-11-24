@@ -103,6 +103,7 @@ When you change the uid, also chown the engine's `usenet_data` volume (NZB cache
 | `USENET_DOWNLOAD_DIR` | `/downloads` | Absolute path inside the container where finished downloads go, one folder per category |
 | `USENET_FREE_SPACE_FLOOR_GB` | `1` | Downloads pause while the download filesystem has less free space than this, and resume on their own |
 | `USENET_ACTIVE_JOBS` | `2` | Downloads fetched at once; the rest wait in the queue |
+| `USENET_TRACE_STREAMS` | off | `1` logs one `info` line (target `usenet_stream_trace`) per playback article and HTTP read, with each stage's time. Read at startup |
 | `USENET_UID` / `USENET_GID` | `10001` | User the engine runs as |
 | `USENET_MIN_CONNECTIONS` | `4` | NNTP connections kept open and logged in, so a stream's first read doesn't wait on a fresh login |
 | `USENET_PORT` | `7090` | Host port the engine is published on |
@@ -169,5 +170,8 @@ The engine shares its pool between streaming and downloads, so you don't split c
 - `kobload_usenet_body_attempts_total{provider,workload,outcome}` and `kobload_usenet_body_bytes_total{provider,workload}`: article fetches per provider, split by workload (`stream`, `cache`, `queue`, `warm`, `health`).
 - `kobload_usenet_provider_connections`, `kobload_usenet_provider_busy`, `kobload_usenet_connect_failures_total`, `kobload_usenet_breaker_trips_total`: per-provider pool state.
 - `kobload_usenet_stream_failures_total{code}`: stream reads refused or cut, by reason (`missing_articles`, `corrupt_articles`, `timeout`, `providers_unavailable`).
+- `kobload_usenet_stream_stage_seconds{workload,stage}`: where delivered `stream` and `cache` article requests spent their time. `retry`, `admission`, `connection_wait`, `send_queue`, `pipeline_wait`, `provider_first_byte`, `body_transfer` and `decode` add up to `total`. `connect`, `tls` and `auth` sit inside `connection_wait` on a new connection. `service` is one HTTP read from request to its first body chunk being ready, and `service_first_read` to the first bytes back from the engine.
+- `kobload_usenet_stream_connection_routes_total{workload,route}`: how body attempts got a connection (`idle`, `busy`, `new`). `kobload_usenet_stream_abandoned_total{workload}` counts those cancelled or failed, so routes equal delivered plus abandoned.
+- `kobload_usenet_stream_assign_load{workload,measure}`: pool load at assignment (`requests_ahead`, `busy_connections`, `requests_in_flight`, `pace_in_flight_mib`, `pace_bound_mib`). `kobload_usenet_stream_body_bytes_total{workload}` over `body_transfer` gives per-connection throughput.
 
 Usenet stream attempts also show in the web UI's **Debrid Log**.

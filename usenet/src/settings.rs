@@ -31,6 +31,7 @@ pub struct Settings {
     pub download_dir: PathBuf,
     pub free_space_floor: u64,
     pub active_jobs: usize,
+    pub trace_streams: bool,
 }
 
 impl Settings {
@@ -59,6 +60,7 @@ impl Settings {
             .unwrap_or(DEFAULT_FREE_SPACE_FLOOR_GB)
             .saturating_mul(1 << 30),
             active_jobs: active_jobs(get("USENET_ACTIVE_JOBS"))?,
+            trace_streams: get("USENET_TRACE_STREAMS").is_some_and(|v| v.trim() == "1"),
         };
         let mut secrets = vec![
             ("USENET_CONTROL_KEY", settings.control_key.as_str()),

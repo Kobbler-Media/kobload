@@ -135,6 +135,8 @@ services:
       USENET_DOWNLOAD_DIR: ${USENET_DOWNLOAD_DIR:-/downloads}
       USENET_FREE_SPACE_FLOOR_GB: ${USENET_FREE_SPACE_FLOOR_GB:-1}
       USENET_ACTIVE_JOBS: ${USENET_ACTIVE_JOBS:-2}
+      # 1 logs one line per playback article and HTTP read, with each stage's time.
+      USENET_TRACE_STREAMS: ${USENET_TRACE_STREAMS:-}
       RUST_LOG: ${USENET_RUST_LOG:-info}
     # Idle pooled NNTP connections otherwise restart TCP slow start: at ~210 ms RTT that took
     # an import's first articles from 1.5 s to 4.0 s.

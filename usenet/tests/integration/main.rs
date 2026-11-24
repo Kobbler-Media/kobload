@@ -16,5 +16,6 @@ mod resume;
 mod settings;
 mod startup;
 mod status;
+mod stream_stages;
 mod support;
 mod token;

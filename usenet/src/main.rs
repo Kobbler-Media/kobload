@@ -30,6 +30,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     config.download.free_space_floor = settings.free_space_floor;
     config.download.active_jobs = settings.active_jobs;
     let Booted { engine, restored } = start_engine(config).await?;
+    engine.stream_stages().set_trace(settings.trace_streams);
     let state = AppState::new(
         Arc::clone(&engine),
         &settings.control_key,

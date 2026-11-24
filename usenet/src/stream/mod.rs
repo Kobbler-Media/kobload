@@ -23,6 +23,7 @@ pub async fn stream(
     Path(token): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    let started = Instant::now();
     let claims = usenet_proto::verify(&state.stream_secret, &token, now()).map_err(|error| {
         match state.refused_tokens.due(Instant::now()) {
             Some(held_back) => tracing::warn!(%error, held_back, "stream token refused"),
@@ -96,7 +97,18 @@ pub async fn stream(
         sought: false,
         live,
     };
-    let First { bytes, failure } = pump.first().await;
+    let First {
+        bytes,
+        failure,
+        first_read,
+    } = pump.first().await;
+    if let Some(first_read) = first_read {
+        state.engine.stream_stages().record_service(
+            purpose(&claims).workload(),
+            first_read.duration_since(started),
+            started.elapsed(),
+        );
+    }
     match failure {
         None => reply.body(pump.into_body(bytes)).map_err(internal),
         Some((_, error)) if ranged && !bytes.is_empty() => reply

@@ -8,18 +8,20 @@ use kob_usenet::vendor::nntp::Workload;
 use kob_usenet::{JobStatus, ProviderStats};
 
 use crate::damage::{Damage, ReadFailure};
+use crate::stage_metrics::render_stages;
 use crate::state::AppState;
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        render(
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], {
+        let mut out = render(
             &state.engine.stats(),
             &state.damage,
             &state.engine.jobs(),
             state.engine.paused_for_space(),
-        ),
-    )
+        );
+        render_stages(&mut out, &state.engine.stream_stages().snapshot());
+        out
+    })
 }
 
 const JOB_STATES: [(kob_usenet::JobState, &str); 7] = {
@@ -166,7 +168,7 @@ fn render(
     out
 }
 
-fn family(out: &mut String, name: &str, kind: &str, help: &str) {
+pub(crate) fn family(out: &mut String, name: &str, kind: &str, help: &str) {
     let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} {kind}");
 }
 

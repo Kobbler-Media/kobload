@@ -32,6 +32,22 @@ fn defaults_warm_four_connections_and_leave_metrics_closed() {
 }
 
 #[test]
+fn the_stream_trace_is_off_unless_set_to_one() {
+    for (value, on) in [
+        (None, false),
+        (Some("0"), false),
+        (Some("yes"), false),
+        (Some("1"), true),
+    ] {
+        let vars: Vec<_> = value
+            .map(|v| ("USENET_TRACE_STREAMS", v))
+            .into_iter()
+            .collect();
+        assert_eq!(settings(&vars).unwrap().trace_streams, on);
+    }
+}
+
+#[test]
 fn downloads_default_to_the_shared_mount_one_gb_floor_and_two_active_jobs() {
     let default = settings(&[]).unwrap();
     assert_eq!(default.download_dir, PathBuf::from("/downloads"));
