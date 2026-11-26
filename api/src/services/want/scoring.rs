@@ -1394,6 +1394,15 @@ fn movie_is_new(year: Option<u32>, release_date: Option<&str>, today: time::Date
 /// (e.g., "Toy Story 1995" matching against want for "Toy Story 5 2026").
 ///
 /// Returns `Some(reason)` to reject, `None` to accept.
+/// A number inside the wanted title ("Blade Runner 2049", "Wonder Woman 1984") parses as
+/// the release year but isn't one.
+fn year_is_in_title(title: &str, year: u32) -> bool {
+    let year = year.to_string();
+    title
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|token| token == year)
+}
+
 pub fn structural_reject(
     release: &Release,
     media_want: Option<&MediaWant>,
@@ -1826,12 +1835,22 @@ fn structural_reject_judged(
     // disambiguation (e.g., "Scrubs.2026.S01E01" vs "Scrubs.S01E01").
     // Non-standard groups that use season-air-year (e.g., ZmWeb DSNP rips)
     // will be rejected — manual search is the fallback for those.
-    if let Some(wanted_year) = match media_want {
-        MediaWant::TvEpisode { year, .. } | MediaWant::TvSeason { year, .. } => *year,
-        _ => None,
-    } && let ParsedMedia::Tv(tv) = &parsed.media
+    // A number that is part of the show's own name ("Blade Runner 2099") parses as
+    // the year but isn't one.
+    if let MediaWant::TvEpisode {
+        year: Some(wanted_year),
+        show_name,
+        ..
+    }
+    | MediaWant::TvSeason {
+        year: Some(wanted_year),
+        show_name,
+        ..
+    } = media_want
+        && let ParsedMedia::Tv(tv) = &parsed.media
         && let Some(parsed_year) = tv.year
-        && parsed_year != wanted_year
+        && parsed_year != *wanted_year
+        && !year_is_in_title(show_name, parsed_year)
     {
         return Some(StructuralRejectReason::YearMismatch);
     }
@@ -1851,10 +1870,17 @@ fn structural_reject_judged(
         // Movie: reject if both have years and they differ
         (
             MediaWant::Movie {
-                year: Some(wanted), ..
+                year: Some(wanted),
+                title: wanted_title,
+                ..
             },
             ParsedMedia::Movie(movie),
-        ) if movie.year.is_some_and(|y| y != *wanted) => Some(StructuralRejectReason::YearMismatch),
+        ) if movie
+            .year
+            .is_some_and(|y| y != *wanted && !year_is_in_title(wanted_title, y)) =>
+        {
+            Some(StructuralRejectReason::YearMismatch)
+        }
 
         // TV Season: reject packs when auto and too few episodes needed relative to season size
         (
@@ -2904,6 +2930,133 @@ mod tests {
             structural_reject(&release, Some(&mw), SearchContext::default()).is_none(),
             "Should not reject: season matches"
         );
+    }
+
+    fn tv_wants(show_name: &str, year: u32) -> [MediaWant; 2] {
+        [
+            MediaWant::TvEpisode {
+                show_name: show_name.to_string(),
+                season: "1".to_string(),
+                episode: "1".to_string(),
+                year: Some(year),
+                identifiers: None,
+                alternate_titles: None,
+                episode_title: None,
+                season_premiere: None,
+                quality_profile_id: None,
+                quality_overrides: None,
+                air_date: None,
+            },
+            MediaWant::TvSeason {
+                show_name: show_name.to_string(),
+                season: "1".to_string(),
+                year: Some(year),
+                identifiers: None,
+                alternate_titles: None,
+                pack_preference: "auto".to_string(),
+                episodes_needed: None,
+                total_episodes: None,
+                last_air_date: None,
+                quality_profile_id: None,
+                quality_overrides: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_structural_reject_tv_year_in_show_title_is_not_release_year() {
+        // (show, wanted premiere year, release title, rejected as YearMismatch)
+        let cases = [
+            (
+                "Blade Runner 2099",
+                2026,
+                "Blade.Runner.2099.S01E01.Hades.2160p.AMZN.WEB-DL.DDP5.1.Atmos.H.265-Kitsune",
+                false,
+            ),
+            (
+                "Blade Runner 2099",
+                2026,
+                "Blade Runner 2099 S01E01 MULTi 1080p WEB H264-UKDTV",
+                false,
+            ),
+            (
+                "Blade Runner 2099",
+                2026,
+                "Blade.Runner.2099.2026.S01E01.1080p.WEB.H264-GRP",
+                false,
+            ),
+            (
+                "Scrubs",
+                2026,
+                "Scrubs.2001.S01E01.1080p.WEB.H264-GRP",
+                true,
+            ),
+            (
+                "Scrubs",
+                2026,
+                "Scrubs.2026.S01E01.1080p.WEB.H264-GRP",
+                false,
+            ),
+        ];
+        for (show, year, title, rejected) in cases {
+            let release = make_release_dated(title, "2026-11-01T00:00:00Z");
+            for mw in tv_wants(show, year) {
+                let got = structural_reject(&release, Some(&mw), SearchContext::default());
+                assert_eq!(
+                    got == Some(StructuralRejectReason::YearMismatch),
+                    rejected,
+                    "{title} vs {show} ({year}): {got:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_structural_reject_movie_year_in_title_is_not_release_year() {
+        // (title, wanted year, release title)
+        let cases = [
+            (
+                "Blade Runner 2049",
+                2017,
+                "Blade.Runner.2049.2017.2160p.UHD.BluRay.x265-GRP",
+            ),
+            (
+                "Blade Runner 2049",
+                2017,
+                "Blade.Runner.2049.1080p.BluRay.x264-GRP",
+            ),
+            (
+                "Wonder Woman 1984",
+                2020,
+                "Wonder.Woman.1984.2020.1080p.WEB-DL.x264-GRP",
+            ),
+            (
+                "Wonder Woman 1984",
+                2020,
+                "Wonder.Woman.1984.1080p.WEB-DL.x264-GRP",
+            ),
+            ("2012", 2009, "2012.2009.1080p.BluRay.x264-GRP"),
+        ];
+        for (title, year, release_title) in cases {
+            let release = make_release_dated(release_title, "2026-11-01T00:00:00Z");
+            let mw = MediaWant::Movie {
+                title: title.to_string(),
+                year: Some(year),
+                identifiers: None,
+                alternate_titles: None,
+                quality_profile_id: None,
+                quality_overrides: None,
+                release_date: None,
+                in_library: None,
+                library_video_height: None,
+            };
+            let got = structural_reject(&release, Some(&mw), SearchContext::default());
+            assert_ne!(
+                got,
+                Some(StructuralRejectReason::YearMismatch),
+                "{release_title}: {got:?}"
+            );
+        }
     }
 
     #[test]
