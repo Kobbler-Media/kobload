@@ -38,6 +38,7 @@ struct RdTorrentInfo {
     id: String,
     status: String,
     progress: Option<f64>,
+    speed: Option<i64>,
     #[serde(default)]
     files: Vec<RdTorrentFile>,
     #[serde(default)]
@@ -431,6 +432,7 @@ impl DebridProvider for RealDebridProvider {
             status,
             files,
             links: info.links,
+            speed: info.speed,
         })
     }
 

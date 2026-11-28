@@ -34,11 +34,10 @@ const streamAttemptStatusMap: Record<string, StatusStyle> = {
   played: { bg: '#10b981', color: '#fff', label: 'Played' },
   uncached: { bg: '#6b7280', color: '#fff', label: 'Not Cached' },
   refused: { bg: '#f97316', color: '#fff', label: 'Refused' },
+  skipped: { bg: '#9ca3af', color: '#000', label: 'Held Back' },
   failed: { bg: '#ef4444', color: '#fff', label: 'Failed' },
   abandoned: { bg: '#ca8a04', color: '#000', label: 'Abandoned' }
 };
-
-export const streamAttemptStatuses = Object.keys(streamAttemptStatusMap);
 
 export function getStreamAttemptStatusStyle(status: string): StatusStyle {
   return streamAttemptStatusMap[status] ?? { ...defaultDownloadStyle, label: status };

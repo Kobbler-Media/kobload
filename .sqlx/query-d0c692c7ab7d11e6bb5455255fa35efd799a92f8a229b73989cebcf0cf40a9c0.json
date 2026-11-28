@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO stream_attempts (provider_id, origin, release_key, file_id, release_title, file_name)\n           VALUES ($1, $2, $3, $4, $5, $6)\n           RETURNING id",
+  "query": "INSERT INTO stream_attempts (provider_id, origin, release_key, file_id, release_title, file_name, search_id)\n           VALUES ($1, $2, $3, $4, $5, $6, $7)\n           RETURNING id",
   "describe": {
     "columns": [
       {
@@ -22,12 +22,13 @@
         "Text",
         "Int4",
         "Text",
-        "Text"
+        "Text",
+        "Uuid"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "f2060fdddc920f7baeb39c569908e741facb3b31f95769765b517238bf2b6eee"
+  "hash": "d0c692c7ab7d11e6bb5455255fa35efd799a92f8a229b73989cebcf0cf40a9c0"
 }

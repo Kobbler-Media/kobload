@@ -243,6 +243,9 @@ struct ResolveStatusResponse {
     filesize: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     progress: Option<f32>,
+    /// Bytes per second while the provider downloads it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speed: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
 }
@@ -289,7 +292,7 @@ async fn log_status_poll(
                 log.record(Step::Failed, message, Change::failed(message))
                     .await;
             }
-            Ok(r) => log.progress(r.progress.unwrap_or(0.0)).await,
+            Ok(r) => log.progress(r.progress.unwrap_or(0.0), r.speed).await,
             Err((code, message)) => {
                 log.record(
                     Step::PollError,
@@ -369,6 +372,7 @@ async fn resolve_status(
                     filename: None,
                     filesize: None,
                     progress: Some(0.99),
+                    speed: None,
                     message: Some("Waiting for links...".to_string()),
                 });
             }
@@ -392,6 +396,7 @@ async fn resolve_status(
                 filename: Some(unrestricted.filename),
                 filesize: Some(unrestricted.filesize),
                 progress: None,
+                speed: None,
                 message: None,
             })
         }
@@ -417,6 +422,7 @@ async fn resolve_status(
                 filename: None,
                 filesize: None,
                 progress: Some(0.0),
+                speed: None,
                 message: None,
             })
         }
@@ -426,6 +432,7 @@ async fn resolve_status(
             filename: None,
             filesize: None,
             progress: Some(progress),
+            speed: torrent.speed,
             message: None,
         }),
         // Not recorded to debrid_availability_cache: this endpoint is keyed by
@@ -438,6 +445,7 @@ async fn resolve_status(
             filename: None,
             filesize: None,
             progress: None,
+            speed: None,
             message: Some("Real-Debrid refused this release. Try a different source.".to_string()),
         }),
         DebridTorrentStatus::Error { message } => Ok(ResolveStatusResponse {
@@ -446,6 +454,7 @@ async fn resolve_status(
             filename: None,
             filesize: None,
             progress: None,
+            speed: None,
             message: Some(message),
         }),
     }

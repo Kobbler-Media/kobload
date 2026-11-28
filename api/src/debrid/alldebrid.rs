@@ -352,6 +352,7 @@ impl DebridProvider for AllDebridProvider {
             status,
             files,
             links,
+            speed: None,
         })
     }
 

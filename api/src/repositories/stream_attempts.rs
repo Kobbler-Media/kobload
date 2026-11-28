@@ -13,6 +13,7 @@ pub struct StreamAttempt {
     pub id: Uuid,
     pub provider_id: Uuid,
     pub provider_name: String,
+    pub search_id: Option<Uuid>,
     pub origin: String,
     pub release_key: String,
     pub file_id: Option<i32>,
@@ -21,6 +22,7 @@ pub struct StreamAttempt {
     pub status: String,
     pub cached: Option<bool>,
     pub progress: Option<f32>,
+    pub speed: Option<i64>,
     pub torrent_id: Option<String>,
     pub error: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -42,6 +44,7 @@ pub struct StreamAttemptEvent {
 
 pub struct NewAttempt<'a> {
     pub provider_id: Uuid,
+    pub search_id: Option<Uuid>,
     pub origin: &'a str,
     pub release_key: &'a str,
     pub file_id: Option<i32>,
@@ -54,6 +57,7 @@ pub struct Change {
     pub status: Option<&'static str>,
     pub cached: Option<bool>,
     pub progress: Option<f32>,
+    pub speed: Option<i64>,
     pub torrent_id: Option<String>,
     pub error: Option<String>,
     pub release_key: Option<String>,
@@ -71,7 +75,8 @@ impl Change {
 
 #[derive(Debug, Default)]
 pub struct ListFilter<'a> {
-    pub id: Option<Uuid>,
+    /// Attempts with these ids, or on these searches.
+    pub members: Option<(&'a [Uuid], &'a [Uuid])>,
     pub status: Option<&'a str>,
     pub search: Option<&'a str>,
     pub before: Option<OffsetDateTime>,
@@ -80,8 +85,8 @@ pub struct ListFilter<'a> {
 
 pub async fn insert(pool: &PgPool, new: &NewAttempt<'_>) -> Result<Uuid> {
     let id = sqlx::query_scalar!(
-        r#"INSERT INTO stream_attempts (provider_id, origin, release_key, file_id, release_title, file_name)
-           VALUES ($1, $2, $3, $4, $5, $6)
+        r#"INSERT INTO stream_attempts (provider_id, origin, release_key, file_id, release_title, file_name, search_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING id"#,
         new.provider_id,
         new.origin,
@@ -89,6 +94,7 @@ pub async fn insert(pool: &PgPool, new: &NewAttempt<'_>) -> Result<Uuid> {
         new.file_id,
         new.release_title,
         new.file_name,
+        new.search_id,
     )
     .fetch_one(pool)
     .await?;
@@ -104,6 +110,7 @@ pub async fn update(pool: &PgPool, id: Uuid, change: &Change) -> Result<()> {
                torrent_id = COALESCE($5, torrent_id),
                error = COALESCE($6, error),
                release_key = COALESCE($7, release_key),
+               speed = CASE WHEN $2 IS NOT NULL AND $2 <> 'caching' THEN NULL ELSE COALESCE($8, speed) END,
                ready_at = CASE WHEN $2 = 'ready' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
                updated_at = NOW()
            WHERE id = $1"#,
@@ -114,6 +121,7 @@ pub async fn update(pool: &PgPool, id: Uuid, change: &Change) -> Result<()> {
         change.torrent_id,
         change.error,
         change.release_key,
+        change.speed,
     )
     .execute(pool)
     .await?;
@@ -136,32 +144,81 @@ pub async fn list(pool: &PgPool, filter: &ListFilter<'_>) -> Result<Vec<StreamAt
     let search = filter.search.map(|s| format!("%{s}%"));
     let rows = sqlx::query_as!(
         StreamAttempt,
-        r#"SELECT a.id, a.provider_id, p.name AS provider_name, a.origin, a.release_key, a.file_id,
-                  a.release_title, a.file_name, a.status, a.cached, a.progress, a.torrent_id,
-                  a.error, a.created_at, a.updated_at, a.ready_at
+        r#"SELECT a.id, a.provider_id, p.name AS provider_name, a.search_id, a.origin, a.release_key,
+                  a.file_id, a.release_title, a.file_name, a.status, a.cached, a.progress, a.speed,
+                  a.torrent_id, a.error, a.created_at, a.updated_at, a.ready_at
            FROM stream_attempts a
            JOIN debrid_providers p ON p.id = a.provider_id
-           WHERE ($1::uuid IS NULL OR a.id = $1)
+           WHERE ($1::uuid[] IS NULL OR a.id = ANY($1) OR a.search_id = ANY($6))
              AND ($2::text IS NULL OR a.status = $2)
              AND ($3::text IS NULL OR a.release_title ILIKE $3 OR a.file_name ILIKE $3
                   OR a.release_key ILIKE $3)
              AND ($4::timestamptz IS NULL OR a.created_at < $4)
            ORDER BY a.created_at DESC
            LIMIT $5"#,
-        filter.id,
+        filter.members.map(|(ids, _)| ids),
         filter.status,
         search,
         filter.before,
         filter.limit,
+        filter.members.map_or(&[][..], |(_, searches)| searches),
     )
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
+pub struct Head {
+    pub id: Uuid,
+    pub is_search: bool,
+}
+
+/// The newest searches and the attempts no search listed, interleaved by time: one head per
+/// row of the grouped debrid log.
+pub async fn heads(
+    pool: &PgPool,
+    search: Option<&str>,
+    before: Option<OffsetDateTime>,
+    limit: i64,
+) -> Result<Vec<Head>> {
+    let search = search.map(|s| format!("%{s}%"));
+    let rows = sqlx::query!(
+        r#"SELECT id AS "id!", is_search AS "is_search!" FROM (
+               SELECT s.id, s.created_at, true AS is_search
+               FROM stream_searches s
+               WHERE ($2::timestamptz IS NULL OR s.created_at < $2)
+                 AND ($1::text IS NULL OR s.title ILIKE $1 OR EXISTS (
+                     SELECT 1 FROM jsonb_array_elements(s.options) o
+                     WHERE o->>'release_title' ILIKE $1 OR o->>'release_key' ILIKE $1))
+               UNION ALL
+               SELECT a.id, a.created_at, false
+               FROM stream_attempts a
+               WHERE a.search_id IS NULL
+                 AND ($2::timestamptz IS NULL OR a.created_at < $2)
+                 AND ($1::text IS NULL OR a.release_title ILIKE $1 OR a.file_name ILIKE $1
+                      OR a.release_key ILIKE $1)
+           ) heads
+           ORDER BY created_at DESC
+           LIMIT $3"#,
+        search,
+        before,
+        limit,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Head {
+            id: r.id,
+            is_search: r.is_search,
+        })
+        .collect())
+}
+
 pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<StreamAttempt>> {
+    let ids = [id];
     let filter = ListFilter {
-        id: Some(id),
+        members: Some((&ids, &[])),
         limit: 1,
         ..Default::default()
     };

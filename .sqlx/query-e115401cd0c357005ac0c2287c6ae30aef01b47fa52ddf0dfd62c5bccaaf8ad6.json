@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.provider_id, p.name AS provider_name, a.origin, a.release_key, a.file_id,\n                  a.release_title, a.file_name, a.status, a.cached, a.progress, a.torrent_id,\n                  a.error, a.created_at, a.updated_at, a.ready_at\n           FROM stream_attempts a\n           JOIN debrid_providers p ON p.id = a.provider_id\n           WHERE ($1::uuid IS NULL OR a.id = $1)\n             AND ($2::text IS NULL OR a.status = $2)\n             AND ($3::text IS NULL OR a.release_title ILIKE $3 OR a.file_name ILIKE $3\n                  OR a.release_key ILIKE $3)\n             AND ($4::timestamptz IS NULL OR a.created_at < $4)\n           ORDER BY a.created_at DESC\n           LIMIT $5",
+  "query": "SELECT a.id, a.provider_id, p.name AS provider_name, a.search_id, a.origin, a.release_key,\n                  a.file_id, a.release_title, a.file_name, a.status, a.cached, a.progress, a.speed,\n                  a.torrent_id, a.error, a.created_at, a.updated_at, a.ready_at\n           FROM stream_attempts a\n           JOIN debrid_providers p ON p.id = a.provider_id\n           WHERE ($1::uuid[] IS NULL OR a.id = ANY($1) OR a.search_id = ANY($6))\n             AND ($2::text IS NULL OR a.status = $2)\n             AND ($3::text IS NULL OR a.release_title ILIKE $3 OR a.file_name ILIKE $3\n                  OR a.release_key ILIKE $3)\n             AND ($4::timestamptz IS NULL OR a.created_at < $4)\n           ORDER BY a.created_at DESC\n           LIMIT $5",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "search_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stream_attempts",
+            "name": "search_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "origin",
         "type_info": "Text",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "release_key",
         "type_info": "Text",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "file_id",
         "type_info": "Int4",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "release_title",
         "type_info": "Text",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "file_name",
         "type_info": "Text",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "status",
         "type_info": "Text",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "cached",
         "type_info": "Bool",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "progress",
         "type_info": "Float4",
         "origin": {
@@ -125,7 +136,18 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
+        "name": "speed",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "stream_attempts",
+            "name": "speed"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
         "name": "torrent_id",
         "type_info": "Text",
         "origin": {
@@ -136,7 +158,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 14,
         "name": "error",
         "type_info": "Text",
         "origin": {
@@ -147,7 +169,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 15,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -158,7 +180,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 16,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -169,7 +191,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 17,
         "name": "ready_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -182,23 +204,26 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid",
+        "UuidArray",
         "Text",
         "Text",
         "Timestamptz",
-        "Int8"
+        "Int8",
+        "UuidArray"
       ]
     },
     "nullable": [
       false,
       false,
       false,
+      true,
       false,
       false,
       true,
       true,
       true,
       false,
+      true,
       true,
       true,
       true,
@@ -208,5 +233,5 @@
       true
     ]
   },
-  "hash": "c7d0b5cb385182ebb9c5c8268f3853fd6e8156a583bd8cc35e8bde0f7276b671"
+  "hash": "e115401cd0c357005ac0c2287c6ae30aef01b47fa52ddf0dfd62c5bccaaf8ad6"
 }

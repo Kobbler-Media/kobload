@@ -125,6 +125,26 @@ pub async fn rank_options(
     candidates: Vec<RankCandidate>,
     preferences: &RankPreferences<'_>,
 ) -> Vec<StreamOption> {
+    rank(pool, provider, candidates, preferences)
+        .await
+        .into_iter()
+        .map(|r| r.option)
+        .collect()
+}
+
+/// An option in rank order, with what placed it there, for the debrid log.
+pub struct Ranked {
+    pub option: StreamOption,
+    pub why: Vec<String>,
+}
+
+/// [`rank_options`], keeping the reasons.
+pub async fn rank(
+    pool: &PgPool,
+    provider: &RankProvider,
+    candidates: Vec<RankCandidate>,
+    preferences: &RankPreferences<'_>,
+) -> Vec<Ranked> {
     let prefer = preferences.prefer;
     let audio_languages = language::normalise(preferences.audio_languages);
     for c in &candidates {
@@ -194,7 +214,7 @@ pub async fn rank_options(
     all_traits.dedup();
     let risk = TraitRisk::load(pool, provider.id, &all_traits).await;
 
-    let mut keyed: Vec<(RankKey, f64, StreamOption)> = candidates
+    let mut keyed: Vec<(RankKey, f64, Ranked)> = candidates
         .into_iter()
         .zip(traits)
         .map(|(c, traits)| {
@@ -241,6 +261,7 @@ pub async fn rank_options(
             let mut penalty = continuity
                 .as_ref()
                 .map_or(0.0, |cont| cont.style_penalty(&option, &quality));
+            let restyled = penalty > 0.0;
             if language_fit == LanguageFit::Secondary {
                 penalty += LANGUAGE_ORDER_MARGIN;
             }
@@ -264,9 +285,80 @@ pub async fn rank_options(
                 likely: availability == KnownAvailability::LikelyAvailable,
             };
             let score = fit.sort_score - penalty * fit.sort_score.abs() + facts.score_edge();
-            (facts.key(), score, option)
+            let why = explain(&Explained {
+                availability,
+                same_pack,
+                option: &option,
+                facts: &facts,
+                language_secondary: language_fit == LanguageFit::Secondary,
+                restyled,
+            });
+            (facts.key(), score, Ranked { option, why })
         })
         .collect();
     keyed.sort_by(|(ka, sa, _), (kb, sb, _)| ka.cmp(kb).then(sb.total_cmp(sa)));
-    keyed.into_iter().map(|(_, _, o)| o).collect()
+    keyed.into_iter().map(|(_, _, r)| r).collect()
+}
+
+struct Explained<'a> {
+    availability: KnownAvailability,
+    same_pack: bool,
+    option: &'a StreamOption,
+    facts: &'a RankFacts,
+    language_secondary: bool,
+    restyled: bool,
+}
+
+fn explain(e: &Explained<'_>) -> Vec<String> {
+    use KnownAvailability as A;
+    let mut why: Vec<String> = Vec::new();
+    let mut say = |s: &str| why.push(s.to_string());
+    match e.option.playback {
+        Some(StreamPlayback::Failed) if e.option.reported_bad => say("A viewer reported it bad"),
+        Some(StreamPlayback::Failed) => say("Failed to play here before"),
+        Some(StreamPlayback::Worked) => say("Played here before"),
+        None => {}
+    }
+    if e.same_pack {
+        say("Same pack as the previous episode");
+    }
+    say(match e.availability {
+        A::InAccount => "Already on the account",
+        A::Available => "Our probe found it cached",
+        A::LikelyAvailable if e.option.source_type == StreamSourceType::Usenet => {
+            "Our usenet engine can stream it"
+        }
+        A::LikelyAvailable => "Torrentio reports it cached",
+        A::Unknown => "Cache status unknown",
+        A::LikelyRefused => "Its name or Torrentio's listing says the provider refuses it",
+        A::LikelyDead => "Torrentio reports it not cached",
+        A::Dead => "Our probe found it not cached",
+        A::Blocked => "The provider refused it before",
+    });
+    if e.facts.hardcoded {
+        say("Hardcoded subtitles");
+    }
+    if e.facts.language_missing {
+        say("Lacks the preferred audio language");
+    } else if e.language_secondary {
+        say("Preferred audio language is not the default track");
+    }
+    if e.facts.suspect {
+        say("Size or name looks like a fake");
+    }
+    match e.facts.continuity {
+        continuity::Rank::SameBingeGroup => say("Same source as the previous episode"),
+        continuity::Rank::SameReleaseGroup => say("Same release group as the previous episode"),
+        continuity::Rank::SamePack | continuity::Rank::None => {}
+    }
+    if e.restyled {
+        say("Looks different from the previous episode");
+    }
+    if e.facts.risk > 0 {
+        why.push(format!(
+            "Carries traits that failed before (risk {})",
+            e.facts.risk
+        ));
+    }
+    why
 }

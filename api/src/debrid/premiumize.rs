@@ -284,6 +284,7 @@ impl DebridProvider for PremiumizeProvider {
             status,
             files: vec![],
             links: vec![],
+            speed: None,
         })
     }
 

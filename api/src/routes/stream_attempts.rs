@@ -20,6 +20,7 @@ use crate::auth::{require_auth, require_auth_with_token};
 use crate::repositories::stream_attempts::{
     self as repo, ListFilter, StreamAttempt, StreamAttemptEvent,
 };
+use crate::repositories::stream_searches::{self, StreamSearch};
 use crate::services::stream::attempt_log::{self, AttemptStreamEvent};
 use crate::state::AppState;
 
@@ -33,6 +34,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/v1/stream-attempts/stream", get(stream_attempts))
         .route("/api/v1/stream-attempts/{id}/events", get(attempt_events))
+        .route("/api/v1/stream-searches", get(list_groups))
 }
 
 type ApiError = (StatusCode, String);
@@ -63,7 +65,7 @@ async fn list_attempts(
 ) -> Result<Json<Vec<StreamAttempt>>, ApiError> {
     authorize(&state, &headers).await?;
     let filter = ListFilter {
-        id: None,
+        members: None,
         status: query.status.as_deref().filter(|s| !s.is_empty()),
         search: query.search.as_deref().filter(|s| !s.is_empty()),
         before: query.before,
@@ -97,10 +99,83 @@ async fn clear_attempts(
     headers: HeaderMap,
 ) -> Result<Json<Cleared>, ApiError> {
     authorize(&state, &headers).await?;
-    repo::clear(&state.pool)
+    let deleted = repo::clear(&state.pool).await.map_err(internal)?;
+    stream_searches::clear(&state.pool)
         .await
-        .map(|deleted| Json(Cleared { deleted }))
-        .map_err(internal)
+        .map_err(internal)?;
+    Ok(Json(Cleared { deleted }))
+}
+
+/// A search with the attempts on its releases, or an attempt no search listed.
+#[derive(Serialize)]
+struct Group {
+    id: Uuid,
+    search: Option<StreamSearch>,
+    attempts: Vec<StreamAttempt>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GroupQuery {
+    search: Option<String>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    before: Option<OffsetDateTime>,
+    limit: Option<i64>,
+}
+
+const MAX_GROUP_ATTEMPTS: i64 = 2000;
+
+async fn list_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<GroupQuery>,
+) -> Result<Json<Vec<Group>>, ApiError> {
+    authorize(&state, &headers).await?;
+    let heads = repo::heads(
+        &state.pool,
+        query.search.as_deref().filter(|s| !s.is_empty()),
+        query.before,
+        query.limit.unwrap_or(30).clamp(1, 100),
+    )
+    .await
+    .map_err(internal)?;
+    let (search_ids, lone_ids): (Vec<_>, Vec<_>) = heads.iter().partition(|h| h.is_search);
+    let search_ids: Vec<Uuid> = search_ids.iter().map(|h| h.id).collect();
+    let lone_ids: Vec<Uuid> = lone_ids.iter().map(|h| h.id).collect();
+    let mut searches = stream_searches::get_many(&state.pool, &search_ids)
+        .await
+        .map_err(internal)?;
+    let filter = ListFilter {
+        members: Some((&lone_ids, &search_ids)),
+        limit: MAX_GROUP_ATTEMPTS,
+        ..Default::default()
+    };
+    let mut attempts = repo::list(&state.pool, &filter).await.map_err(internal)?;
+    let groups = heads
+        .iter()
+        .filter_map(|head| {
+            if head.is_search {
+                let at = searches.iter().position(|s| s.id == head.id)?;
+                let search = searches.swap_remove(at);
+                let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut attempts)
+                    .into_iter()
+                    .partition(|a| a.search_id == Some(head.id));
+                attempts = rest;
+                Some(Group {
+                    id: head.id,
+                    search: Some(search),
+                    attempts: mine,
+                })
+            } else {
+                let at = attempts.iter().position(|a| a.id == head.id)?;
+                Some(Group {
+                    id: head.id,
+                    search: None,
+                    attempts: vec![attempts.swap_remove(at)],
+                })
+            }
+        })
+        .collect();
+    Ok(Json(groups))
 }
 
 #[derive(Debug, Deserialize)]

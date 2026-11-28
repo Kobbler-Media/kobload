@@ -46,10 +46,20 @@ pub struct ReadyLink {
 
 #[derive(Debug, Clone)]
 pub enum Acquired {
-    Ready { link: ReadyLink, torrent_id: String },
-    Pending { torrent_id: String, reused: bool },
+    Ready {
+        link: ReadyLink,
+        torrent_id: String,
+    },
+    Pending {
+        torrent_id: String,
+        reused: bool,
+    },
     Refused,
-    Failed { message: String },
+    /// Warming held back by the account's throttle; nothing reached the provider.
+    Deferred,
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Clone)]
@@ -626,6 +636,10 @@ impl Run {
         context: &str,
         e: DebridError,
     ) -> Acquired {
+        if matches!(e, DebridError::AddsDeferred) {
+            debug!(info_hash = %self.job.info_hash, "{context}: held back for a quiet account");
+            return Acquired::Deferred;
+        }
         if let Some(reason) = reason_for_error(&e) {
             self.record(Some(reason)).await;
         }

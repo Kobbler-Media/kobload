@@ -114,7 +114,11 @@ async fn resolve_torrent(
         &ctx.pool,
         Started {
             provider_id: request.debrid_provider_id,
-            origin: Origin::Play,
+            origin: if lane(request).is_user() {
+                Origin::Play
+            } else {
+                Origin::Warm
+            },
             release_key: info_hash,
             file_id: request.file_id,
             release_title: request.release_title.as_deref(),
@@ -215,6 +219,9 @@ async fn resolve_torrent(
             })
         }
         Acquired::Refused => Err(StreamSearchError::DebridError(REFUSED_MESSAGE.to_string())),
+        Acquired::Deferred => Err(StreamSearchError::DebridError(
+            crate::debrid::DebridError::AddsDeferred.to_string(),
+        )),
         Acquired::Failed { message } => Err(StreamSearchError::DebridError(message)),
     }
 }

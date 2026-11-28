@@ -343,6 +343,7 @@ impl DebridProvider for TorBoxProvider {
             status,
             files,
             links,
+            speed: None,
         })
     }
 

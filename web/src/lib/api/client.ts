@@ -1088,6 +1088,7 @@ export type StreamAttempt = {
   id: string;
   provider_id: string;
   provider_name: string;
+  search_id: string | null;
   origin: 'play' | 'warm';
   release_key: string;
   file_id: number | null;
@@ -1096,6 +1097,8 @@ export type StreamAttempt = {
   status: string;
   cached: boolean | null;
   progress: number | null;
+  /** Bytes per second while the provider downloads it. */
+  speed: number | null;
   torrent_id: string | null;
   error: string | null;
   created_at: string;
@@ -1103,27 +1106,53 @@ export type StreamAttempt = {
   ready_at: string | null;
 };
 
+export type StreamSearchOption = {
+  rank: number;
+  release_key: string | null;
+  file_id: number | null;
+  release_title: string;
+  size: number;
+  indexer: string;
+  source_type: string;
+  group: string | null;
+  availability: string | null;
+  total_score: number;
+  why: string[];
+};
+
+export type StreamSearch = {
+  id: string;
+  title: string;
+  options: StreamSearchOption[];
+  created_at: string;
+};
+
+/** A search with the attempts on its releases, or an attempt no search listed. */
+export type StreamGroup = {
+  id: string;
+  search: StreamSearch | null;
+  attempts: StreamAttempt[];
+};
+
+export async function listStreamGroups(params: {
+  search?: string;
+  before?: string;
+  limit?: number;
+}): Promise<StreamGroup[]> {
+  const searchParams = new URLSearchParams();
+  if (params.search) searchParams.set('search', params.search);
+  if (params.before) searchParams.set('before', params.before);
+  if (params.limit) searchParams.set('limit', String(params.limit));
+  const qs = searchParams.toString();
+  return request(`/api/v1/stream-searches${qs ? `?${qs}` : ''}`);
+}
+
 export type StreamAttemptEvent = {
   id: string;
   event_type: string;
   message: string;
   created_at: string;
 };
-
-export async function listStreamAttempts(params: {
-  status?: string;
-  search?: string;
-  before?: string;
-  limit?: number;
-}): Promise<StreamAttempt[]> {
-  const searchParams = new URLSearchParams();
-  if (params.status) searchParams.set('status', params.status);
-  if (params.search) searchParams.set('search', params.search);
-  if (params.before) searchParams.set('before', params.before);
-  if (params.limit) searchParams.set('limit', String(params.limit));
-  const qs = searchParams.toString();
-  return request(`/api/v1/stream-attempts${qs ? `?${qs}` : ''}`);
-}
 
 export async function getStreamAttemptEvents(id: string): Promise<StreamAttemptEvent[]> {
   return request(`/api/v1/stream-attempts/${id}/events`);

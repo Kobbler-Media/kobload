@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\", is_search AS \"is_search!\" FROM (\n               SELECT s.id, s.created_at, true AS is_search\n               FROM stream_searches s\n               WHERE ($2::timestamptz IS NULL OR s.created_at < $2)\n                 AND ($1::text IS NULL OR s.title ILIKE $1 OR EXISTS (\n                     SELECT 1 FROM jsonb_array_elements(s.options) o\n                     WHERE o->>'release_title' ILIKE $1 OR o->>'release_key' ILIKE $1))\n               UNION ALL\n               SELECT a.id, a.created_at, false\n               FROM stream_attempts a\n               WHERE a.search_id IS NULL\n                 AND ($2::timestamptz IS NULL OR a.created_at < $2)\n                 AND ($1::text IS NULL OR a.release_title ILIKE $1 OR a.file_name ILIKE $1\n                      OR a.release_key ILIKE $1)\n           ) heads\n           ORDER BY created_at DESC\n           LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_search!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "c306f86d44a3f40a91083b11852274ee67f30a2574a401595cc88504fbccebaf"
+}

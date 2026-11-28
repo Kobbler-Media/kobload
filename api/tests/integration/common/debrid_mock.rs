@@ -41,6 +41,7 @@ struct MockState {
     calls: Vec<MockCall>,
     rate_limited_adds: u32,
     progress: HashMap<String, f32>,
+    speeds: HashMap<String, i64>,
     listing_delay: Duration,
     lost: HashSet<(String, i32)>,
     unseen_gets: u32,
@@ -164,6 +165,14 @@ impl MockDebrid {
             .unwrap()
             .progress
             .insert(hash.to_string(), progress);
+    }
+
+    pub fn set_speed(&self, hash: &str, bytes_per_sec: i64) {
+        self.state
+            .lock()
+            .unwrap()
+            .speeds
+            .insert(hash.to_string(), bytes_per_sec);
     }
 
     /// Account listings take this long on top of the call latency, like a large RD account.
@@ -482,11 +491,13 @@ impl DebridProvider for MockDebrid {
                 }
             })
             .collect();
+        let speed = self.state.lock().unwrap().speeds.get(&hash).copied();
         Ok(DebridTorrent {
             id: torrent_id.to_string(),
             status,
             files,
             links: if linkless { Vec::new() } else { links },
+            speed,
         })
     }
 

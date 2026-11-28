@@ -10,6 +10,7 @@ mod rank_key;
 mod ranking;
 mod release_fit;
 mod resolve;
+pub mod search_log;
 mod service;
 mod trait_risk;
 mod usenet_failure;

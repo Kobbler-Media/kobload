@@ -6,7 +6,8 @@
 use crate::jobs::JobError;
 use crate::jobs::worker::JobHandler;
 use crate::repositories::{
-    release_sightings, search_cache, stream_attempts, stream_torrents, usenet_releases, xem_cache,
+    release_sightings, search_cache, stream_attempts, stream_searches, stream_torrents,
+    usenet_releases, xem_cache,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -101,6 +102,9 @@ impl JobHandler for CacheCleanupHandler {
         if attempts_deleted > 0 {
             info!(deleted = attempts_deleted, "Pruned old stream attempts");
         }
+        let searches_deleted = stream_searches::prune(&self.pool, stream_attempts::RETENTION_HOURS)
+            .await
+            .map_err(|e| JobError::ExecutionFailed(e.to_string()))?;
 
         let stream_torrents_deleted = stream_torrents::prune(&self.pool, STREAM_TORRENT_DAYS)
             .await
@@ -129,6 +133,7 @@ impl JobHandler for CacheCleanupHandler {
             "release_sightings_deleted": sightings_deleted,
             "stream_attempts_abandoned": attempts_abandoned,
             "stream_attempts_deleted": attempts_deleted,
+            "stream_searches_deleted": searches_deleted,
             "stream_torrents_deleted": stream_torrents_deleted,
             "usenet_listings_deleted": usenet_listings_deleted,
             "stream_probes_ingested": probes_ingested

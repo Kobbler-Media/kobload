@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::flight::Acquired;
 use crate::debrid::DebridProviderType;
 use crate::repositories::stream_attempts::{self as repo, Change, NewAttempt, StreamAttempt};
+use crate::repositories::stream_searches::{self, StreamSearch};
 use crate::repositories::{app_settings, hash_index};
 
 #[derive(Debug, Clone, Serialize)]
@@ -17,6 +18,7 @@ pub enum AttemptStreamEvent {
     Snapshot { attempts: Vec<StreamAttempt> },
     Created { attempt: StreamAttempt },
     Updated { attempt: StreamAttempt },
+    Search { search: StreamSearch },
 }
 
 // Process-wide like the flight and warm-cache maps: attempts are recorded from flights and
@@ -26,6 +28,10 @@ static HUB: LazyLock<broadcast::Sender<AttemptStreamEvent>> =
 
 pub fn subscribe() -> broadcast::Receiver<AttemptStreamEvent> {
     HUB.subscribe()
+}
+
+pub fn announce_search(search: StreamSearch) {
+    let _ = HUB.send(AttemptStreamEvent::Search { search });
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +63,7 @@ pub enum Step {
     Caching,
     Released,
     Refused,
+    Deferred,
     Failed,
     TimedOut,
     PollError,
@@ -79,6 +86,7 @@ impl Step {
             Self::Caching => "caching",
             Self::Released => "released",
             Self::Refused => "refused",
+            Self::Deferred => "deferred",
             Self::Failed => "failed",
             Self::TimedOut => "timed_out",
             Self::PollError => "poll_error",
@@ -96,6 +104,10 @@ pub struct Started<'a> {
     pub release_title: Option<&'a str>,
     pub file_name: Option<&'a str>,
 }
+
+const DEFERRED_MESSAGE: &str = "Not probed: warming only adds once the account has been quiet \
+for a while, so it never trips the provider's pause on adds. Nothing was sent; a later search \
+or a play will try it.";
 
 #[derive(Debug, Clone, Default)]
 pub struct AttemptLog(Option<Handle>);
@@ -135,8 +147,15 @@ impl AttemptLog {
                 .ok()
                 .flatten(),
         };
+        let search_id = stream_searches::listing(pool, started.release_key, title.as_deref())
+            .await
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to find the search behind a stream attempt");
+                None
+            });
         let new = NewAttempt {
             provider_id: started.provider_id,
+            search_id,
             origin: started.origin.as_str(),
             release_key: started.release_key,
             file_id: started.file_id,
@@ -205,10 +224,11 @@ impl AttemptLog {
         }
     }
 
-    pub async fn progress(&self, progress: f32) {
+    pub async fn progress(&self, progress: f32, speed: Option<i64>) {
         if let Some(h) = &self.0 {
             let change = Change {
                 progress: Some(progress),
+                speed,
                 ..Default::default()
             };
             h.publish(None, &change).await;
@@ -243,6 +263,14 @@ impl AttemptLog {
                 Change {
                     status: Some("refused"),
                     error: Some(super::flight::REFUSED_MESSAGE.to_string()),
+                    ..Default::default()
+                },
+            ),
+            Acquired::Deferred => (
+                Step::Deferred,
+                DEFERRED_MESSAGE.to_string(),
+                Change {
+                    status: Some("skipped"),
                     ..Default::default()
                 },
             ),

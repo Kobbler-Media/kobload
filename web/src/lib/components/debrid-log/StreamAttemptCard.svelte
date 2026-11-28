@@ -3,6 +3,7 @@
   import { getStreamAttemptStatusStyle } from '#lib/styles/statusColors.js';
   import { streamEventTones } from '#lib/styles/eventTones.js';
   import EventTimeline from '../EventTimeline.svelte';
+  import { formatSpeed } from '../downloads/usenetFormat.js';
 
   interface Props {
     attempt: StreamAttempt;
@@ -74,6 +75,9 @@
           ></div>
         </div>
         <span class="row-progress-text">{Math.round((attempt.progress ?? 0) * 100)}%</span>
+        {#if attempt.speed}
+          <span class="row-progress-text">{formatSpeed(attempt.speed)}</span>
+        {/if}
       {/if}
       <span class="status-chip" style={`color: ${status.bg}; border-color: ${status.bg}`}>
         {status.label}

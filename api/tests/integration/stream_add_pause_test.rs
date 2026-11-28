@@ -246,3 +246,28 @@ async fn test_a_name_rd_always_refuses_ranks_below_one_it_takes() {
     );
     tv.server.cleanup().await;
 }
+
+/// Warming that its own throttle holds back never reached the provider, so it is logged as
+/// skipped, not as a failed add, and is left for a later search to probe.
+#[tokio::test]
+async fn test_warming_held_back_for_a_quiet_account_is_skipped_not_failed() {
+    let f = pausing(&[]).await;
+    f.enable_debrid_log().await;
+    let hashes = [hash('a'), hash('b'), hash('c')];
+    f.warm(&hashes.iter().map(String::as_str).collect::<Vec<_>>())
+        .await
+        .unwrap();
+    assert_eq!(f.mock.count("add_magnet", None), 1);
+    let mut statuses = Vec::new();
+    for h in &hashes {
+        let attempt = f.attempt(h, "warm").await;
+        if attempt["status"] == "skipped" {
+            assert!(attempt["error"].is_null(), "{attempt}");
+            assert_eq!(f.event_types(&attempt).await, ["requested", "deferred"]);
+        }
+        statuses.push(attempt["status"].as_str().unwrap().to_string());
+    }
+    statuses.sort();
+    assert_eq!(statuses, ["ready", "skipped", "skipped"]);
+    f.server.cleanup().await;
+}

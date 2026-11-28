@@ -184,6 +184,11 @@ impl DownloadClientHandler for DebridHandler {
                 ));
             }
             Acquired::Failed { message } => return Err(DownloadClientError::Message(message)),
+            Acquired::Deferred => {
+                return Err(DownloadClientError::Message(
+                    crate::debrid::DebridError::AddsDeferred.to_string(),
+                ));
+            }
         };
 
         let external = DebridExternalId {

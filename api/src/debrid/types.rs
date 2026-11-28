@@ -194,6 +194,8 @@ pub struct DebridTorrent {
     pub files: Vec<DebridFile>,
     /// Download links (available when status is Ready).
     pub links: Vec<String>,
+    /// Bytes per second while the provider downloads it, where the provider reports one.
+    pub speed: Option<i64>,
 }
 
 impl DebridTorrent {
@@ -364,8 +366,8 @@ pub enum DebridError {
     Blocked,
     /// Real-Debrid error_code 29: larger than the account may add.
     TooBig,
-    /// Held back by our own throttle while the provider pauses this account's adds, so it
-    /// was never sent.
+    /// Held back by our own throttle: warming adds only on a quiet account, so as not to
+    /// trip the provider's pause on adds. The add was never sent.
     AddsDeferred,
     /// The account has too many active torrents right now.
     ///
@@ -436,7 +438,7 @@ impl fmt::Display for DebridError {
             Self::NotFound => write!(f, "Not found"),
             Self::Blocked => write!(f, "Provider refused this file (infringing/filtered)"),
             Self::TooBig => write!(f, "Provider refused this torrent (too big for the account)"),
-            Self::AddsDeferred => write!(f, "Provider is pausing adds on this account"),
+            Self::AddsDeferred => write!(f, "Held back until the account is quiet; never sent"),
             Self::TooManyActive => write!(f, "Too many active torrents on the provider"),
             Self::FairUsage => write!(f, "Provider fair usage limit reached"),
             Self::HosterUnavailable => write!(f, "Provider lost this file (hoster_unavailable)"),

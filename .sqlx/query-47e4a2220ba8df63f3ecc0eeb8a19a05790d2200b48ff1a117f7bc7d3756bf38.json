@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM stream_searches",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "47e4a2220ba8df63f3ecc0eeb8a19a05790d2200b48ff1a117f7bc7d3756bf38"
+}

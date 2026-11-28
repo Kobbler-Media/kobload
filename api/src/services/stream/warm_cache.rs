@@ -463,6 +463,10 @@ async fn warm_one(
                 flight::release_probe(&ctx, &job, &torrent_id).await;
             }
         }
+        // Left out of the cache, so the next search may probe it once the account is quiet.
+        Acquired::Deferred => {
+            debug!(info_hash = %info_hash, idx, "Warm cache: held back for a quiet account");
+        }
         Acquired::Refused => {
             info!(info_hash = %info_hash, idx, "Warm cache: provider refused (filter-gate)");
             failed(key, "Provider refused this file".to_string());
@@ -625,7 +629,9 @@ async fn poll_warm_entry(
                     warn!(info_hash = %key.release_key, error = %e, "Warm poll: select_files failed");
                 }
             }
-            DebridTorrentStatus::Downloading { progress } => job.log.progress(progress).await,
+            DebridTorrentStatus::Downloading { progress } => {
+                job.log.progress(progress, torrent.speed).await
+            }
             _ => {}
         }
     }

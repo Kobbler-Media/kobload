@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE stream_attempts SET\n               status = COALESCE($2, status),\n               cached = COALESCE($3, cached),\n               progress = COALESCE($4, progress),\n               torrent_id = COALESCE($5, torrent_id),\n               error = COALESCE($6, error),\n               release_key = COALESCE($7, release_key),\n               speed = CASE WHEN $2 IS NOT NULL AND $2 <> 'caching' THEN NULL ELSE COALESCE($8, speed) END,\n               ready_at = CASE WHEN $2 = 'ready' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,\n               updated_at = NOW()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Float4",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cd0c22db4fd7af08bdade8b2a230d2234f014abfb7ee2acdae90b8a6703d37c3"
+}

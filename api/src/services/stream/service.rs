@@ -8,9 +8,8 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::availability::known_availability;
-use super::ranking::{
-    KnownAvailability, RankCandidate, RankPreferences, RankProvider, rank_options,
-};
+use super::ranking::{KnownAvailability, RankCandidate, RankPreferences, RankProvider};
+use super::search_log::ListedSearch;
 use super::{indexer_search, usenet_listing, usenet_pack_slot, usenet_search};
 use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::decision_log::types::{LogProviderCall, LogRelease};
@@ -992,7 +991,15 @@ pub async fn stream_search(
         prefer: request.prefer.as_ref(),
         audio_languages: &request.audio_languages,
     };
-    let mut options = rank_options(ctx.pool, &rank_provider, ranked, &preferences).await;
+    let ranked = super::ranking::rank(ctx.pool, &rank_provider, ranked, &preferences).await;
+    let mut why: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut options = Vec::with_capacity(ranked.len());
+    for r in ranked {
+        if collector.is_some() {
+            why.insert(r.option.id.clone(), r.why);
+        }
+        options.push(r.option);
+    }
     usenet_pack_slot::truncate(&mut options, limit as usize, request.media_want.as_ref());
     super::usenet_warm::remember_auto_play(&options);
     timings.options_build_ms = options_build_start.elapsed().as_millis() as u64;
@@ -1016,28 +1023,60 @@ pub async fn stream_search(
     // Auto-index new hashes from live search into the hash index (background)
     background_index_releases(ctx.pool.clone(), releases);
 
+    let search_id = collector.as_ref().map(DecisionCollector::session_id);
     if let Some(c) = collector {
         decision_log::spawn_flush(ctx.pool.clone(), c.into_flush_payload());
     }
 
-    // Proactively warm the top results on the debrid provider so resolve is
-    // near-instant when the user clicks play.
-    if !options.is_empty() {
-        // Pass the full list; warm_cache applies its own WARM_TOP_N and the
-        // provider's free-slot budget. Truncating here would silently cap
-        // warming below the client's auto-fallback depth.
-        let warm_options: Vec<_> = options.clone();
+    if let Some(id) = search_id {
+        let listed = ListedSearch::new(id, request, &options, &mut why);
         let pool = ctx.pool.clone();
-        let http_client = ctx.http_client.clone();
-        let providers = ctx.debrid_providers_arc.clone();
-        let events = ctx.download_events.clone();
+        let warm = (!options.is_empty()).then(|| warm_args(ctx, &options));
         tokio::spawn(async move {
-            super::warm_cache::warm_top_results(pool, http_client, providers, events, warm_options)
-                .await;
+            listed.record(&pool).await;
+            if let Some(args) = warm {
+                args.run().await;
+            }
         });
+    } else if !options.is_empty() {
+        tokio::spawn(warm_args(ctx, &options).run());
     }
 
     Ok(StreamSearchResponse { options, errors })
+}
+
+struct WarmArgs {
+    pool: PgPool,
+    http_client: reqwest::Client,
+    providers: std::sync::Arc<dyn crate::debrid::DebridProviderResolver>,
+    events: tokio::sync::broadcast::Sender<crate::types::DownloadStreamEvent>,
+    options: Vec<StreamOption>,
+}
+
+// Warming gets the full list: it applies its own WARM_TOP_N and the provider's free-slot
+// budget, and truncating here would cap it below the client's auto-fallback depth.
+fn warm_args(ctx: &StreamSearchContext<'_>, options: &[StreamOption]) -> WarmArgs {
+    WarmArgs {
+        pool: ctx.pool.clone(),
+        http_client: ctx.http_client.clone(),
+        providers: ctx.debrid_providers_arc.clone(),
+        events: ctx.download_events.clone(),
+        options: options.to_vec(),
+    }
+}
+
+impl WarmArgs {
+    /// Probes the top results on the provider, so a play is near-instant.
+    async fn run(self) {
+        super::warm_cache::warm_top_results(
+            self.pool,
+            self.http_client,
+            self.providers,
+            self.events,
+            self.options,
+        )
+        .await;
+    }
 }
 
 /// Search indexers and score results, storing in cache on success.

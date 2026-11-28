@@ -20,6 +20,7 @@ pub mod scene_mappings;
 pub mod search_cache;
 pub mod stream_attempts;
 pub mod stream_outcomes;
+pub mod stream_searches;
 pub mod stream_torrents;
 pub mod trash_filters;
 pub mod usenet_releases;

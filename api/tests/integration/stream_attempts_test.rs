@@ -63,10 +63,12 @@ async fn test_client_polling_tracks_caching_to_ready() {
     let torrent_id = resolved["torrent_id"].as_str().expect("pending torrent id");
 
     f.mock.set_progress(&hash('b'), 0.4);
+    f.mock.set_speed(&hash('b'), 4_000_000);
     f.poll_status(torrent_id).await;
     let caching = f.attempt(&hash('b'), "play").await;
     assert_eq!(caching["status"], "caching");
     assert!((caching["progress"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+    assert_eq!(caching["speed"], 4_000_000);
     assert!(caching["ready_at"].is_null());
 
     f.mock.set_release(&hash('b'), MockRelease::Cached);
@@ -145,6 +147,18 @@ async fn test_warm_probes_record_what_was_cached() {
         assert!(attempt["release_title"].as_str().is_some(), "{attempt}");
         assert_eq!(f.event_types(&attempt).await.last().unwrap(), last_event);
     }
+    f.server.cleanup().await;
+}
+
+/// kobbler prewarms the next episode through a resolve at warm priority.
+#[tokio::test]
+async fn test_a_warm_priority_resolve_is_logged_as_a_warm_probe() {
+    let f = logged(0, &[]).await;
+    f.http_resolve_with(&hash('n'), json!({"priority": "warm"}))
+        .await;
+    let attempts = f.attempts().await;
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(attempts[0]["origin"], "warm");
     f.server.cleanup().await;
 }
 
