@@ -11,6 +11,10 @@ use super::attempt_log;
 use crate::repositories::stream_searches::{self, SearchOption};
 use nats_jobs::types::{MediaWant, StreamOption, StreamSearchRequest};
 
+// One play asks for the same title several times within seconds: the page's own search, the
+// server's prewarm, and the library page a discovered title turns into once it is added.
+const REPEAT_SECS: i32 = 120;
+
 pub struct ListedSearch {
     pub id: Uuid,
     pub title: String,
@@ -36,12 +40,24 @@ impl ListedSearch {
         }
     }
 
-    /// Recorded before warming starts, so its probes find the search to join.
-    pub async fn record(self, pool: &PgPool) {
-        match stream_searches::insert(pool, self.id, &self.title, &self.options).await {
+    /// Recorded before warming starts, so its probes find the search to join. False for a
+    /// repeat of a recent search, which only refreshes that one: its warming already ran,
+    /// and what it held back is not going to find the account any quieter now.
+    pub async fn record(self, pool: &PgPool) -> bool {
+        let repeat = stream_searches::refresh(pool, &self.title, &self.options, REPEAT_SECS).await;
+        let (search, fresh) = match repeat {
+            Ok(Some(search)) => (Ok(search), false),
+            Ok(None) => (
+                stream_searches::insert(pool, self.id, &self.title, &self.options).await,
+                true,
+            ),
+            Err(e) => (Err(e), true),
+        };
+        match search {
             Ok(search) => attempt_log::announce_search(search),
             Err(e) => warn!(error = %e, "Failed to record a stream search"),
         }
+        fresh
     }
 }
 

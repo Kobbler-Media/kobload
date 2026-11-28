@@ -11,6 +11,7 @@ use crate::common::tv_watch::{TvWatch, episode_want, torrent_release};
 use kobload_api::jobs::handlers::CacheCleanupHandler;
 use kobload_api::jobs::worker::JobHandler;
 use kobload_api::repositories::app_settings;
+use kobload_api::repositories::stream_searches::{self, SearchOption};
 use tokio_util::sync::CancellationToken;
 
 struct Rig {
@@ -128,6 +129,56 @@ async fn test_a_search_lists_its_ranked_options_and_the_attempts_on_them() {
         .find(|a| a["origin"] == "play")
         .expect("play attempt");
     assert_eq!(play["release_key"], hash('a'));
+    rig.tv.server.cleanup().await;
+}
+
+// One play asks more than once (the page's own search, the server's prewarm, the library page
+// the title turns into); each used to be another card and another round of warming.
+#[tokio::test]
+async fn test_a_repeat_of_a_recent_search_lists_under_it_and_warms_nothing() {
+    let rig = Rig::start().await;
+    rig.search().await;
+    let first = rig.settled_groups(2).await;
+    rig.search().await;
+    rig.search().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let groups = rig.settled_groups(2).await;
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0]["search"]["id"], first[0]["search"]["id"]);
+    rig.tv.server.cleanup().await;
+}
+
+// Warming verifying a copy can move it up the ranking, so a repeat may list the same copies
+// in another order.
+#[tokio::test]
+async fn test_a_repeat_listing_the_same_copies_reordered_is_still_a_repeat() {
+    let rig = Rig::start().await;
+    let pool = &rig.tv.server.pool;
+    let option = |key: char| SearchOption {
+        rank: 1,
+        release_key: Some(hash(key)),
+        file_id: None,
+        release_title: format!("Release {key}"),
+        size: 1,
+        indexer: "mock".into(),
+        source_type: "torrent".into(),
+        group: None,
+        availability: None,
+        total_score: 1.0,
+        why: vec![],
+    };
+    let first = uuid::Uuid::new_v4();
+    stream_searches::insert(pool, first, "Movie (2020)", &[option('a'), option('b')])
+        .await
+        .unwrap();
+    let repeat = stream_searches::refresh(pool, "Movie (2020)", &[option('b'), option('a')], 120)
+        .await
+        .unwrap();
+    assert_eq!(repeat.map(|s| s.id), Some(first));
+    let other = stream_searches::refresh(pool, "Movie (2020)", &[option('a'), option('c')], 120)
+        .await
+        .unwrap();
+    assert!(other.is_none(), "a different listing is a new search");
     rig.tv.server.cleanup().await;
 }
 

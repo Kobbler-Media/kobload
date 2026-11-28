@@ -212,18 +212,22 @@ async fn test_partial_result_is_not_cached_as_complete() {
     assert_eq!(rig.tv.indexer.searches(), 4);
 
     let during = rig.tv.stream_options(&want).await;
-    assert_eq!(usenet_titles(&during), vec![fast], "{during:?}");
+    assert_eq!(
+        usenet_titles(&during),
+        both,
+        "the partial answer was not served as the whole one: {during:?}"
+    );
     assert_eq!(
         rig.tv.indexer.searches(),
-        8,
-        "a cache miss searches again, as it did before partial results"
+        4,
+        "it joins the search still running rather than asking again"
     );
 
     let after = rig.tv.stream_options(&want).await;
     assert_eq!(usenet_titles(&after), both, "{after:?}");
     assert_eq!(
         rig.tv.indexer.searches(),
-        8,
+        4,
         "the complete result is served from the cache"
     );
     rig.tv.server.cleanup().await;

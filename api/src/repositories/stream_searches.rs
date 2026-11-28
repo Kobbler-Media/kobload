@@ -56,6 +56,49 @@ pub async fn insert(
     })
 }
 
+/// Lists [options] on the newest search with this title from the last [seconds] that listed
+/// the same releases, in any order, if there is one.
+pub async fn refresh(
+    pool: &PgPool,
+    title: &str,
+    options: &[SearchOption],
+    seconds: i32,
+) -> Result<Option<StreamSearch>> {
+    let mut keys: Vec<String> = options
+        .iter()
+        .map(|o| o.release_key.clone().unwrap_or_default())
+        .collect();
+    keys.sort();
+    let row = sqlx::query!(
+        r#"UPDATE stream_searches SET options = $2
+           WHERE id = (
+               SELECT s.id FROM stream_searches s
+               WHERE s.title = $1
+                 AND s.created_at > NOW() - make_interval(secs => $4)
+               ORDER BY s.created_at DESC
+               LIMIT 1
+           )
+             AND ARRAY(
+                 SELECT coalesce(o->>'release_key', '') COLLATE "C"
+                 FROM jsonb_array_elements(options) o
+                 ORDER BY 1
+             ) = $3::text[]
+           RETURNING id, created_at"#,
+        title,
+        Json(options) as _,
+        &keys,
+        f64::from(seconds),
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| StreamSearch {
+        id: r.id,
+        title: title.to_string(),
+        options: options.to_vec(),
+        created_at: r.created_at,
+    }))
+}
+
 /// The newest recent search that listed this release, by key or, for an NZB imported since
 /// it was listed under its indexer's reference, by title.
 pub async fn listing(

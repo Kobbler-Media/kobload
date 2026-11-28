@@ -12,6 +12,7 @@ mod release_fit;
 mod resolve;
 pub mod search_log;
 mod service;
+mod shared_lookup;
 mod trait_risk;
 mod usenet_failure;
 mod usenet_files;

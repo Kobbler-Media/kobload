@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE stream_searches SET options = $2\n           WHERE id = (\n               SELECT s.id FROM stream_searches s\n               WHERE s.title = $1\n                 AND s.created_at > NOW() - make_interval(secs => $4)\n               ORDER BY s.created_at DESC\n               LIMIT 1\n           )\n             AND ARRAY(\n                 SELECT coalesce(o->>'release_key', '') COLLATE \"C\"\n                 FROM jsonb_array_elements(options) o\n                 ORDER BY 1\n             ) = $3::text[]\n           RETURNING id, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "stream_searches",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "stream_searches",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "TextArray",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "3cd9a96c66f598dfe2583a1cd54012e5e9d22ae503f0e194ecbffccda5c470ac"
+}

@@ -55,6 +55,7 @@ struct BehaviorHints {
 }
 
 /// Result from Torrentio: hash index entry + optional file entry.
+#[derive(Clone)]
 pub struct TorrentioResult {
     pub entry: HashIndexEntry,
     pub file: Option<HashFileEntry>,

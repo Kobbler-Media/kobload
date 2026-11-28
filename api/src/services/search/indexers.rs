@@ -37,6 +37,7 @@ pub struct SearchIndexersParams<'a> {
     pub on_source_answered: Option<SourceAnswered<'a>>,
 }
 
+#[derive(Clone)]
 pub struct IndexerSearch {
     pub releases: Vec<Release>,
     pub complete: bool,

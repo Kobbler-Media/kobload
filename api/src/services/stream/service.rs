@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::availability::known_availability;
 use super::ranking::{KnownAvailability, RankCandidate, RankPreferences, RankProvider};
 use super::search_log::ListedSearch;
+use super::shared_lookup::SharedLookups;
 use super::{indexer_search, usenet_listing, usenet_pack_slot, usenet_search};
 use crate::debrid::{DebridProviderResolver, DebridProviderType};
 use crate::decision_log::types::{LogProviderCall, LogRelease};
@@ -24,6 +25,7 @@ use crate::repositories::quality_profiles;
 use crate::repositories::watch as watch_repo;
 use crate::scene_mappings::SceneMappingCache;
 use crate::scene_titles::TvNaming;
+use crate::services::search::IndexerSearch;
 use crate::services::search::SourceFilter;
 use crate::services::want::scoring::SearchContext;
 use crate::trash_filters::TrashFilterCache;
@@ -603,12 +605,8 @@ pub async fn stream_search(
             None => ("fallback", None),
         };
         let cache_key = indexer_search::cache_key(request, scope);
-        let cg_releases = match indexer_search::cached(&cache_key) {
-            Some(cached) => {
-                info!("Indexer result cache hit");
-                cached
-            }
-            None => match indexer_search::search(
+        let fetch = || async {
+            indexer_search::search(
                 ctx.pool,
                 ctx.http_client,
                 ctx.indexers.as_ref(),
@@ -618,19 +616,19 @@ pub async fn stream_search(
                 None,
             )
             .await
-            {
-                Ok(found) => {
-                    if found.complete {
-                        indexer_search::remember(&cache_key, &found.releases);
-                    }
-                    found.releases
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Cardigann fallback search failed");
+                IndexerSearch {
+                    releases: Vec::new(),
+                    complete: false,
                 }
-                Err(e) => {
-                    warn!(error = %e, "Cardigann fallback search failed");
-                    Vec::new()
-                }
-            },
+            })
         };
+        let keep = |found: &IndexerSearch| found.complete && !found.releases.is_empty();
+        let cg_releases = indexer_search::FALLBACK
+            .get(&cache_key, keep, fetch)
+            .await
+            .releases;
         let cg_scored = indexer_search::score(ctx.pool, request, &cg_releases, &naming).await;
         if let Some(ref log) = collector {
             log.record_provider_call(LogProviderCall {
@@ -1033,8 +1031,9 @@ pub async fn stream_search(
         let pool = ctx.pool.clone();
         let warm = (!options.is_empty()).then(|| warm_args(ctx, &options));
         tokio::spawn(async move {
-            listed.record(&pool).await;
-            if let Some(args) = warm {
+            if listed.record(&pool).await
+                && let Some(args) = warm
+            {
                 args.run().await;
             }
         });
@@ -1409,6 +1408,18 @@ struct ExternalApiStats {
     eztv_used: bool,
 }
 
+// Long enough to cover one play's overlapping searches, short enough that Torrentio's
+// debrid cache markers are not served stale.
+const EXTERNAL_TTL: std::time::Duration = std::time::Duration::from_secs(180);
+
+static TORRENTIO: std::sync::LazyLock<
+    SharedLookups<Vec<crate::hash_sources::torrentio::TorrentioResult>>,
+> = std::sync::LazyLock::new(|| SharedLookups::new(EXTERNAL_TTL));
+static ZILEAN: std::sync::LazyLock<SharedLookups<Vec<HashIndexEntry>>> =
+    std::sync::LazyLock::new(|| SharedLookups::new(EXTERNAL_TTL));
+static EZTV: std::sync::LazyLock<SharedLookups<Vec<HashIndexEntry>>> =
+    std::sync::LazyLock::new(|| SharedLookups::new(EXTERNAL_TTL));
+
 /// Handles for independently-spawned external API tasks.
 /// Each source runs in its own tokio task and sends results via oneshot.
 /// Background indexing happens inside each task regardless of whether
@@ -1579,30 +1590,38 @@ fn spawn_external_apis(
         let client = http_client.clone();
         let pool = pool.clone();
         let imdb = imdb_id.clone();
+        let key = format!(
+            "{torrentio_query}|{}",
+            real_debrid_key.as_deref().unwrap_or_default()
+        );
         tokio::spawn(async move {
-            let torrentio = TorrentioClient::new(client).with_real_debrid_key(real_debrid_key);
-            let results = if let Some(imdb) = imdb.as_deref() {
-                if is_tv {
-                    if let (Some(s), Some(e)) = (season, episode) {
-                        torrentio.search_series(imdb, s, e).await
+            let fetch = || async move {
+                let torrentio = TorrentioClient::new(client).with_real_debrid_key(real_debrid_key);
+                let results = if let Some(imdb) = imdb.as_deref() {
+                    if is_tv {
+                        if let (Some(s), Some(e)) = (season, episode) {
+                            torrentio.search_series(imdb, s, e).await
+                        } else {
+                            Vec::new()
+                        }
                     } else {
-                        Vec::new()
+                        torrentio.search_movie(imdb).await
                     }
                 } else {
-                    torrentio.search_movie(imdb).await
+                    Vec::new()
+                };
+                // Background index regardless of whether caller receives
+                if !results.is_empty() {
+                    let entries: Vec<HashIndexEntry> =
+                        results.iter().map(|r| r.entry.clone()).collect();
+                    let files: Vec<HashFileEntry> =
+                        results.iter().filter_map(|r| r.file.clone()).collect();
+                    background_index_entries(pool.clone(), entries);
+                    background_index_files(pool, files);
                 }
-            } else {
-                Vec::new()
+                results
             };
-            // Background index regardless of whether caller receives
-            if !results.is_empty() {
-                let entries: Vec<HashIndexEntry> =
-                    results.iter().map(|r| r.entry.clone()).collect();
-                let files: Vec<HashFileEntry> =
-                    results.iter().filter_map(|r| r.file.clone()).collect();
-                background_index_entries(pool.clone(), entries);
-                background_index_files(pool, files);
-            }
+            let results = TORRENTIO.get(&key, |r| !r.is_empty(), fetch).await;
             let _ = torrentio_tx.send(results);
         });
     }
@@ -1614,15 +1633,18 @@ fn spawn_external_apis(
         let pool = pool.clone();
         let zq = zilean_query.clone();
         tokio::spawn(async move {
-            let zilean = ZileanClient::new(client);
             let results = if zq.is_empty() {
                 Vec::new()
             } else {
-                zilean.search(&zq).await
+                let fetch = || async {
+                    let results = ZileanClient::new(client).search(&zq).await;
+                    if !results.is_empty() {
+                        background_index_entries(pool, results.clone());
+                    }
+                    results
+                };
+                ZILEAN.get(&zq, |r| !r.is_empty(), fetch).await
             };
-            if !results.is_empty() {
-                background_index_entries(pool, results.clone());
-            }
             let _ = zilean_tx.send(results);
         });
     }
@@ -1634,19 +1656,19 @@ fn spawn_external_apis(
         let pool = pool.clone();
         let imdb = imdb_id.clone();
         tokio::spawn(async move {
-            let eztv = EztvClient::new(client);
-            let results = if is_tv {
-                if let Some(imdb) = imdb.as_deref() {
-                    eztv.search_show(imdb).await
-                } else {
-                    Vec::new()
+            let results = match imdb.as_deref() {
+                Some(imdb) if is_tv => {
+                    let fetch = || async {
+                        let results = EztvClient::new(client).search_show(imdb).await;
+                        if !results.is_empty() {
+                            background_index_entries(pool, results.clone());
+                        }
+                        results
+                    };
+                    EZTV.get(imdb, |r| !r.is_empty(), fetch).await
                 }
-            } else {
-                Vec::new()
+                _ => Vec::new(),
             };
-            if !results.is_empty() {
-                background_index_entries(pool, results.clone());
-            }
             let _ = eztv_tx.send(results);
         });
     }

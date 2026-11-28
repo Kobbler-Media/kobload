@@ -9,6 +9,7 @@ use super::service::{
     build_patterns, build_search_query, load_quality_profile, media_want_external_ids,
     scoring_config,
 };
+use super::shared_lookup::SharedLookups;
 use crate::indexers::{IndexerContext, IndexerResolver};
 use crate::repositories::watch::IndexerSourceRow;
 use crate::scene_titles::TvNaming;
@@ -23,6 +24,9 @@ const CACHE_SWEEP_ABOVE: usize = 100;
 
 static RESULT_CACHE: LazyLock<DashMap<String, (Vec<Release>, Instant)>> =
     LazyLock::new(DashMap::new);
+
+pub static FALLBACK: LazyLock<SharedLookups<IndexerSearch>> =
+    LazyLock::new(|| SharedLookups::new(CACHE_TTL));
 
 #[derive(Clone, Copy)]
 pub enum TvScope {

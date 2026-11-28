@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use sqlx::PgPool;
-use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+use tokio::sync::{Notify, watch};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -19,10 +20,25 @@ pub const DEADLINE: Duration = Duration::from_secs(4);
 
 pub enum UsenetSearch {
     Cached(Vec<Release>),
-    Running {
-        handle: JoinHandle<Vec<Release>>,
-        board: Arc<AnswerBoard>,
-    },
+    Running(Running),
+}
+
+#[derive(Clone)]
+pub struct Running {
+    done: watch::Receiver<Option<Vec<Release>>>,
+    board: Arc<AnswerBoard>,
+}
+
+// A search for a want already being searched joins that one rather than asking the
+// indexers again; the cache only takes over once it has finished.
+static IN_FLIGHT: LazyLock<DashMap<String, Running>> = LazyLock::new(DashMap::new);
+
+struct InFlight(String);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        IN_FLIGHT.remove(&self.0);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -40,7 +56,7 @@ pub struct AnswerBoard {
 impl AnswerBoard {
     fn record(&self, scope: TvScope, source: usize, releases: &[Release]) {
         self.answers.lock().unwrap().record(scope, source, releases);
-        self.arrived.notify_one();
+        self.arrived.notify_waiters();
     }
 
     fn at_deadline(&self) -> Option<Collected> {
@@ -94,6 +110,11 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
     if let Some(releases) = indexer_search::cached(&key) {
         return UsenetSearch::Cached(releases);
     }
+    let slot = match IN_FLIGHT.entry(key.clone()) {
+        Entry::Occupied(running) => return UsenetSearch::Running(running.get().clone()),
+        Entry::Vacant(slot) => slot,
+    };
+    let (finished, done) = watch::channel(None);
     let pool = ctx.pool.clone();
     let http_client = ctx.http_client.clone();
     let indexers = ctx.indexers.clone();
@@ -102,7 +123,9 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
     let task_board = board.clone();
     // Detached rather than a job: a search cut at the deadline still finishes here and
     // fills the cache, so the next search for the same want lists its releases.
-    let handle = tokio::spawn(async move {
+    let in_flight = InFlight(key.clone());
+    tokio::spawn(async move {
+        let _in_flight = in_flight;
         let wanted = search(
             &pool,
             &http_client,
@@ -136,9 +159,11 @@ pub fn start(ctx: &StreamSearchContext<'_>, request: &StreamSearchRequest) -> Us
         if complete {
             indexer_search::remember(&key, &releases);
         }
-        releases
+        finished.send_replace(Some(releases));
     });
-    UsenetSearch::Running { handle, board }
+    let running = Running { done, board };
+    slot.insert(running.clone());
+    UsenetSearch::Running(running)
 }
 
 fn listing_id(release: &Release) -> (Option<Uuid>, String) {
@@ -177,35 +202,46 @@ async fn search(
 
 impl UsenetSearch {
     pub async fn collect(self, wait: Wait) -> Collected {
-        let (mut handle, board) = match self {
+        let Running { mut done, board } = match self {
             Self::Cached(releases) => {
                 return Collected {
                     releases,
                     status: "cached",
                 };
             }
-            Self::Running { handle, board } => (handle, board),
+            Self::Running(running) => running,
         };
         let deadline = match wait {
             Wait::CutAt(deadline) | Wait::UntilAnswered(deadline) => deadline,
         };
-        let joined = match tokio::time::timeout(deadline, &mut handle).await {
-            Ok(joined) => joined,
+        let finished = async move {
+            done.wait_for(Option::is_some)
+                .await
+                .ok()
+                .and_then(|releases| releases.clone())
+                .unwrap_or_default()
+        };
+        tokio::pin!(finished);
+        let releases = match tokio::time::timeout(deadline, &mut finished).await {
+            Ok(releases) => releases,
             Err(_) if matches!(wait, Wait::CutAt(_)) => {
                 return at_deadline(&board.answers.lock().unwrap());
             }
             Err(_) => loop {
+                let arrived = board.arrived.notified();
+                tokio::pin!(arrived);
+                arrived.as_mut().enable();
                 if let Some(partial) = board.at_deadline() {
                     return partial;
                 }
                 tokio::select! {
-                    joined = &mut handle => break joined,
-                    () = board.arrived.notified() => {}
+                    releases = &mut finished => break releases,
+                    () = arrived => {}
                 }
             },
         };
         Collected {
-            releases: joined.unwrap_or_default(),
+            releases,
             status: "success",
         }
     }
